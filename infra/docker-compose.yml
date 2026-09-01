@@ -1,0 +1,134 @@
+name: pdlc-pilot
+
+services:
+  temporal-postgres:
+    image: postgres:13-alpine
+    environment:
+      POSTGRES_USER: temporal
+      POSTGRES_PASSWORD: temporal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U temporal"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  temporal:
+    image: temporalio/auto-setup:1.24
+    depends_on:
+      temporal-postgres:
+        condition: service_healthy
+    environment:
+      DB: postgres12
+      DB_PORT: 5432
+      POSTGRES_USER: temporal
+      POSTGRES_PWD: temporal
+      POSTGRES_SEEDS: temporal-postgres
+    ports:
+      - "7233:7233"
+
+  temporal-ui:
+    image: temporalio/ui:2.31.2
+    depends_on:
+      - temporal
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_CORS_ORIGINS: "http://localhost:3000"
+    ports:
+      - "8080:8080"
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: pdlc
+      POSTGRES_USER: pdlc
+      POSTGRES_PASSWORD: pdlc
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pdlc -d pdlc"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    ports:
+      - "5432:5432"
+
+  stub-llm:
+    image: wiremock/wiremock:3.9.1
+    command: ["--global-response-templating", "--disable-banner"]
+    volumes:
+      - ./stub-llm/mappings:/home/wiremock/mappings:ro
+    ports:
+      - "4000:8080"
+
+  control-plane:
+    build:
+      context: ..
+      dockerfile: control-plane/Dockerfile
+    depends_on:
+      temporal:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/pdlc
+      SPRING_DATASOURCE_USERNAME: pdlc
+      SPRING_DATASOURCE_PASSWORD: pdlc
+      PDLC_CONFIG_PATH: /app/pdlc.yaml
+      PDLC_ACTIVE_PROFILE: local
+      TEMPORAL_TARGET: temporal:7233
+      TEMPORAL_NAMESPACE: default
+      # Shared secret the standalone build agent sends as X-Agent-Token; empty (default) = open,
+      # matching the pilot's X-User header-trust model.
+      BUILD_AGENT_TOKEN: ${BUILD_AGENT_TOKEN:-}
+    volumes:
+      - ./pdlc.yaml:/app/pdlc.yaml:ro
+      # Same absolute path on both sides: LocalGitRepoAdapter's repo.url in pdlc.yaml is a plain
+      # host path, shared 1:1 with the build-worker host process (build-order phase 3 - omp is a
+      # native binary, so the build-worker that shells out to it cannot itself be containerized;
+      # it runs on the host and reaches this same repo directory directly, no path translation).
+      - /Users/work/Documents/ai-pldc/target-repos/orders-service:/Users/work/Documents/ai-pldc/target-repos/orders-service
+    ports:
+      - "8081:8081"
+
+  agents:
+    build:
+      context: ..
+      dockerfile: agents/Dockerfile
+    depends_on:
+      temporal:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+      stub-llm:
+        condition: service_started
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/pdlc
+      SPRING_DATASOURCE_USERNAME: pdlc
+      SPRING_DATASOURCE_PASSWORD: pdlc
+      PDLC_CONFIG_PATH: /app/pdlc.yaml
+      PDLC_ACTIVE_PROFILE: local
+      TEMPORAL_TARGET: temporal:7233
+      TEMPORAL_NAMESPACE: default
+      # RemoteBoardPort (agents' own read-only BoardPort for the in-memory provider) reads
+      # control-plane's REST API so grill/PO agents see real title/description/comments across the
+      # process boundary instead of an empty in-process board.
+      PDLC_CONTROL_PLANE_URL: http://control-plane:8081
+      # AgentsApplication.main() derives embabel.agent.platform.models.openai.custom.* (base-url,
+      # models) from pdlc.yaml's agents.gateway/agents.roles.*.model at startup and sets them as
+      # system properties; OPENAI_CUSTOM_API_KEY is the one piece pdlc.yaml doesn't carry.
+      # Real key lives in infra/.env (OPENROUTER_API_KEY), never hardcoded here.
+      OPENAI_CUSTOM_API_KEY: ${OPENROUTER_API_KEY}
+    volumes:
+      - ./pdlc.yaml:/app/pdlc.yaml:ro
+      - /Users/work/Documents/ai-pldc/target-repos/orders-service:/Users/work/Documents/ai-pldc/target-repos/orders-service
+    ports:
+      - "8082:8082"
+
+  ui:
+    build:
+      context: ../ui
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: http://localhost:8081
+    depends_on:
+      - control-plane
+    ports:
+      - "5173:80"

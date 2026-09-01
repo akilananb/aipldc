@@ -1,0 +1,78 @@
+profiles:
+  local:
+    board:
+      provider: in-memory                # anything other than azure-devops resolves to InMemoryBoardAdapter
+      org: local
+      project: PDLC
+      types: { feature: feature, story: story, task: task, bug: bug }
+      states:
+        new: new
+        needs-clarification: needs-clarification
+        ready-for-story: ready-for-story
+        awaiting-G1: awaiting-G1
+        approved: approved
+        planned: planned
+        in-progress: in-progress
+        awaiting-G2: awaiting-G2
+        awaiting-G3: awaiting-G3
+        done: done
+        stale: stale
+      auth: { kind: none, secret_ref: kv://none }
+    repo:
+      provider: local-git                # real git CLI adapter (build-order phase 3); anything other than github/local-git resolves to InMemoryRepoAdapter
+      url: /Users/work/Documents/ai-pldc/target-repos/orders-service
+      default_branch: main
+      spec_dir: openspec
+    notify:
+      provider: none
+      channel: none
+    agents:
+      gateway: https://openrouter.ai/api/v1
+      roles:
+        grill: { model: anthropic/claude-sonnet-5, budget_tokens: 60000 }
+        po:    { model: anthropic/claude-sonnet-5, budget_tokens: 40000 }
+        review: { model: anthropic/claude-sonnet-5, budget_tokens: 30000 }
+        release: { model: anthropic/claude-sonnet-5, budget_tokens: 30000 }
+    gates:
+      G1: { roles: [PO, SquadLead], sod: true }
+      G2: { roles: [FSDeveloper, QA], sod: true }
+      G3: { roles: [PO, SquadLead, QA], sod: true }
+
+  ado-pilot:
+    board:
+      provider: azure-devops
+      org: https://dev.azure.com/acme
+      project: Payments
+      types: { feature: Feature, story: "User Story", task: Task, bug: Bug }
+      states:
+        new: New
+        needs-clarification: "Needs Clarification"
+        ready-for-story: "Ready for Story"
+        awaiting-G1: "Awaiting Approval"
+        approved: Approved
+        planned: Planned
+        in-progress: Active
+        awaiting-G2: "In Review"
+        awaiting-G3: "Awaiting Release"
+        done: Closed
+        stale: New
+      auth: { kind: pat, secret_ref: kv://ado-pat }
+    repo:
+      provider: github
+      url: https://github.com/acme/orders-service
+      default_branch: main
+      spec_dir: openspec
+    notify:
+      provider: none
+      channel: none
+    agents:
+      gateway: http://litellm:4000
+      roles:
+        grill: { model: anthropic/claude-sonnet, budget_tokens: 60000 }
+        po:    { model: anthropic/claude-sonnet, budget_tokens: 40000 }
+        review: { model: anthropic/claude-sonnet, budget_tokens: 30000 }
+        release: { model: anthropic/claude-sonnet, budget_tokens: 30000 }
+    gates:
+      G1: { roles: [PO, SquadLead], sod: true }
+      G2: { roles: [FSDeveloper, QA], sod: true }
+      G3: { roles: [PO, SquadLead, QA], sod: true }

@@ -1,0 +1,23 @@
+{
+  "name": "@pdlc/build-worker",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Standalone build agent - polls control-plane's REST API for claimable build tasks (no direct Temporal connection), runs the build loop (docs/agent-playbook.md §4) driving a configurable ACP coding agent against a real git worktree, then the target repo's own verifier, and reports heartbeats/results back over HTTP.",
+  "type": "commonjs",
+  "bin": {
+    "pdlc-build-agent": "dist/worker.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/worker.js",
+    "test": "node --test --test-reporter=tap dist/*.test.js",
+    "prepack": "npm run build"
+  },
+  "devDependencies": {
+    "@types/node": "^22.14.0",
+    "typescript": "^5.6.0"
+  }
+}

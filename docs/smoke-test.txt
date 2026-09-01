@@ -1,0 +1,8 @@
+== Smoke test v2.4 (31 Aug 2026) ==
+1. HTML tag balance: OK
+2. JS syntax (node --check): OK
+3. Element IDs referenced by script: OK (64 refs)
+4. Slides: 16; minute budget total: 90 OK
+5. Speaker notes on every slide: OK
+6. Stack slide mentions Embabel/omp/Temporal: True
+7. In-browser interaction test: NOT RUN here (no headless browser in sandbox). Manual checklist in storyboard.md.

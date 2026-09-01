@@ -1,0 +1,62 @@
+profiles:
+  payments-squad:
+    board:
+      provider: azure-devops
+      org: https://dev.azure.com/acme
+      project: Payments
+      area_path: Payments\Orders
+      types: { feature: Feature, story: "User Story", task: Task, bug: Bug, release: "Release" }
+      states:
+        new: New
+        needs-clarification: "Needs Clarification"
+        ready-for-story: "Ready for Story"
+        awaiting-G1: "Awaiting Approval"
+        approved: Approved
+        planned: Planned
+        in-progress: Active
+        awaiting-G2: "In Review"
+        awaiting-G3: "Awaiting Release"
+        done: Closed
+      auth: { kind: oidc-app, secret_ref: kv://ado-pat }
+    repo:
+      provider: github
+      url: https://github.com/acme/orders-service
+      default_branch: main
+      spec_dir: openspec
+    ci:
+      provider: github-actions
+      verify_workflow: verify.yml
+      deploy_workflow: deploy.yml
+      environments: [dev, staging, canary, prod]
+    notify:
+      provider: slack
+      channel: "#payments-releases"
+    agents:
+      gateway: https://litellm.internal
+      roles:
+        grill:   { model: anthropic/claude-sonnet, budget_tokens: 60000 }
+        po:      { model: anthropic/claude-sonnet, budget_tokens: 40000 }
+        plan:    { model: anthropic/claude-sonnet, budget_tokens: 80000 }
+        build:   { harness: omp, mode: acp, model: anthropic/claude-opus, budget_iters: 6, budget_tokens: 120000 }
+        review:  { model: anthropic/claude-sonnet }
+        release: { model: anthropic/claude-sonnet }
+        monitor: { model: anthropic/claude-haiku, metrics: prometheus }
+    gates:
+      G1: { roles: [PO, SquadLead], sod: true }
+      G2: { roles: [FSDeveloper, QA], sod: true, requires_verifier_green: true }
+      G3: { roles: [SquadLead], requires_all_docs_signed: true }
+    release_pack:
+      documents: [change-notes, rollout-plan, monitor-rules, test-evidence, asmr, aig, risk-signoff, comms]
+      templates_dir: docs/release
+      checkers: { change-notes: PO, rollout-plan: SquadLead, monitor-rules: QA, test-evidence: QA,
+                  asmr: SquadLead, aig: SquadLead, risk-signoff: PO, comms: PO }
+
+  mobile-squad:
+    board: { provider: jira, url: https://acme.atlassian.net, project: MOB,
+             types: { feature: Epic, story: Story, task: Sub-task, bug: Bug, release: Release },
+             states: { new: "To Do", awaiting-G1: "Awaiting Approval", approved: "Ready", in-progress: "In Progress",
+                       awaiting-G2: "In Review", awaiting-G3: "Ready to Release", done: Done } }
+    repo: { provider: azure-repos, url: https://dev.azure.com/acme/Mobile/_git/app }
+    ci:   { provider: azure-pipelines, verify_pipeline: verify, deploy_pipeline: deploy }
+    gates:
+      G1: { roles: [PO, SquadLead], sod: true }

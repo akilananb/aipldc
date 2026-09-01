@@ -1,0 +1,38 @@
+{
+  "request": {
+    "method": "POST",
+    "urlPath": "/v1/chat/completions",
+    "bodyPatterns": [
+      {
+        "contains": "[agent:po-revise]"
+      }
+    ]
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "jsonBody": {
+      "id": "chatcmpl-stub",
+      "object": "chat.completion",
+      "created": 1750000000,
+      "model": "stub/po",
+      "choices": [
+        {
+          "index": 0,
+          "message": {
+            "role": "assistant",
+            "content": "# Export the filtered orders view to CSV\nFeature: #4412 \u00b7 Change: openspec/changes/export-orders-csv \u00b7 Area: orders\n\nAs a sales admin\nI want to export the current filtered orders view to CSV\nSo that I can share order data with external stakeholders\n## Acceptance criteria\nScenario: export-current-view\n  GIVEN the sales admin has filtered the orders grid to 500 rows\n  WHEN  the user clicks Export CSV\n  THEN  a CSV file downloads with exactly 500 rows\nScenario: rate-limit\n  GIVEN 20 for admin exports in the last hour\n  WHEN  the user requests an 11th export\n  THEN  the request returns HTTP 429 with Retry-After\nScenario: audit\n  GIVEN the sales admin exports the filtered view\n  WHEN  the export completes\n  THEN  an audit row is written with user, filter hash, and row count\n\n## NFR\n- performance: 10k rows < 5 s (p95); progress indicator after 2 s\n- security: sales, admin roles only; every export audited (user, filter hash, row count)\n- limits: 20 for admin / user / hour \u2192 429 with Retry-After\n\n## Out of scope\n- scheduled exports (parked q7)\n- XLSX format\n\n## Dependencies\n- streaming endpoint in orders-service (same story, task T1)\n- none external\n\n## Open decisions for approvers\n- none"
+          },
+          "finish_reason": "stop"
+        }
+      ],
+      "usage": {
+        "prompt_tokens": 20,
+        "completion_tokens": 40,
+        "total_tokens": 60
+      }
+    }
+  }
+}

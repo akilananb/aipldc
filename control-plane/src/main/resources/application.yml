@@ -1,0 +1,29 @@
+server:
+  port: 8081
+
+spring:
+  application:
+    name: control-plane
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/pdlc}
+    username: ${SPRING_DATASOURCE_USERNAME:pdlc}
+    password: ${SPRING_DATASOURCE_PASSWORD:pdlc}
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+
+pdlc:
+  config-path: ${PDLC_CONFIG_PATH:infra/pdlc.yaml}
+  active-profile: ${PDLC_ACTIVE_PROFILE:local}
+  build-agent:
+    token: ${BUILD_AGENT_TOKEN:}
+
+temporal:
+  target: ${TEMPORAL_TARGET:127.0.0.1:7233}
+  namespace: ${TEMPORAL_NAMESPACE:default}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info

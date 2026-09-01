@@ -1,0 +1,781 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI PDLC — board to production and after (90-min workshop)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --ink:#1B2A41;      /* slate ink: text, rails */
+  --ink-2:#3E5068;    /* secondary text */
+  --fog:#EEF1F5;      /* stage background */
+  --paper:#FFFFFF;
+  --line:#C9D2DE;
+  --loop:#E08A1E;     /* amber: agent in motion */
+  --pass:#1E8E7A;     /* teal: verified / done */
+  --stop:#C94F3D;     /* coral: stop / fail */
+  --mit:#1E8E7A;
+  --apache:#8A6D3B;
+  --sans:"IBM Plex Sans",-apple-system,"Segoe UI",Roboto,sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--fog);color:var(--ink);font-family:var(--sans);font-size:16px;line-height:1.45}
+button{font:inherit;color:inherit;cursor:pointer}
+button:focus-visible,[tabindex]:focus-visible{outline:3px solid var(--loop);outline-offset:2px}
+code,kbd,.mono{font-family:var(--mono)}
+
+/* ---------- stage ---------- */
+#stage{position:fixed;inset:0;display:grid;grid-template-rows:1fr auto}
+.slide{display:none;padding:56px 72px 24px;overflow:auto}
+.slide.active{display:block}
+.slide h1{font-size:clamp(32px,4.6vw,62px);line-height:1.05;font-weight:700;margin:0 0 20px;max-width:18ch;letter-spacing:-.01em}
+.slide h2{font-size:clamp(26px,3.2vw,42px);line-height:1.1;font-weight:600;margin:0 0 18px;max-width:26ch;letter-spacing:-.01em}
+.slide h3{font-size:20px;font-weight:600;margin:18px 0 8px}
+.slide p{max-width:62ch;margin:0 0 12px;font-size:18px}
+.slide p.small{font-size:15px;color:var(--ink-2)}
+.slide ul{max-width:62ch;padding-left:20px;margin:0 0 12px;font-size:17px}
+.slide li{margin:4px 0}
+.lesson-tag{display:inline-block;font-family:var(--mono);font-size:13px;color:var(--ink-2);border:1px solid var(--line);border-radius:4px;padding:2px 8px;margin-bottom:14px}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:40px;align-items:start}
+.three{display:grid;grid-template-columns:repeat(3,1fr);gap:24px}
+.panel{background:var(--paper);border:1px solid var(--line);border-radius:8px;padding:18px 20px}
+.callout{border-left:4px solid var(--loop);padding:8px 14px;background:var(--paper);max-width:62ch;margin:14px 0}
+.callout.warn{border-color:var(--stop)}
+.callout.ok{border-color:var(--pass)}
+.btn{background:var(--ink);color:#fff;border:0;border-radius:6px;padding:9px 16px;font-weight:500}
+.btn.ghost{background:transparent;color:var(--ink);border:1px solid var(--ink)}
+.btn:disabled{opacity:.45;cursor:default}
+.pill{display:inline-block;border-radius:999px;padding:2px 10px;font-size:12px;font-family:var(--mono);color:#fff}
+.pill.mit{background:var(--mit)} .pill.apache{background:var(--apache)} .pill.other{background:var(--ink-2)}
+
+/* ---------- lesson rail ---------- */
+#rail{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:20px;padding:10px 24px 12px;border-top:1px solid var(--line);background:var(--paper)}
+#rail .segments{display:flex;gap:4px;height:10px}
+#rail .seg{flex:var(--w,1);background:var(--line);border-radius:3px;transition:background .25s}
+#rail .seg.done{background:var(--pass)} #rail .seg.now{background:var(--loop)}
+#rail .meta{font-family:var(--mono);font-size:13px;color:var(--ink-2);white-space:nowrap}
+#rail .clock{font-family:var(--mono);font-size:13px;min-width:11ch;text-align:right}
+#rail .clock.over{color:var(--stop)}
+
+/* ---------- notes ---------- */
+#notes{position:fixed;right:0;top:0;bottom:44px;width:340px;background:var(--ink);color:#E6ECF4;padding:20px;font-size:14px;line-height:1.5;overflow:auto;transform:translateX(100%);transition:transform .2s}
+#notes.open{transform:none}
+#notes h4{margin:0 0 8px;font-size:12px;letter-spacing:.04em;color:#9FB2CC;font-weight:500}
+#help{position:fixed;left:24px;bottom:56px;font-size:12px;color:var(--ink-2);font-family:var(--mono)}
+
+/* ---------- title ---------- */
+.title-grid{display:grid;grid-template-columns:1.2fr 1fr;gap:48px;align-items:center;height:100%}
+.loop-hero{width:100%;max-width:420px}
+
+/* ---------- agenda ---------- */
+.agenda{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:8px}
+.agenda .card{background:var(--paper);border:1px solid var(--line);border-radius:6px;padding:10px 12px;font-size:14px;cursor:pointer;border-left:4px solid var(--line)}
+.agenda .card:hover{border-left-color:var(--loop)}
+.agenda .card b{display:block;font-size:15px}
+.agenda .card .t{font-family:var(--mono);font-size:12px;color:var(--ink-2)}
+
+/* ---------- evolution ---------- */
+.eras{display:flex;gap:6px;flex-wrap:wrap;margin:10px 0 18px}
+.eras button{border:1px solid var(--line);background:var(--paper);border-radius:6px;padding:8px 12px;font-size:14px}
+.eras button[aria-pressed="true"]{background:var(--ink);color:#fff;border-color:var(--ink)}
+.era-stage{display:grid;grid-template-columns:1fr 1fr;gap:32px;align-items:start}
+.era-svg{width:100%;height:auto}
+.era-svg text{font-family:var(--sans);font-size:13px;fill:var(--ink)}
+.era-svg .node{fill:var(--paper);stroke:var(--ink);stroke-width:1.5}
+.era-svg .node.hot{stroke:var(--loop);stroke-width:3}
+.era-svg .edge{stroke:var(--ink-2);stroke-width:1.5;fill:none;marker-end:url(#arr)}
+.era-svg .edge.hot{stroke:var(--loop);stroke-width:2.5}
+
+/* ---------- wheel ---------- */
+.wheel-wrap{display:grid;grid-template-columns:420px 1fr;gap:36px;align-items:center}
+.wheel path{cursor:pointer;transition:opacity .2s,transform .2s;transform-origin:200px 200px}
+.wheel path.dim{opacity:.35}
+.wheel path.sel{transform:scale(1.04)}
+.wheel text{font-size:12px;font-weight:600;fill:#fff;pointer-events:none;font-family:var(--sans)}
+
+/* ---------- openspec ---------- */
+.spec-flow{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin:12px 0}
+.spec-flow .step{border:1px solid var(--line);background:var(--paper);border-radius:8px;padding:12px 14px;opacity:.4;transition:opacity .3s,border-color .3s}
+.spec-flow .step.on{opacity:1;border-color:var(--loop)}
+.spec-flow .step.done{opacity:1;border-color:var(--pass)}
+.delta{font-family:var(--mono);font-size:13px;background:#0F1A2B;color:#DCE6F2;border-radius:6px;padding:12px 14px;min-height:150px;white-space:pre;overflow:auto}
+.delta .add{color:#7BD8C4} .delta .mod{color:#F4C177} .delta .rem{color:#F29886} .delta .dim{color:#6E82A0}
+
+/* ---------- loop simulator ---------- */
+.sim{display:grid;grid-template-columns:380px 1fr;gap:32px;align-items:start}
+.ring{width:100%;height:auto}
+.ring .stn{fill:var(--paper);stroke:var(--ink);stroke-width:1.5}
+.ring .stn.lit{fill:var(--loop);stroke:var(--loop)}
+.ring .stn.lit.pass{fill:var(--pass);stroke:var(--pass)}
+.ring .stn.lit.stop{fill:var(--stop);stroke:var(--stop)}
+.ring text{font-family:var(--sans);font-size:12px;fill:var(--ink);text-anchor:middle;pointer-events:none}
+.ring .lit + text{fill:#fff}
+.ring .track{fill:none;stroke:var(--line);stroke-width:14}
+.ring .prog{fill:none;stroke:var(--loop);stroke-width:14;stroke-linecap:round;transition:stroke-dashoffset .35s}
+.ctl{display:grid;grid-template-columns:1fr 1fr;gap:10px 18px;font-size:14px;margin:8px 0 12px}
+.ctl label{display:flex;flex-direction:column;gap:4px}
+.ctl input[type=range]{width:100%}
+.log{font-family:var(--mono);font-size:12.5px;background:var(--paper);border:1px solid var(--line);border-radius:6px;padding:10px 12px;height:210px;overflow:auto}
+.log .p{color:var(--pass)} .log .s{color:var(--stop)} .log .l{color:var(--loop)}
+.stat{display:flex;gap:18px;font-family:var(--mono);font-size:13px;margin:8px 0}
+
+/* ---------- tool board ---------- */
+.board{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:10px}
+.tool{background:var(--paper);border:1px solid var(--line);border-radius:8px;padding:12px;font-size:14px;transition:opacity .25s,filter .25s}
+.tool b{display:block;font-size:15px}
+.tool .role{color:var(--ink-2);font-size:13px;display:block;margin:2px 0 6px}
+.board.mitonly .tool.apache,.board.mitonly .tool.other{opacity:.28;filter:grayscale(1)}
+.filter{display:flex;align-items:center;gap:10px;font-size:14px;margin-bottom:4px}
+.switch{width:44px;height:24px;border-radius:999px;background:var(--line);border:0;position:relative}
+.switch[aria-checked="true"]{background:var(--pass)}
+.switch::after{content:"";position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:50%;background:#fff;transition:left .15s}
+.switch[aria-checked="true"]::after{left:23px}
+
+/* ---------- topology ---------- */
+.topo-tabs{display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap}
+.topo-tabs button{border:1px solid var(--line);background:var(--paper);border-radius:6px;padding:7px 12px;font-size:14px}
+.topo-tabs button[aria-pressed="true"]{background:var(--ink);color:#fff;border-color:var(--ink)}
+.topo{width:100%;height:auto}
+.topo rect{fill:var(--paper);stroke:var(--ink);stroke-width:1.5;rx:6}
+.topo rect.sup{stroke:var(--loop);stroke-width:2.5}
+.topo rect.ver{stroke:var(--pass);stroke-width:2.5}
+.topo line,.topo path{stroke:var(--ink-2);stroke-width:1.5;fill:none;marker-end:url(#arr2)}
+.topo text{font-family:var(--sans);font-size:12px;fill:var(--ink);text-anchor:middle}
+
+/* ---------- flywheel ---------- */
+.fly{display:grid;grid-template-columns:1fr 1fr;gap:32px;align-items:center}
+.fly svg{width:100%;height:auto}
+.fly .st{fill:var(--paper);stroke:var(--ink);stroke-width:1.5;cursor:pointer}
+.fly .st.on{fill:var(--loop);stroke:var(--loop)}
+.fly text{font-family:var(--sans);font-size:12.5px;fill:var(--ink);text-anchor:middle;pointer-events:none}
+.fly .on + text{fill:#fff}
+
+/* ---------- architecture ---------- */
+.arch{width:100%;height:auto}
+.arch rect{fill:var(--paper);stroke:var(--ink);stroke-width:1.5;rx:6}
+.arch rect.zone{fill:none;stroke:var(--line);stroke-dasharray:6 5;rx:10}
+.arch text{font-family:var(--sans);font-size:12px;fill:var(--ink);text-anchor:middle}
+.arch text.zl{text-anchor:start;fill:var(--ink-2);font-size:11px}
+.arch path{fill:none;stroke:var(--ink-2);stroke-width:1.5;marker-end:url(#arr3)}
+.arch .pkt{fill:var(--loop);opacity:0}
+.arch .pkt.go{opacity:1;animation:pkt 4.2s linear forwards}
+@keyframes pkt{0%{offset-distance:0}100%{offset-distance:100%}}
+.arch-legend{display:flex;gap:18px;font-size:13px;color:var(--ink-2);margin-top:6px;flex-wrap:wrap}
+
+/* ---------- team ---------- */
+.team{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.team .p{background:var(--paper);border:1px solid var(--line);border-radius:8px;padding:12px 14px;font-size:14px}
+.team .p b{display:block;font-size:15px}
+.team .p .who{color:var(--ink-2)}
+table.story{border-collapse:collapse;width:100%;font-size:14px;background:var(--paper)}
+table.story th,table.story td{border:1px solid var(--line);padding:6px 10px;text-align:left;vertical-align:top}
+table.story th{background:var(--fog);font-weight:600}
+table.story td.mono{font-family:var(--mono);font-size:12.5px;white-space:nowrap}
+
+/* checklist */
+.check{list-style:none;padding:0;max-width:70ch}
+.check li{display:flex;gap:10px;align-items:flex-start;padding:6px 0;border-bottom:1px solid var(--line)}
+.check input{margin-top:5px}
+
+@media (max-width:900px){
+  .slide{padding:28px 20px 16px}
+  .two,.three,.era-stage,.wheel-wrap,.sim,.fly,.title-grid{grid-template-columns:1fr}
+  .board,.agenda,.team{grid-template-columns:1fr 1fr}
+  #notes{width:100%;bottom:0}
+}
+@media (prefers-reduced-motion:reduce){
+  *{transition:none!important;animation-duration:.001s!important}
+}
+
+/* ---- maker-checker + release pack ---- */
+.mc{display:grid;grid-template-columns:1.2fr 1fr;gap:20px;align-items:start}
+.prev{background:var(--paper);border:1px solid var(--line);border-radius:8px;font-size:13.5px;overflow:hidden}
+.prev .ln{display:grid;grid-template-columns:34px 1fr 26px;gap:6px;padding:3px 8px;border-bottom:1px solid #F0F3F7;align-items:start}
+.prev .ln:hover{background:#FBF4EA}
+.prev .n{font-family:var(--mono);color:var(--ink-2);font-size:11px}
+.prev .ln.hasc{background:#FBEBD3}
+.prev .ln.rev{background:#DDF2EC}
+.prev .ln button{border:0;background:transparent;color:var(--loop);font-size:14px;padding:0}
+.prev .k{color:#8A5A12}.prev .g{color:var(--pass);font-weight:500}
+.cmt{background:var(--paper);border:1px solid var(--line);border-radius:8px;padding:10px 12px;font-size:13.5px;max-height:300px;overflow:auto}
+.cmt .c{border-left:3px solid var(--loop);padding:4px 8px;margin:6px 0}
+.cmt .c.res{border-color:var(--pass);opacity:.75}
+.cmt .c .m{font-family:var(--mono);font-size:11px;color:var(--ink-2)}
+.cmt form{display:flex;gap:6px;margin-top:6px}
+.cmt input{flex:1;font:inherit;font-size:13px;padding:5px 8px;border:1px solid var(--line);border-radius:4px}
+.docs{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:10px 0}
+.doc{background:var(--paper);border:1px solid var(--line);border-radius:6px;padding:8px 10px;font-size:13px;display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center}
+.doc b{display:block;font-size:13.5px}.doc .who{color:var(--ink-2);font-size:12px}
+.chip{font-family:var(--mono);font-size:11px;border-radius:4px;padding:2px 7px;background:var(--fog);color:var(--ink-2)}
+.chip.draft{background:#FBEBD3;color:#8A5A12}.chip.check{background:#E3EAF3;color:#2F4A6E}.chip.signed{background:#DDF2EC;color:var(--pass)}
+</style>
+<style>
+/* ---- v2 additions ---- */
+.journey{display:grid;grid-template-columns:repeat(8,1fr);gap:8px;margin:14px 0 10px}
+.jst{background:var(--paper);border:1px solid var(--line);border-radius:8px;padding:10px 10px 8px;font-size:13px;position:relative;opacity:.55;transition:opacity .25s,border-color .25s}
+.jst b{display:block;font-size:14px;margin-bottom:2px}
+.jst .who{display:block;color:var(--ink-2);font-size:12px}
+.jst.on{opacity:1;border-color:var(--loop);box-shadow:0 0 0 3px #F4D9B5}
+.jst.done{opacity:1;border-color:var(--pass)}
+.jst.gate::before{content:"human gate";position:absolute;top:-10px;right:8px;background:var(--stop);color:#fff;font-family:var(--mono);font-size:10px;padding:1px 6px;border-radius:3px}
+.card{background:var(--paper);border:1px solid var(--line);border-radius:8px;padding:12px 14px}
+.fcard{border:2px solid var(--ink);border-radius:8px;background:var(--paper);padding:12px 14px;font-size:14px;max-width:520px}
+.fcard .id{font-family:var(--mono);color:var(--ink-2);font-size:12px}
+.fcard .state{display:inline-block;border-radius:4px;padding:1px 8px;font-family:var(--mono);font-size:12px;background:var(--fog);margin-left:8px}
+.qa{list-style:none;padding:0;margin:10px 0;max-width:62ch}
+.qa li{display:grid;grid-template-columns:100px 1fr auto;gap:10px;padding:6px 0;border-bottom:1px solid var(--line);font-size:14px;align-items:start}
+.qa .cat{font-family:var(--mono);font-size:12px;color:var(--ink-2)}
+.qa .st{font-family:var(--mono);font-size:12px;color:var(--stop)}
+.qa .st.ok{color:var(--pass)}
+.approve{display:flex;gap:10px;margin:10px 0}
+.approve button[aria-pressed="true"]{background:var(--pass)}
+.story{font-family:var(--mono);font-size:13px;background:#0F1A2B;color:#DCE6F2;border-radius:6px;padding:12px 14px;white-space:pre-wrap;min-height:220px}
+.story .k{color:#F4C177}.story .g{color:#7BD8C4}.story .dim{color:#6E82A0}
+.plan{width:100%;height:auto}
+.plan rect{fill:var(--paper);stroke:var(--ink);stroke-width:1.5;rx:6;opacity:0;transition:opacity .3s}
+.plan rect.show{opacity:1}
+.plan rect.story{stroke:var(--loop);stroke-width:2.5}
+.plan text{font-family:var(--sans);font-size:12px;fill:var(--ink);text-anchor:middle;opacity:0;transition:opacity .3s}
+.plan text.show{opacity:1}
+.plan line{stroke:var(--ink-2);stroke-width:1.5;opacity:0;transition:opacity .3s}
+.plan line.show{opacity:1}
+.ci{display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin:12px 0}
+.ci .s{background:var(--paper);border:1px solid var(--line);border-radius:8px;padding:10px;font-size:13px;text-align:center;opacity:.5}
+.ci .s b{display:block;font-size:14px}
+.ci .s.run{opacity:1;border-color:var(--loop)}
+.ci .s.ok{opacity:1;border-color:var(--pass)}
+.ci .s.fail{opacity:1;border-color:var(--stop)}
+.ci .s.gate{border-style:dashed}
+.mon{display:grid;grid-template-columns:1fr 1fr;gap:24px;align-items:start}
+.mon svg{width:100%;height:auto;background:var(--paper);border:1px solid var(--line);border-radius:8px}
+.mon .alert{border-left:4px solid var(--stop);background:var(--paper);padding:8px 12px;font-size:14px;margin-top:10px;opacity:0;transition:opacity .3s}
+.mon .alert.show{opacity:1}
+.roles{display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap}
+.roles button{border:1px solid var(--line);background:var(--paper);border-radius:6px;padding:7px 12px;font-size:14px}
+.roles button[aria-pressed="true"]{background:var(--ink);color:#fff;border-color:var(--ink)}
+table.raci{border-collapse:collapse;width:100%;font-size:13.5px;background:var(--paper)}
+table.raci th,table.raci td{border:1px solid var(--line);padding:6px 8px;text-align:left;vertical-align:top}
+table.raci th{background:var(--fog);font-weight:600}
+table.raci td.hi{background:#FBEBD3;font-weight:500}
+table.raci td.agent{color:var(--ink-2);font-style:italic}
+</style>
+
+</head>
+<body>
+<div id="stage">
+
+<!-- ===================== 0 TITLE ===================== -->
+<section class="slide" data-lesson="Start" data-min="0" data-notes="Open on the loop. One sentence: a feature lands on the ADO board and agents carry it to production and keep watching it — and humans decide at three gates. Today: 12 short lessons, each with one interactive, following one feature end to end. Ask PO, Squad Lead, FS Dev, QA in the room to watch for their own gate.">
+  <div class="title-grid">
+    <div>
+      <h1>AI PDLC: from the board to production, and after</h1>
+      <p>A 90-minute working session that follows one feature end to end — ADO intake, agent grilling, PO-approved story, planning, build–test–review loops, CI release, and post-deploy monitoring.</p>
+      <p class="small">Roles in the room: PO · Squad Lead · Full-stack Developer · QA</p>
+      <p class="small">Keys: <kbd>→</kbd>/<kbd>←</kbd> slides · <kbd>N</kbd> speaker notes · <kbd>T</kbd> reset lesson timer · <kbd>F</kbd> fullscreen</p>
+    </div>
+    <svg class="loop-hero" viewBox="0 0 300 300" aria-label="Agent loop: reason, act, observe, verify, stop">
+      <circle cx="150" cy="150" r="105" fill="none" stroke="#C9D2DE" stroke-width="14"/>
+      <circle id="heroArc" cx="150" cy="150" r="105" fill="none" stroke="#E08A1E" stroke-width="14" stroke-linecap="round" stroke-dasharray="660" stroke-dashoffset="660" transform="rotate(-90 150 150)"/>
+      <g font-family="IBM Plex Sans,sans-serif" font-size="13" fill="#1B2A41" text-anchor="middle">
+        <text x="150" y="40">reason</text><text x="262" y="122">act</text><text x="222" y="252">observe</text><text x="78" y="252">verify</text><text x="38" y="122">stop?</text>
+      </g>
+      <text x="150" y="146" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="15" fill="#1B2A41">while (!done)</text>
+      <text x="150" y="168" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="12" fill="#3E5068">design this</text>
+    </svg>
+  </div>
+</section>
+
+<!-- ===================== 1 MAP ===================== -->
+<section class="slide" data-lesson="Map" data-min="3" data-notes="Cards are jump links. Lessons 4–10 follow one feature through the pipeline; lesson 11 maps the four roles to the gates. If running late, compress L2 and L6 — never L5 (story + approval), L7 (loop) or L9 (monitor).">
+  <span class="lesson-tag">lesson map · 12 atomic lessons · 90 min</span>
+  <h2>One feature, one journey, one interactive per lesson</h2>
+  <div class="agenda" id="agenda"></div>
+  <p class="small" style="margin-top:14px">If a lesson runs long the rail turns red. Cut L2 or L6, never L5, L7, L9.</p>
+</section>
+
+<!-- ===================== 2 L1 WHY ===================== -->
+<section class="slide" data-lesson="L1 Why" data-min="5" data-notes="The failure story: feature card says 'add export button', developer prompts an agent, it ships in an hour, and three weeks later support finds it exports every customer's data. Nothing was wrong with the code. The question nobody asked was 'for whom, and how much'. AI PDLC puts the questions, the story, the plan, the verifier and the monitor around the agent so the human gates are real.">
+  <span class="lesson-tag">L1 · why AI PDLC · 5 min</span>
+  <h2>Fast code is not the bottleneck. Unasked questions are.</h2>
+  <div class="three">
+    <div class="panel"><h3>Before the code</h3><p>A one-line feature card has ten unstated decisions. If nobody grills it, the agent guesses — confidently.</p></div>
+    <div class="panel"><h3>During the code</h3><p>An agent will call itself done. Only a verifier it cannot edit, plus a human review, makes "done" mean something.</p></div>
+    <div class="panel"><h3>After the code</h3><p>Shipping is not the end. The feature behaves differently in production, and someone — or something — has to watch it.</p></div>
+  </div>
+  <div class="callout"><b>AI PDLC</b> = agents carry the feature from board to production and keep watching; humans decide at three gates — story approval, PR review, release.</div>
+</section>
+
+<!-- ===================== 3 L2 EVOLUTION ===================== -->
+<section class="slide" data-lesson="L2 Evolution" data-min="9" data-notes="Walk the eras. The diagram shows who writes the prompt. Vibe: human, ad hoc. Prompt engineering: human, carefully. Context engineering: human curates what the model sees. SDD: the story/spec is the prompt. Harness: tools + permissions. Loop engineering: the loop writes prompts; humans write goal, checks, stop. AI PDLC: all of it wired to the board and to production. Ask the room which era they're in.">
+  <span class="lesson-tag">L2 · evolution · 9 min · click each era</span>
+  <h2>Seven eras: what changed is who writes the prompt</h2>
+  <div class="eras" id="eras" role="tablist"></div>
+  <div class="era-stage">
+    <svg class="era-svg" id="eraSvg" viewBox="0 0 520 260" aria-live="polite">
+      <defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5 0 10z" fill="#3E5068"/></marker></defs>
+    </svg>
+    <div><h3 id="eraTitle"></h3><p id="eraBody"></p><p class="small" id="eraSkill"></p></div>
+  </div>
+</section>
+
+<!-- ===================== 4 L3 JOURNEY ===================== -->
+<section class="slide" data-lesson="L3 The journey" data-min="8" data-notes="This is the spine of the workshop. Press 'Advance feature' eight times and narrate. Point at the three red gates: story approval (PO + Squad Lead), PR review (FS Dev + QA), release (Squad Lead). Everything between the gates is agents. The last step goes back to the board: monitoring creates the next feature card.">
+  <span class="lesson-tag">L3 · the feature journey · 8 min · advance the feature</span>
+  <h2>Board → agents → gates → production → board</h2>
+  <div class="journey" id="journey"></div>
+  <div class="two" style="align-items:center">
+    <div class="fcard" id="fcard"></div>
+    <div><button class="btn" id="jNext">Advance feature</button> <button class="btn ghost" id="jReset">Reset</button>
+      <p class="small" style="margin-top:10px" id="jNote">Feature #4412 just landed on the ADO board.</p></div>
+  </div>
+</section>
+
+<!-- ===================== 5 L4 GRILL ===================== -->
+<section class="slide" data-lesson="L4 Intake & grill" data-min="7" data-notes="The review agent reads the new ADO work item and everything linked to it (repo, existing stories, incidents) and produces grill questions in five categories. Click 'Grill it' then 'Answer next' — the PO answers in the ADO comments, the agent re-reads. Nothing becomes a story until every question is answered or explicitly parked. Key line: the agent is the junior analyst who is never afraid to ask the obvious question.">
+  <span class="lesson-tag">L4 · intake & grill · 7 min · grill the feature</span>
+  <h2>The review agent's job is to ask what the card doesn't say</h2>
+  <div class="two">
+    <div>
+      <div class="fcard"><span class="id">ADO #4412 · Feature · new</span><br><b>Add "Export to CSV" on the orders page</b><br><span class="small">Requested by sales. No description.</span></div>
+      <div style="margin-top:10px"><button class="btn" id="grillGo">Grill it</button> <button class="btn ghost" id="grillAns">Answer next</button> <button class="btn ghost" id="grillReset">Reset</button></div>
+      <p class="small" style="margin-top:10px" id="grillStatus">Agent reads the item, the repo, linked incidents.</p>
+    </div>
+    <ul class="qa" id="qa"></ul>
+  </div>
+</section>
+
+<!-- ===================== 6 L5 STORY + APPROVAL (maker-checker) ===================== -->
+<section class="slide" data-lesson="L5 Story & approval" data-min="8" data-notes="Maker-checker. The PO agent is the maker; PO and Squad Lead are the checkers. Show the story preview: hover a line, press +, add a comment (e.g. on the rate-limit scenario: 'make it 20/hour for admin'). Approve buttons are disabled while a comment is unresolved. Press 'Request changes' — the PO agent revises, the line turns green, the comment shows resolved with the diff. Then both approve. Every comment, revision and approval is written to review.md on the change folder — that is the audit trail.">
+  <span class="lesson-tag">L5 · story & gate 1 · maker-checker · 8 min · comment, request changes, approve</span>
+  <h2>PO agent makes. PO and Squad Lead check — on the preview, with comments.</h2>
+  <div class="mc">
+    <div>
+      <div class="prev" id="prev"></div>
+      <p class="small" style="margin-top:6px">Hover a line → <b>+</b> to comment. Story also exists as the spec delta; the preview is the human surface of the same text.</p>
+    </div>
+    <div>
+      <div class="cmt" id="cmt"></div>
+      <div class="approve" style="flex-wrap:wrap">
+        <button class="btn ghost" id="mcReq">Request changes → PO agent revises</button>
+        <button class="btn" id="apPO" aria-pressed="false">PO: approve intent</button>
+        <button class="btn" id="apSL" aria-pressed="false">Squad Lead: approve scope</button>
+        <button class="btn ghost" id="apReset">Reset</button>
+      </div>
+      <div class="callout" id="apMsg"></div>
+      <p class="small">Written to <code>openspec/changes/export-orders-csv/review.md</code>: each comment (who, line, text), each agent revision (diff), each approval (who, when, version).</p>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== 7 L6 PLAN ===================== -->
+<section class="slide" data-lesson="L6 Plan agent" data-min="6" data-notes="Plan agent reads the approved story and the codebase, and produces tasks with dependencies, each with its own verifier (which tests prove it). Press 'Plan' to grow the tree. Tasks go back onto ADO as child work items so the board stays the source of truth. Squad Lead can reorder or reject tasks; that is a comment, not a gate.">
+  <span class="lesson-tag">L6 · plan agent · 6 min · grow the plan</span>
+  <h2>The plan agent breaks the story into verifiable tasks</h2>
+  <div class="two">
+    <svg class="plan" id="plan" viewBox="0 0 520 300"></svg>
+    <div>
+      <button class="btn" id="planGo">Plan</button> <button class="btn ghost" id="planReset">Reset</button>
+      <ul style="margin-top:12px">
+        <li>Each task names the test that proves it — no test, no task.</li>
+        <li>Dependencies decide what can run in parallel (subagents).</li>
+        <li>Tasks are written back to ADO as children of the story.</li>
+        <li>Estimate is an agent guess; Squad Lead adjusts, doesn't approve.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== 8 L7 BUILD/TEST/REVIEW LOOP ===================== -->
+<section class="slide" data-lesson="L7 Work the tasks" data-min="10" data-notes="Signature interactive. Each task runs as a loop: reason, act, observe, verify, stop. Run it three times. 1) Defaults: converges. 2) Verifier strictness low: false green — the agent-edits-the-tests failure; this is why QA owns the verifier. 3) Difficulty high, budget low: stops on budget — correct; the FS dev gets it back with a trace. Then say: the review agent comments on the PR first, the human reviews second. Gate 2 is the PR.">
+  <span class="lesson-tag">L7 · build · test · review · 10 min · run the loop</span>
+  <h2>Each task is a loop with a goal, a verifier, and a budget</h2>
+  <div class="sim">
+    <svg class="ring" id="ring" viewBox="0 0 300 300" aria-label="Loop simulator"></svg>
+    <div>
+      <div class="ctl">
+        <label>Task difficulty <input type="range" id="sDiff" min="1" max="10" value="5"></label>
+        <label>Verifier strictness (QA owns this) <input type="range" id="sVer" min="1" max="10" value="7"></label>
+        <label>Iteration budget <input type="range" id="sBud" min="2" max="12" value="6"></label>
+        <label>Context hygiene <input type="range" id="sCtx" min="1" max="10" value="6"></label>
+      </div>
+      <button class="btn" id="simRun">Run loop</button> <button class="btn ghost" id="simStep">Step</button> <button class="btn ghost" id="simReset">Reset</button>
+      <div class="stat"><span id="stIter">iter 0/6</span><span id="stTok">tokens 0</span><span id="stOut">—</span></div>
+      <div class="log" id="simLog" aria-live="polite"></div>
+      <p class="small" style="margin-top:8px">Then: review agent leaves PR comments → FS Dev + QA review → gate 2.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== 9 L8 CI RELEASE + release pack ===================== -->
+<section class="slide" data-lesson="L8 CI & release" data-min="7" data-notes="Two halves. Left: the pipeline — run it, then run the failing variant. Right: the release pack. Press 'Prepare release pack': the release agent drafts every document from the story, PRs and CI evidence (change notes, rollout/rollback, monitor rules, test evidence, the org's own forms such as ASMR and AIG, comms). Each document then needs its named checker to sign. Gate 3 is enabled only when every document is signed. Say: the agent never signs, and the pack is versioned with the release so audit can replay it.">
+  <span class="lesson-tag">L8 · CI & release pack · 7 min · run pipeline · prepare pack · sign</span>
+  <h2>Agents prepare the release pack. Named humans sign each document.</h2>
+  <div class="two" style="grid-template-columns:1fr 1.1fr">
+    <div>
+      <div class="ci" id="ci" style="grid-template-columns:repeat(3,1fr)"></div>
+      <button class="btn" id="ciGo">Run pipeline</button> <button class="btn ghost" id="ciFail">Run with a failing test</button>
+      <p class="small" id="ciMsg" style="margin-top:10px">Pipeline idle.</p>
+    </div>
+    <div>
+      <div class="docs" id="docs"></div>
+      <button class="btn" id="packGo">Prepare release pack</button> <button class="btn ghost" id="packSign">Checker signs next</button> <button class="btn" id="g3" disabled>Gate 3: Squad Lead approves release</button>
+      <p class="small" id="packMsg" style="margin-top:8px">Release agent tracks the pack in <code>release/R-…/manifest.yaml</code>; missing or unsigned documents block gate 3.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== 10 L9 MONITOR ===================== -->
+<section class="slide" data-lesson="L9 Monitor" data-min="8" data-notes="After deploy the monitor agent watches the signals the release agent defined: error rate on the new endpoint, latency, usage, cost. Press 'Simulate 24h'. When a threshold trips it does not fix anything — it opens an ADO item with the evidence attached, linked to the original feature. That card enters L4 again. This closes the wheel. Analysis lives here as visibility: the dashboards are the agent's evidence, not a separate discipline.">
+  <span class="lesson-tag">L9 · monitor after deploy · 8 min · simulate a day</span>
+  <h2>Deploy is not done. The monitor agent watches and files back to the board.</h2>
+  <div class="mon">
+    <div>
+      <svg id="monSvg" viewBox="0 0 420 200" aria-label="Post-deploy metrics"></svg>
+      <button class="btn" id="monGo" style="margin-top:10px">Simulate 24h</button> <button class="btn ghost" id="monReset">Reset</button>
+    </div>
+    <div>
+      <p>Watched signals come from the story's NFRs and the release plan: export error rate, p95 latency, rows exported per user, cost per export.</p>
+      <div class="alert" id="monAlert"></div>
+      <p class="small" style="margin-top:10px">The agent files, it doesn't fix. Fixes go through the same journey, with the evidence attached.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== 11 L10 ROLES & GATES ===================== -->
+<section class="slide" data-lesson="L10 Roles & gates" data-min="6" data-notes="Click each role. PO: owns intent — answers the grill, approves the story, reads the monitor report. Squad Lead: owns scope, feasibility, release; adjusts the plan. FS Developer: owns the loop — pairs with the build agent, reviews PRs, fixes what the loop hands back. QA: owns the verifier — the scenarios, the e2e agent, the strictness. Every agent in the matrix has a human who owns its output.">
+  <span class="lesson-tag">L10 · roles & gates · 6 min · click a role</span>
+  <h2>Every agent has a human who owns its output</h2>
+  <div class="roles" id="roleTabs"></div>
+  <table class="raci" id="raci"></table>
+</section>
+
+<!-- ===================== 12 L11 STORYBOARD + DEMO ===================== -->
+<section class="slide" data-lesson="L11 Storyboard & demo" data-min="8" data-notes="Read the storyboard as the demo script. Each presenter takes their own gate. Rehearse with network off; keep a recording as fallback.">
+  <span class="lesson-tag">L11 · storyboard & demo · 8 min</span>
+  <h2>Demo: one feature, four presenters, five minutes</h2>
+  <div class="two">
+    <div>
+      <h3>Presenting team</h3>
+      <div class="team" style="grid-template-columns:1fr 1fr">
+        <div class="p"><b>PO</b><span class="who">answers the grill live, approves the story (gate 1), reads the monitor report</span></div>
+        <div class="p"><b>Squad Lead</b><span class="who">approves scope, adjusts the plan, presses release (gate 3)</span></div>
+        <div class="p"><b>FS Developer</b><span class="who">runs the build loop, reviews the PR (gate 2)</span></div>
+        <div class="p"><b>QA</b><span class="who">owns the verifier and the e2e agent; runs the failing pipeline</span></div>
+      </div>
+      <h3>Agents in the demo</h3>
+      <p class="small">Review/grill agent · PO agent · Plan agent · Build agent (coding harness) · Verifier · Review agent · Release agent · Monitor agent — all reading the same story text.</p>
+    </div>
+    <div>
+            <table class="raci">
+        <tr><th>t</th><th>Beat</th><th>Who</th></tr>
+        <tr><td class="mono">0:00</td><td>Create feature #4412 on the ADO board; review agent posts grill questions</td><td>PO</td></tr>
+        <tr><td class="mono">0:50</td><td>Answer questions in comments; PO agent drafts story + spec delta</td><td>PO</td></tr>
+        <tr><td class="mono">1:40</td><td>Approve story (PO) and scope (Squad Lead) — gate 1</td><td>PO, SL</td></tr>
+        <tr><td class="mono">2:10</td><td>Plan agent creates child tasks on the board</td><td>SL</td></tr>
+        <tr><td class="mono">2:40</td><td>Build agent works task 1; verifier runs; PR opens with review-agent comments</td><td>FS Dev</td></tr>
+        <tr><td class="mono">3:40</td><td>Pipeline: e2e scenarios pass; show one deliberate failure</td><td>QA</td></tr>
+        <tr><td class="mono">4:20</td><td>Release agent notes + rollout plan; Squad Lead approves — gate 3</td><td>SL</td></tr>
+        <tr><td class="mono">4:45</td><td>Monitor agent files ADO item from a tripped threshold</td><td>PO</td></tr>
+      </table>
+      <p class="small" style="margin-top:8px">Fallback: muted recording of the same run, narrated live.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== 13 L12 CLOSE ===================== -->
+<section class="slide" data-lesson="L12 Close" data-min="5" data-notes="Read the checklist. Ask each role to pick their one box. End on: the agents carry the feature; you own the gates.">
+  <span class="lesson-tag">L12 · close · 5 min</span>
+  <h2>What to set up first, by role</h2>
+  <ul class="check">
+    <li><input type="checkbox" id="c1"><label for="c1"><b>PO</b> — grill agent on the ADO board; you answer, it re-reads. Story approval is a button you press.</label></li>
+    <li><input type="checkbox" id="c2"><label for="c2"><b>Squad Lead</b> — plan agent writes child tasks to the board; release is your gate, with a rollout plan attached.</label></li>
+    <li><input type="checkbox" id="c3"><label for="c3"><b>FS Developer</b> — each task runs as a budgeted loop against the story text; PR review is your gate.</label></li>
+    <li><input type="checkbox" id="c4"><label for="c4"><b>QA</b> — you own the verifier: scenarios from the story, e2e agent, strictness. The build agent cannot edit it.</label></li>
+    <li><input type="checkbox" id="c5"><label for="c5"><b>Everyone</b> — monitor agent watches the release and files back to the board with evidence.</label></li>
+  </ul>
+  <p style="margin-top:16px">The agents carry the feature. You own the gates.</p>
+  <p class="small">Tooling used in the examples: Azure DevOps board (MCP), OpenSpec (story/spec delta), a coding harness such as omp or OpenCode, an orchestrator such as goose or LangGraph, CI of your choice. All open source; check licences on deploy day.</p>
+</section>
+
+<!-- ===================== APPENDIX AGENT CARDS ===================== -->
+<section class="slide" data-lesson="Appendix · Agent cards" data-min="0" data-notes="Reference slide, usually after the talk. Click an agent. Each card: reads (context gathering in order), does, validates, hands off (envelope), stops when, must never. The full text with formats is in agent-playbook.md.">
+  <span class="lesson-tag">appendix · agent cards · click an agent · full detail in agent-playbook.md</span>
+  <h2 id="agTitle"></h2>
+  <div class="roles" id="agTabs"></div>
+  <div class="three" id="agBody" style="grid-template-columns:repeat(3,1fr);font-size:14px"></div>
+</section>
+
+<!-- ===================== APPENDIX STACK ===================== -->
+<section class="slide" data-lesson="Appendix · Stack & architecture" data-min="0" data-notes="Reference slide. Decision: omp codes, Embabel reasons, Temporal orchestrates, goose is an optional ACP executor and desktop — see orchestration-decision.md. Left to right: people and surfaces, control plane with ports and swappable adapters (Jira/ADO/GitHub boards, GitHub/Azure Pipelines/GitLab CI), Temporal holding gate state as signals, agent workers and sandboxes, gateway and tracing. Point out: maker-checker is Temporal signals + OpenFGA separation of duties + CodeMirror/react-markdown line comments + append-only review.md. Full detail in tech-stack-architecture.md.">
+  <span class="lesson-tag">appendix · technology stack &amp; architecture · detail in tech-stack-architecture.md</span>
+  <h2>Ports and adapters: board, CI and repo are config, not code</h2>
+  <div class="board" style="grid-template-columns:repeat(5,1fr)">
+    <div class="tool"><b>Review UI</b><span class="role">maker-checker surface</span>Vite + React · CodeMirror 6 gutter comments · react-markdown / remark (line anchors) · diff viewer · Mermaid · Yjs (optional co-review)</div>
+    <div class="tool"><b>Control plane</b><span class="role">API + ports</span>NestJS or FastAPI · BoardPort · RepoPort · CiPort · NotifyPort · SecretsPort · MetricsPort · OpenFGA / Casbin for separation of duties · OPA for release policy</div>
+    <div class="tool"><b>Adapters</b><span class="role">configured in pdlc.yaml</span>Board: Jira · Azure DevOps · GitHub Issues · GitLab<br>CI: GitHub Actions · Azure Pipelines · GitLab CI · Jenkins<br>Repo: GitHub · Azure Repos · GitLab<br>Notify: Slack · Teams · email</div>
+    <div class="tool"><b>Workflow</b><span class="role">gate state</span>Temporal — one FeatureWorkflow per item; approvals and comments are signals; gates are <code>await condition()</code>; history = audit log · HumanLayer optional for approval channels</div>
+    <div class="tool"><b>Agents &amp; models</b><span class="role">workers</span>Embabel (typed reasoning agents as Temporal activities) · omp in ACP mode inside sandboxes, driven by build workers · goose serve as optional ACP executor + developer desktop · LiteLLM gateway (budgets per role) · Langfuse traces · OpenSpec change folders + review.md</div>
+  </div>
+  <div class="two" style="margin-top:14px">
+    <div class="panel"><b>Systems of record</b><p class="small">State → the board · Text → git (OpenSpec change folder) · What happened → Temporal history + append-only review_events. The control plane refuses to act when they disagree.</p></div>
+    <div class="panel"><b>Three loops, three owners</b><p class="small">Lifecycle loop → Temporal (days, gates, restarts) · planning loop inside an agent → Embabel GOAP (one activity) · coding loop inside a task → omp session over ACP (one sandbox, heartbeats). Inner loops never touch board state. Per-agent pollers rejected; one idempotent reconciler only where webhooks are unreliable.</p></div>
+    <div class="panel"><b>Maker-checker = four things composed</b><p class="small">Durable wait for named signals on a version · separation of duties policy · line-anchored comments on rendered markdown · per-version signatures with content hash, mirrored to review.md.</p></div>
+  </div>
+</section>
+
+<!-- ===================== rail ===================== -->
+<div id="rail">
+  <div class="meta" id="railMeta"></div>
+  <div class="segments" id="segs"></div>
+  <div class="clock" id="clock">00:00</div>
+</div>
+</div>
+<aside id="notes" aria-label="Speaker notes"><h4>Speaker notes</h4><div id="notesBody"></div></aside>
+<div id="help">→ ← navigate · N notes · T reset timer · F fullscreen</div>
+
+<script>
+(function(){
+'use strict';
+const $=(s,r=document)=>r.querySelector(s), $$=(s,r=document)=>[...r.querySelectorAll(s)];
+const slides=$$('.slide'); let i=0;
+
+/* ---------- rail + timer ---------- */
+const segs=$('#segs');
+slides.forEach(s=>{const d=document.createElement('div');d.className='seg';d.style.setProperty('--w',Math.max(1,+s.dataset.min||1));segs.appendChild(d);});
+let t0=Date.now();
+function fmt(ms){const s=Math.floor(ms/1000);return String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0');}
+function clock(){const el=$('#clock');const ms=Date.now()-t0;el.textContent=fmt(ms);const b=+slides[i].dataset.min*60000;el.classList.toggle('over',b>0&&ms>b);}
+function go(n){
+  n=Math.max(0,Math.min(slides.length-1,n));
+  if(n!==i)t0=Date.now();
+  i=n;
+  slides.forEach((s,k)=>s.classList.toggle('active',k===i));
+  $$('.seg').forEach((s,k)=>{s.classList.toggle('done',k<i);s.classList.toggle('now',k===i);});
+  const s=slides[i];
+  $('#railMeta').textContent=`${i+1}/${slides.length} · ${s.dataset.lesson} · ${s.dataset.min} min`;
+  $('#notesBody').textContent=s.dataset.notes||'';
+  location.hash='s'+(i+1);
+  if(i===0)requestAnimationFrame(()=>{const a=$('#heroArc');a.style.transition='stroke-dashoffset 1.6s ease';a.style.strokeDashoffset='0';});
+  clock();
+}
+setInterval(clock,500);
+document.addEventListener('keydown',e=>{
+  if(e.target.matches('input,textarea'))return;
+  if(e.key==='ArrowRight'||e.key==='PageDown'||e.key===' ')go(i+1);
+  else if(e.key==='ArrowLeft'||e.key==='PageUp')go(i-1);
+  else if(e.key.toLowerCase()==='n')$('#notes').classList.toggle('open');
+  else if(e.key.toLowerCase()==='t')t0=Date.now();
+  else if(e.key.toLowerCase()==='f'){document.fullscreenElement?document.exitFullscreen():document.documentElement.requestFullscreen();}
+  else if(e.key==='Home')go(0);else if(e.key==='End')go(slides.length-1);
+});
+
+/* ---------- agenda ---------- */
+slides.forEach((s,k)=>{if(k<2)return;const c=document.createElement('div');c.className='card';c.tabIndex=0;
+  c.innerHTML=`<b>${s.dataset.lesson}</b><span class="t">${s.dataset.min} min</span>`;
+  c.onclick=()=>go(k);c.onkeydown=e=>{if(e.key==='Enter')go(k);};$('#agenda').appendChild(c);});
+
+/* ---------- evolution ---------- */
+const ERAS=[
+ {n:'Vibe coding',who:'human, ad hoc',body:'Describe, accept, run, repeat. Fast for prototypes; no story, no memory, no verifier. You are the loop.',skill:'Scarce skill: taste. Failure: nobody can say what "done" means.',hot:['H','P']},
+ {n:'Prompt engineering',who:'human, carefully',body:'Craft one request well: role, examples, format. Still single-shot; quality is capped by one prompt.',skill:'Scarce skill: wording. Failure: prompts that break on the next model.',hot:['H','P']},
+ {n:'Context engineering',who:'human curates what the model sees',body:'Retrieval, memory, file selection, pruning. The prompt is assembled, not typed. Context is a budget.',skill:'Scarce skill: choosing what to show. Failure: context rot.',hot:['C','P']},
+ {n:'Spec-driven development',who:'the story is the prompt',body:'Acceptance criteria and scenarios live in the repo and on the board. Agent proposes; human approves before code. The story is also the verifier\'s rubric.',skill:'Scarce skill: testable acceptance criteria.',hot:['S','P','V']},
+ {n:'Harness engineering',who:'the system around the model',body:'Tools, permissions, sandboxes, memory, subagents, edit formats. Most of a coding agent is harness, not model.',skill:'Scarce skill: tool design + safety.',hot:['T','M']},
+ {n:'Loop engineering',who:'the loop writes the prompts',body:'You define the goal, the checks, the stop. The loop reasons, acts, observes, verifies, repeats. Named mid-2026; the successor to prompt engineering.',skill:'Scarce skill: the verifier. Failure: green that isn\'t done.',hot:['L','M','T','V']},
+ {n:'AI PDLC',who:'the lifecycle',body:'Board, story, plan, loops, verifier, release, monitor — wired into one cycle. Production observations become the next card on the board.',skill:'Scarce skill: owning the gates.',hot:['S','L','M','T','V','O']},
+];
+const NODES={H:[60,60,'human'],P:[190,60,'prompt'],M:[330,60,'model'],T:[460,60,'tools'],C:[60,150,'context'],S:[190,150,'story'],L:[330,150,'loop'],V:[460,150,'verifier'],O:[330,230,'monitor']};
+const EDGES=[['H','P'],['P','M'],['M','T'],['C','P'],['S','P'],['S','V'],['L','M'],['T','L'],['V','L'],['O','S'],['T','V']];
+function drawEra(k){
+  const e=ERAS[k];const hot=new Set(e.hot);let g='';
+  EDGES.forEach(([a,b])=>{const A=NODES[a],B=NODES[b];const h=hot.has(a)&&hot.has(b);g+=`<line class="edge${h?' hot':''}" x1="${A[0]+38}" y1="${A[1]}" x2="${B[0]-38}" y2="${B[1]}" opacity="${h?1:.18}"/>`;});
+  Object.entries(NODES).forEach(([id,[x,y,l]])=>{const h=hot.has(id);g+=`<g opacity="${h?1:.28}"><rect class="node${h?' hot':''}" x="${x-38}" y="${y-18}" width="76" height="36" rx="18"/><text x="${x}" y="${y+4}" text-anchor="middle">${l}</text></g>`;});
+  const svg=$('#eraSvg');svg.innerHTML=svg.querySelector('defs').outerHTML+g;
+  $('#eraTitle').textContent=e.n+' — who writes the prompt: '+e.who;$('#eraBody').textContent=e.body;$('#eraSkill').textContent=e.skill;
+  $$('#eras button').forEach((b,j)=>b.setAttribute('aria-pressed',j===k));
+}
+ERAS.forEach((e,k)=>{const b=document.createElement('button');b.textContent=(k+1)+' · '+e.n;b.setAttribute('role','tab');b.onclick=()=>drawEra(k);$('#eras').appendChild(b);});drawEra(0);
+
+/* ---------- journey ---------- */
+const J=[
+ {n:'Board intake',who:'ADO feature card',gate:false,state:'new',note:'Feature #4412 lands on the ADO board with a one-line title.'},
+ {n:'Grill',who:'review agent',gate:false,state:'grilled',note:'Review agent reads item + repo + incidents, posts questions. PO answers in comments.'},
+ {n:'Story',who:'PO agent → PO + Squad Lead',gate:true,state:'approved',note:'PO agent drafts story + spec delta. Gate 1: PO approves intent, Squad Lead approves scope.'},
+ {n:'Plan',who:'plan agent',gate:false,state:'planned',note:'Plan agent creates verifiable child tasks on the board with dependencies.'},
+ {n:'Build · test',who:'build agent + verifier',gate:false,state:'in loop',note:'Each task runs as a budgeted loop; verifier owned by QA. PR opens with review-agent comments.'},
+ {n:'Review',who:'FS Dev + QA',gate:true,state:'reviewed',note:'Gate 2: humans review the PR after the review agent. Merge is a human act.'},
+ {n:'Release',who:'release agent → Squad Lead',gate:true,state:'released',note:'Release agent prepares notes, rollout plan, monitor rules. Gate 3: Squad Lead approves; CI deploys.'},
+ {n:'Monitor',who:'monitor agent',gate:false,state:'watched',note:'Monitor agent watches error rate, latency, usage, cost — and files a new card on the board with evidence. The wheel turns.'},
+];
+let jI=-1;
+J.forEach(s=>{const d=document.createElement('div');d.className='jst'+(s.gate?' gate':'');d.innerHTML=`<b>${s.n}</b><span class="who">${s.who}</span>`;$('#journey').appendChild(d);});
+function jDraw(){$$('#journey .jst').forEach((d,k)=>{d.classList.toggle('on',k===jI);d.classList.toggle('done',k<jI);});
+  const st=jI<0?'new':J[jI].state;$('#fcard').innerHTML=`<span class="id">ADO #4412 · Feature</span><span class="state">${st}</span><br><b>Add "Export to CSV" on the orders page</b><br><span class="small">${jI<0?'Requested by sales. No description.':J[jI].who}</span>`;
+  $('#jNote').textContent=jI<0?'Feature #4412 just landed on the ADO board.':J[jI].note;$('#jNext').disabled=jI>=J.length-1;}
+$('#jNext').onclick=()=>{jI=Math.min(J.length-1,jI+1);jDraw();};$('#jReset').onclick=()=>{jI=-1;jDraw();};jDraw();
+
+/* ---------- grill ---------- */
+const QS=[
+ ['scope','Which orders: all orders the user can see, or the current filtered view?','Current filtered view, max 10k rows.'],
+ ['users','Who gets the button — every role, or sales + admin only?','Sales and admin roles only.'],
+ ['acceptance','Which columns, and in what order? Same as the grid?','Same as the grid, plus order id first.'],
+ ['risk','The orders table contains customer PII. Should exports be logged and rate-limited?','Yes: audit log every export; 10 per user per hour.'],
+ ['dependency','The grid uses server-side paging. Export needs a streaming endpoint — is the API team in scope?','Yes, one endpoint in this story.'],
+ ['nfr','Expected size and time? 10k rows should complete in under 5 s?','Under 5 s for 10k rows; show progress beyond 2 s.'],
+];
+let gI=-1,gA=0;
+function gDraw(){const ul=$('#qa');ul.innerHTML='';if(gI<0){ul.innerHTML='<li><span class="cat">—</span><span class="small">No questions yet.</span><span></span></li>';$('#grillStatus').textContent='Agent reads the item, the repo, linked incidents.';return;}
+  QS.forEach((q,k)=>{const li=document.createElement('li');const a=k<gA;li.innerHTML=`<span class="cat">${q[0]}</span><span>${q[1]}${a?'<br><span class="small">PO: '+q[2]+'</span>':''}</span><span class="st${a?' ok':''}">${a?'answered':'open'}</span>`;ul.appendChild(li);});
+  $('#grillStatus').textContent=gA>=QS.length?'All answered. Item state → "ready for story". PO agent can start.':`${QS.length-gA} open. Item stays "needs clarification" until every question is answered or parked.`;}
+$('#grillGo').onclick=()=>{gI=0;gA=0;gDraw();};$('#grillAns').onclick=()=>{if(gI<0)gI=0;gA=Math.min(QS.length,gA+1);gDraw();};$('#grillReset').onclick=()=>{gI=-1;gA=0;gDraw();};gDraw();
+
+/* ---------- story + approval (maker-checker) ---------- */
+const LINES=[
+ ['dim','ADO #4413 · User story · child of #4412   ·   openspec/changes/export-orders-csv   ·   v1'],
+ ['k','As a sales or admin user'],['k','I want to export the current filtered orders view to CSV'],['k','So that I can share order data without screenshots'],
+ ['','' ],['k','Acceptance criteria'],
+ ['g','Scenario: export current view'],['','  GIVEN a filtered orders grid  WHEN I press Export'],['','  THEN a CSV with the grid columns (order id first) downloads'],
+ ['g','Scenario: role restriction'],['','  GIVEN a user without sales/admin  THEN Export is not shown'],
+ ['g','Scenario: rate limit'],['','  GIVEN 10 exports in the last hour  THEN the 11th returns 429'],
+ ['g','Scenario: audit'],['','  EVERY export writes user, filter, row count to the audit log'],
+ ['',''],['k','NFR   10k rows < 5 s · progress after 2 s · streaming endpoint'],['k','Out of scope   scheduled exports · XLSX'],
+];
+let mc={comments:[],ver:1,po:false,sl:false,revised:new Set()};
+function prevDraw(){const p=$('#prev');p.innerHTML='';LINES.forEach((l,k)=>{const d=document.createElement('div');const open=mc.comments.some(c=>c.line===k&&!c.res);const rev=mc.revised.has(k);
+  d.className='ln'+(open?' hasc':'')+(rev?' rev':'');d.innerHTML=`<span class="n">${k+1}</span><span class="${l[0]}">${l[1]||'&nbsp;'}</span>`;
+  const b=document.createElement('button');b.textContent='+';b.title='Add comment on line '+(k+1);b.onclick=()=>{const t=prompt('Comment on line '+(k+1)+' (as PO or Squad Lead):','make it 20/hour for admin');if(t){mc.comments.push({line:k,text:t,by:'Squad Lead',res:false});mcDraw();}};d.appendChild(b);p.appendChild(d);});}
+function cmtDraw(){const c=$('#cmt');const open=mc.comments.filter(x=>!x.res).length;
+  c.innerHTML=`<b>Comments on story v${mc.ver}</b> <span class="small">(${open} open)</span>`+(mc.comments.length?mc.comments.map(x=>`<div class="c${x.res?' res':''}"><div class="m">${x.by} · line ${x.line+1}${x.res?' · resolved in v'+x.resv:''}</div>${x.text}${x.res?'<div class="m">PO agent: '+x.reply+'</div>':''}</div>`).join(''):'<p class="small">No comments. Press + on a line, or approve.</p>');}
+function mcDraw(){prevDraw();cmtDraw();const open=mc.comments.some(x=>!x.res);
+  $('#apPO').disabled=open;$('#apSL').disabled=open;$('#mcReq').disabled=!open;
+  $('#apPO').setAttribute('aria-pressed',mc.po);$('#apSL').setAttribute('aria-pressed',mc.sl);
+  const m=$('#apMsg');if(open){m.textContent='Open comments block approval. Request changes → PO agent revises and answers each comment.';m.className='callout warn';}
+  else if(mc.po&&mc.sl){m.textContent=`Gate 1 passed on v${mc.ver}. review.md records both approvals. Plan agent starts.`;m.className='callout ok';}
+  else{m.textContent=`Waiting for ${mc.po?'':'PO'}${!mc.po&&!mc.sl?' and ':''}${mc.sl?'':'Squad Lead'}. Plan agent is blocked.`;m.className='callout';}}
+$('#mcReq').onclick=()=>{mc.ver++;mc.comments.forEach(x=>{if(!x.res){x.res=true;x.resv=mc.ver;x.reply='revised line '+(x.line+1)+' and the spec delta; re-ran INVEST/DoR — still passes';mc.revised.add(x.line);
+  if(x.line===12)LINES[12][1]='  GIVEN 10 exports (20 for admin) in the last hour  THEN the next returns 429';}});LINES[0][1]=LINES[0][1].replace(/v\d+$/,'v'+mc.ver);mc.po=mc.sl=false;mcDraw();};
+$('#apPO').onclick=()=>{mc.po=!mc.po;mcDraw();};$('#apSL').onclick=()=>{mc.sl=!mc.sl;mcDraw();};
+$('#apReset').onclick=()=>{LINES[12][1]='  GIVEN 10 exports in the last hour  THEN the 11th returns 429';LINES[0][1]=LINES[0][1].replace(/v\d+$/,'v1');mc={comments:[],ver:1,po:false,sl:false,revised:new Set()};mcDraw();};
+mcDraw();
+
+/* ---------- plan tree ---------- */
+const PLAN=[
+ {id:'story',x:260,y:30,w:200,l:'#4413 Export orders to CSV',cls:'story'},
+ {id:'t1',x:60,y:120,w:150,l:'T1 streaming /export endpoint',t:'test: 10k rows < 5s'},
+ {id:'t2',x:260,y:120,w:150,l:'T2 role check + rate limit',t:'test: 429 on 11th'},
+ {id:'t3',x:460,y:120,w:150,l:'T3 audit log write',t:'test: log row per export'},
+ {id:'t4',x:160,y:220,w:150,l:'T4 Export button + progress',t:'e2e: scenario "export view"'},
+ {id:'t5',x:360,y:220,w:150,l:'T5 e2e scenarios (QA agent)',t:'all 4 scenarios green'},
+];
+const PEDGES=[['story','t1'],['story','t2'],['story','t3'],['t1','t4'],['t2','t4'],['t4','t5'],['t3','t5']];
+(function(){let g='';PEDGES.forEach(([a,b])=>{const A=PLAN.find(p=>p.id===a),B=PLAN.find(p=>p.id===b);g+=`<line data-e="${a}-${b}" x1="${A.x}" y1="${A.y+22}" x2="${B.x}" y2="${B.y-22}"/>`;});
+  PLAN.forEach(p=>{g+=`<rect data-n="${p.id}" class="${p.cls||''}" x="${p.x-p.w/2}" y="${p.y-22}" width="${p.w}" height="44"/><text data-n="${p.id}" x="${p.x}" y="${p.y-3}">${p.l}</text><text data-n="${p.id}" x="${p.x}" y="${p.y+13}" fill="#3E5068">${p.t||'approved story'}</text>`;});
+  $('#plan').innerHTML=g;})();
+let planTimer=null;
+$('#planGo').onclick=()=>{clearTimeout(planTimer);$$('#plan .show').forEach(e=>e.classList.remove('show'));const order=['story','t1','t2','t3','t4','t5'];let k=0;
+  const step=()=>{if(k>=order.length)return;const id=order[k++];$$(`#plan [data-n="${id}"]`).forEach(e=>e.classList.add('show'));$$(`#plan [data-e$="-${id}"]`).forEach(e=>e.classList.add('show'));planTimer=setTimeout(step,450);};step();};
+$('#planReset').onclick=()=>{clearTimeout(planTimer);$$('#plan .show').forEach(e=>e.classList.remove('show'));};
+
+/* ---------- loop simulator ---------- */
+const ST=['reason','act','observe','verify','stop?'];
+(function(){let g=`<circle class="track" cx="150" cy="150" r="105"/><circle class="prog" id="prog" cx="150" cy="150" r="105" stroke-dasharray="660" stroke-dashoffset="660" transform="rotate(-90 150 150)"/>`;
+  ST.forEach((s,k)=>{const a=(k/ST.length)*2*Math.PI-Math.PI/2;const x=150+105*Math.cos(a),y=150+105*Math.sin(a);g+=`<circle class="stn" id="stn${k}" cx="${x}" cy="${y}" r="24"/><text x="${x}" y="${y+4}">${s}</text>`;});
+  g+=`<text id="ringMid" x="150" y="156" style="font-family:var(--mono);font-size:14px">idle</text>`;$('#ring').innerHTML=g;})();
+let sim=null;
+function simReset(){sim={iter:0,tok:0,quality:0,stage:0,done:false};$$('#ring .stn').forEach(s=>s.className.baseVal='stn');$('#prog').style.strokeDashoffset=660;$('#ringMid').textContent='idle';$('#simLog').innerHTML='';stat();}
+function stat(){$('#stIter').textContent=`iter ${sim.iter}/${$('#sBud').value}`;$('#stTok').textContent=`tokens ${Math.round(sim.tok/1000)}k`;$('#stOut').textContent=sim.done||'—';}
+function logLine(cls,t){const d=document.createElement('div');d.className=cls;d.textContent=t;$('#simLog').appendChild(d);$('#simLog').scrollTop=1e6;}
+function light(k,cls){$$('#ring .stn').forEach((s,j)=>{s.className.baseVal='stn'+(j===k?' lit'+(cls?' '+cls:''):'');});}
+function simStep(){
+  if(sim.done)return false;
+  const diff=+$('#sDiff').value,ver=+$('#sVer').value,bud=+$('#sBud').value,ctx=+$('#sCtx').value,k=sim.stage;
+  if(k===0){sim.iter++;if(sim.iter>bud){sim.done='stopped: budget';light(4,'stop');$('#ringMid').textContent='budget';logLine('s',`iter ${sim.iter}: budget ${bud} exhausted → stop, hand back to FS Dev with trace (correct outcome)`);stat();return false;}
+    sim.tok+=8000+sim.iter*4000*(1-ctx/12);light(0);$('#ringMid').textContent=`iter ${sim.iter}`;logLine('',`iter ${sim.iter}: reason — next step for task T2 from the story`);}
+  else if(k===1){light(1);const gain=Math.max(0.05,(0.35-diff*0.02)*(0.7+ctx/20)*(0.85+Math.random()*0.3));sim.quality=Math.min(1,sim.quality+gain);logLine('',`  act — edit files, run tests · progress ${Math.round(sim.quality*100)}%`);}
+  else if(k===2){light(2);logLine('',`  observe — test output, diff, story scenarios`);}
+  else if(k===3){light(3);const falseGreen=Math.random()<(11-ver)*0.045;const real=sim.quality>=0.95;
+    if(real){sim.done='done: verified';light(3,'pass');$('#ringMid').textContent='green';logLine('p',`  verify — all scenarios green · REAL done → PR opens`);stat();return false;}
+    if(falseGreen){sim.done='done?: false green';light(3,'pass');$('#ringMid').textContent='green?';logLine('s',`  verify — green at ${Math.round(sim.quality*100)}% — FALSE POSITIVE (lax verifier / agent touched the tests)`);stat();return false;}
+    logLine('l',`  verify — ${Math.round(sim.quality*100)}% of scenarios pass → continue`);}
+  else if(k===4){light(4);logLine('',`  stop? — not done, budget ok → loop`);}
+  sim.stage=(k+1)%5;$('#prog').style.strokeDashoffset=660-660*(sim.stage/5);stat();return true;
+}
+$('#simStep').onclick=()=>simStep();$('#simReset').onclick=simReset;
+$('#simRun').onclick=()=>{simReset();const b=$('#simRun');b.disabled=true;const iv=setInterval(()=>{if(!simStep()){clearInterval(iv);b.disabled=false;}},420);};
+simReset();
+
+/* ---------- CI ---------- */
+const CI=[['Build','compile + lint',false],['Unit tests','from tasks',false],['E2E scenarios','QA agent runs story scenarios',false],['Review gate','FS Dev + QA approve PR',true],['Release prep','release agent: notes, rollout, monitor rules',false],['Release gate','Squad Lead approves → deploy',true]];
+CI.forEach(([n,d,g])=>{const s=document.createElement('div');s.className='s'+(g?' gate':'');s.innerHTML=`<b>${n}</b><span class="small">${d}</span>`;$('#ci').appendChild(s);});
+let ciTimer=null;
+function ciRun(failAt){clearTimeout(ciTimer);const els=$$('#ci .s');els.forEach(e=>e.className=e.className.replace(/ (run|ok|fail)/g,''));let k=0;$('#ciMsg').textContent='Pipeline running…';
+  const step=()=>{if(k>0)els[k-1].classList.replace('run','ok');if(k===failAt){els[k].classList.add('fail');$('#ciMsg').textContent=`${CI[k][0]} failed: scenario "rate limit" — 11th export returned 200. Failure goes back to the build loop as a new iteration. Nothing deploys.`;return;}
+    if(k>=els.length){$('#ciMsg').textContent='Deployed to canary 10%. Monitor agent armed with the release rules.';return;}els[k].classList.add('run');k++;ciTimer=setTimeout(step,600);};step();}
+$('#ciGo').onclick=()=>ciRun(-1);$('#ciFail').onclick=()=>ciRun(2);
+
+/* ---------- release pack (maker-checker) ---------- */
+const DOCS=[['Change notes','from story scenarios','PO'],['Rollout & rollback plan','canary %, soak, flag, rollback cmd','Squad Lead'],['Monitor rules','from NFRs + risk scenarios','QA'],['Test evidence','verifier + e2e run links','QA'],['ASMR','org release form — expansion per your process','Squad Lead'],['AIG','org release form — expansion per your process','Squad Lead'],['Risk & compliance sign-off','PII, rate limit, audit','PO'],['Stakeholder comms','who is told what, when','PO']];
+let pack={st:DOCS.map(()=>'missing')};
+function packDraw(){const d=$('#docs');d.innerHTML='';DOCS.forEach((x,k)=>{const s=pack.st[k];const e=document.createElement('div');e.className='doc';e.innerHTML=`<div><b>${x[0]}</b><span class="who">${x[1]} · checker: ${x[2]}</span></div><span class="chip ${s==='missing'?'':s}">${s==='missing'?'missing':s==='draft'?'agent drafted':s==='check'?'awaiting checker':'signed'}</span>`;d.appendChild(e);});
+  const all=pack.st.every(s=>s==='signed');$('#g3').disabled=!all;$('#packSign').disabled=!pack.st.some(s=>s==='check');
+  $('#packMsg').innerHTML=all?'All documents signed by their checkers. Gate 3 enabled. manifest.yaml v'+(pack.v||1)+' frozen with the release.':`${pack.st.filter(s=>s==='signed').length}/${DOCS.length} signed. Release agent tracks the pack in <code>release/R-…/manifest.yaml</code>; missing or unsigned documents block gate 3.`;}
+let packT=null;
+$('#packGo').onclick=()=>{clearTimeout(packT);pack={st:DOCS.map(()=>'missing'),v:1};let k=0;const step=()=>{if(k>=DOCS.length)return;pack.st[k]='draft';packDraw();packT=setTimeout(()=>{pack.st[k]='check';k++;packDraw();step();},180);};step();};
+$('#packSign').onclick=()=>{const k=pack.st.indexOf('check');if(k>=0){pack.st[k]='signed';packDraw();}};
+$('#g3').onclick=()=>{$('#packMsg').textContent='Gate 3 approved by Squad Lead. Pipeline deploys canary 10%; monitor agent armed; release pack v1 archived with the release item.';};
+packDraw();
+
+/* ---------- monitor ---------- */
+let monTimer=null;
+function monDraw(hours,alert){const W=420,H=200,pad=30;let g=`<line x1="${pad}" y1="${H-pad}" x2="${W-10}" y2="${H-pad}" stroke="#C9D2DE"/><line x1="${pad}" y1="10" x2="${pad}" y2="${H-pad}" stroke="#C9D2DE"/>`;
+  g+=`<text x="${pad+4}" y="20" font-size="11" fill="#3E5068">export error rate (%) · threshold 2%</text>`;
+  const thY=H-pad-(2/6)*(H-pad-30);g+=`<line x1="${pad}" y1="${thY}" x2="${W-10}" y2="${thY}" stroke="#C94F3D" stroke-dasharray="4 4"/>`;
+  let pts='';for(let h=0;h<=hours;h++){const base=0.4+0.3*Math.sin(h/3);const spike=h>=17?Math.min(4.5,(h-16)*1.1):0;const v=base+spike;const x=pad+(h/24)*(W-pad-10),y=H-pad-(Math.min(6,v)/6)*(H-pad-30);pts+=`${x},${y} `;}
+  g+=`<polyline points="${pts}" fill="none" stroke="#1B2A41" stroke-width="2"/>`;
+  for(let h=0;h<=24;h+=6){const x=pad+(h/24)*(W-pad-10);g+=`<text x="${x}" y="${H-12}" font-size="11" fill="#3E5068" text-anchor="middle">${h}h</text>`;}
+  $('#monSvg').innerHTML=g;const a=$('#monAlert');
+  if(alert){a.innerHTML=`<b>Monitor agent · 19:00</b> — error rate 3.4% on /export for 2h (threshold 2%). Evidence: 61 × 500 on filters with > 10k rows. <br><span class="mono small">→ Created ADO #4420 "Export fails on > 10k rows" · linked to #4412 · attached traces + sample filters · state: new</span>`;a.classList.add('show');}else a.classList.remove('show');}
+$('#monGo').onclick=()=>{clearTimeout(monTimer);let h=0;const step=()=>{monDraw(h,h>=19);if(h<24){h++;monTimer=setTimeout(step,90);}};step();};
+$('#monReset').onclick=()=>{clearTimeout(monTimer);monDraw(0,false);};monDraw(0,false);
+
+/* ---------- roles ---------- */
+const STAGES=['Intake','Grill','Story (gate 1)','Plan','Build · test','Review (gate 2)','Release (gate 3)','Monitor'];
+const ROLES={
+ 'PO':['creates the feature card','answers the grill questions','approves intent + acceptance criteria','—','—','—','reads change notes','reads monitor report; triages the new card'],
+ 'Squad Lead':['prioritises on the board','parks / escalates questions','approves scope + feasibility','adjusts tasks, estimates, order','watches budgets, unblocks','—','approves release + rollout plan','decides fix vs rollback'],
+ 'FS Developer':['—','answers technical questions','—','reviews task split','pairs with build agent; takes back budget-stops','reviews PR after review agent','—','investigates filed card'],
+ 'QA':['—','adds edge-case questions','turns criteria into scenarios','names the test per task','owns verifier strictness; agent cannot edit it','reviews PR: scenarios covered','signs off e2e','tunes monitor thresholds'],
+ 'Agents':['—','review agent: grill','PO agent: story + spec delta','plan agent: child tasks','build agent + verifier + review agent','review agent: PR comments','release agent: notes, rollout, rules','monitor agent: watch, file card'],
+};
+function drawRoles(sel){let h='<tr><th>Stage</th>'+Object.keys(ROLES).map(r=>`<th>${r}</th>`).join('')+'</tr>';
+  STAGES.forEach((s,k)=>{h+=`<tr><td><b>${s}</b></td>`+Object.entries(ROLES).map(([r,v])=>`<td class="${r===sel?'hi':''}${r==='Agents'?' agent':''}">${v[k]}</td>`).join('')+'</tr>';});
+  $('#raci').innerHTML=h;$$('#roleTabs button').forEach(b=>b.setAttribute('aria-pressed',b.textContent===sel));}
+['PO','Squad Lead','FS Developer','QA'].forEach(r=>{const b=document.createElement('button');b.textContent=r;b.onclick=()=>drawRoles(r);$('#roleTabs').appendChild(b);});drawRoles('PO');
+
+/* ---------- agent cards ---------- */
+const AG=[
+ {n:'Grill agent',owner:'PO answers · Squad Lead parks',reads:['ADO item, comments, links, duplicates in area','openspec/specs for the domain, AGENTS.md, named module','incidents + monitor cards (90 days)','docs/constraints.md'],does:['Restates the request in 2 sentences','Questions in 6 categories: scope, users, acceptance, risk, dependency, NFR — each cites evidence','Re-runs on every new comment; marks answered / parked / open','Proposes type: story, epic, bug, duplicate'],validates:['Every category asked or justified','Never asks what the description already says','Duplicate check > 0.8 similarity','PII/auth keyword → mandatory risk question'],hands:'grill.md envelope → PO agent · state ready-for-story',stops:'All answered/parked · 5 days stale → Squad Lead · epic → split first',never:'Answer its own questions · invent requirements · approve'},
+ {n:'PO agent',owner:'PO (intent) + Squad Lead (scope) — gate 1',reads:['grill.md answers = requirements; parked = out of scope','Current spec for the domain (write a delta, not a fresh spec)','Story template + Definition of Ready','2 recent archived changes (style)'],does:['Story: As a / I want / So that · scenarios GIVEN/WHEN/THEN · NFR · out of scope · dependencies · open decisions','Spec delta: ADDED / MODIFIED / REMOVED requirements','Runs INVEST + DoR, fixes or lists','Creates story item, links change folder, sets awaiting-G1'],validates:['I: no open-story dependencies','N: outcomes not implementation','V: "so that" quotes the requester','E: concrete data in every scenario','S: ≤ 6 scenarios, ≤ 2 areas, ≤ 8 tasks','T: every THEN observable by a test'],hands:'story #4413 + change folder → G1 → plan agent',stops:'INVEST fail it cannot fix → story with dor_unmet + comment',never:'Approve · change a grill answer · add unasked scope'},
+ {n:'Plan agent',owner:'Squad Lead adjusts (not a gate)',reads:['Story + spec delta (only requirements source)','Path map, CODEOWNERS, module READMEs','Existing tests in the areas; CI config','Budget policy + last 5 archived changes'],does:['Tasks: one area, one scenario/NFR, one proof each','Dependency DAG → parallel waves','Budget per task: iterations, tokens, wall-clock','Child Task items on the board + tasks.md','Flags human_first tasks'],validates:['Coverage both ways: scenarios ↔ tasks, no orphans','DAG acyclic; no cross-wave back edges; external deps on the story','Task ≤ 2 areas / ~8 files; test path named','No two same-wave tasks touch the same file','Single task > 40% of story budget → flag'],hands:'tasks.md + waves + budgets → build agent',stops:'Coverage or dependency failure → posts plan with failure, waits',never:'Change scenarios · mark tasks done'},
+ {n:'Build agent (loop)',owner:'FS Developer',reads:['Task block + its scenarios (pinned)','Files in touches; named tests','Module conventions, AGENTS.md, how to run tests','Previous iterations summarised: last failure + diff'],does:['reason: smallest change toward the named test, one-line intent','act: edit + run in sandbox','observe: first failure only','verify: hand to read-only verifier','stop?: green / budget / stuck / forbidden'],validates:['Intent references a scenario or test','Diff ⊆ touches (+ named tests)','No test disabled or weakened; no secrets; lint + types','No new deps without a deps line'],hands:'PR + trace + proves: list → review agent',stops:'green → PR · budget/stuck → WIP branch + escalation note (correct) · forbidden → revert + stop',never:'Edit verifier/CI · touch specs/ · merge · swallow exceptions · leave sandbox'},
+ {n:'Verifier',owner:'QA (can only tighten without a story)',reads:['Branch, spec delta, tests/, NFR block'],does:['Static: lint, types, secrets, licence scan','Unit + integration suite','Scenario check: every scenario has a tagged test','NFR probes as tests (timed export, 429 on 11th)','Diff scope check','LLM rubric (advisory): would the assertion fail on regression?'],validates:['Missing scenario tag = red even if tests pass','Files outside touches = red: scope','Weak assertions flagged'],hands:'green / red / partial with failing scenario names',stops:'Deterministic; fails fast in order',never:'Be writable by any agent · be called with arguments by the build agent'},
+ {n:'Review agent',owner:'FS Developer + QA — gate 2',reads:['Diff, task blocks, scenarios, conventions','Build trace: intents per iteration','CODEOWNERS'],does:['Traceability: scenario line → code line → test line','Findings by category with severity blocker / should / nit + patch','Trace review: drift, "made the test pass" vs "made it right"','One summary + inline comments; assigns FS Dev + QA'],validates:['Every claimed scenario has a traceability row','Every blocker has a repro or reference','No restating verifier output'],hands:'findings + traceability → G2',stops:'Blocker → back to build loop with the finding as first context line',never:'Approve · merge'},
+ {n:'Release agent',owner:'Squad Lead — gate 3',reads:['Story + delta, merged PRs + review summaries, CI','docs/release-policy.md, on-call, monitor rule template'],does:['Change notes from the story, not commits','Rollout: env order, canary %, soak, flag, rollback trigger + command','Derives monitor rules from NFRs + risk scenarios','Pre-release checks: reversible migrations, flags off, config diffs','After G3: deploy canary, watch soak, promote or halt','On promote: openspec archive'],validates:['Every scenario in notes or marked internal','Rollback command dry-run in staging','Every rule has threshold, window, owner','human_first tasks signed off'],hands:'release item + monitor rules → G3 → monitor agent',stops:'Tripped rule during soak → halt + page',never:'Deploy before G3 · skip soak · promote past a tripped rule'},
+ {n:'Monitor agent',owner:'PO triages · Squad Lead decides rollback',reads:['Monitor rules from the release','Metrics/logs/traces for those signals; 7-day baseline','The story (vocabulary), the board (duplicates)'],does:['Evaluates rules on their windows','On trip: gathers evidence — numbers, window, samples, correlation with deploy/flag','Files Bug or Feature on the board linked to story + release → grill agent picks it up','Weekly adoption note on the story: usage, who, cost, trends (the visibility layer)','Pages only where the rule says so'],validates:['Trip confirmed against baseline','No duplicate within cool-down','Evidence attached before filing','Card in story vocabulary'],hands:'new card #4420 → grill agent · state new',stops:'Watch window ends → rules handed to standing alerting',never:'Change config · flip flags · roll back · close its own cards'},
+];
+function drawAg(k){const a=AG[k];$('#agTitle').textContent=a.n+' — owned by '+a.owner;
+  const col=(t,items)=>`<div class="panel"><b>${t}</b><ul style="font-size:13.5px;padding-left:16px;margin:6px 0 0">${items.map(x=>`<li>${x}</li>`).join('')}</ul></div>`;
+  $('#agBody').innerHTML=col('Reads (in order)',a.reads)+col('Does',a.does)+col('Validates',a.validates)+
+    `<div class="panel" style="grid-column:1/-1;display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px"><div><b>Hands off</b><p class="small">${a.hands}</p></div><div><b>Stops when</b><p class="small">${a.stops}</p></div><div><b>Must never</b><p class="small">${a.never}</p></div></div>`;
+  $$('#agTabs button').forEach((b,j)=>b.setAttribute('aria-pressed',j===k));}
+AG.forEach((a,k)=>{const b=document.createElement('button');b.textContent=a.n;b.onclick=()=>drawAg(k);$('#agTabs').appendChild(b);});drawAg(0);
+
+/* ---------- start ---------- */
+const h=parseInt((location.hash||'').replace('#s',''),10);go(isNaN(h)?0:h-1);
+})();
+</script>
+</body>
+</html>

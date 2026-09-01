@@ -1,0 +1,40 @@
+server:
+  port: 8082
+
+spring:
+  application:
+    name: agents
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/pdlc}
+    username: ${SPRING_DATASOURCE_USERNAME:pdlc}
+    password: ${SPRING_DATASOURCE_PASSWORD:pdlc}
+
+pdlc:
+  config-path: ${PDLC_CONFIG_PATH:infra/pdlc.yaml}
+  active-profile: ${PDLC_ACTIVE_PROFILE:local}
+
+temporal:
+  target: ${TEMPORAL_TARGET:127.0.0.1:7233}
+  namespace: ${TEMPORAL_NAMESPACE:default}
+
+# Embabel custom OpenAI-compatible endpoint (stub-llm / LiteLLM). The real mechanism is the
+# `openai-custom` provider (OPENAI_CUSTOM_BASE_URL/OPENAI_CUSTOM_API_KEY/OPENAI_CUSTOM_MODELS),
+# NOT spring.ai.openai.*. AgentsApplication.main() derives these from the active pdlc.yaml profile's
+# agents.gateway + agents.roles.<role>.model and sets them as system properties (which override the
+# env-var placeholders below). Note: Spring AI 2.0 bakes the endpoint path into base-url, so the
+# gateway's "/v1" is appended by main().
+embabel:
+  agent:
+    platform:
+      models:
+        openai:
+          custom:
+            base-url: ${OPENAI_CUSTOM_BASE_URL:http://localhost:8080/v1}
+            api-key: ${OPENAI_CUSTOM_API_KEY:stub}
+            models: ${OPENAI_CUSTOM_MODELS:stub/grill,stub/po}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
