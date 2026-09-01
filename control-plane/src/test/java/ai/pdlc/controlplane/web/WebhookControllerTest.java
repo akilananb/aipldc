@@ -80,7 +80,7 @@ class WebhookControllerTest {
                 new BoardConfig("in-memory", "local", "PDLC", Map.of(), Map.of(), new BoardConfig.AuthConfig("none", "kv://none")),
                 new RepoConfig("in-memory", "local://x", "main", "openspec"),
                 new NotifyConfig("none", "none"),
-                new AgentsConfig("http://stub", Map.of()),
+                new AgentsConfig("http://stub", null, Map.of()),
                 Map.of("G1", new GateConfig(List.of("PO", "SquadLead"), true)));
         return new WebhookController(board, store, client, profile);
     }
@@ -127,7 +127,7 @@ class WebhookControllerTest {
                 new BoardConfig("in-memory", "local", "PDLC", Map.of(), Map.of(), new BoardConfig.AuthConfig("none", "kv://none")),
                 new RepoConfig("in-memory", "local://x", "main", "openspec"),
                 new NotifyConfig("none", "none"),
-                new AgentsConfig("http://stub", Map.of()),
+                new AgentsConfig("http://stub", null, Map.of()),
                 Map.of("G1", new GateConfig(List.of("PO", "SquadLead"), true)));
         WebhookController controller = new WebhookController(board, store, testEnv.getWorkflowClient(), profile);
 

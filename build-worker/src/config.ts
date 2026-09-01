@@ -32,6 +32,9 @@ export interface AgentConfig {
   /** ACP_AGENT_CMD - command string acpx spawns as the ACP agent; any ACP-capable agent works,
    * not just omp (e.g. `claude-code-acp`, `pi --acp`). */
   acpAgent: string;
+  /** PROMPT_TEMPLATE_DIR - directory of `*.mustache` files overriding the bundled build-task
+   * prompt template (see promptTemplate.ts); unset falls back to the bundled default. */
+  promptTemplateDir?: string;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AgentConfig {
@@ -70,5 +73,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AgentConfig {
     repoToken: env.TARGET_REPO_TOKEN || undefined,
     cacheDir: env.BUILD_WORKER_HOME ?? path.join(os.homedir(), '.pdlc-build-worker'),
     acpAgent: env.ACP_AGENT_CMD ?? 'omp acp',
+    promptTemplateDir: env.PROMPT_TEMPLATE_DIR || undefined,
   };
 }

@@ -1,0 +1,23 @@
+[agent:po]
+Write the story for feature: {{{title}}}
+Feature description: {{{description}}}
+Use this EXACT format for acceptance criteria (required for machine parsing - do not use bullets or bold text for the Given/When/Then lines):
+
+## Acceptance criteria
+Scenario: <short-kebab-or-words-scenario-name>
+  GIVEN <precondition>
+  WHEN <action>
+  THEN <observable result>
+
+Scenario: <another-scenario-name>
+  GIVEN <precondition>
+  WHEN <action>
+  THEN <observable result>
+
+One scenario per acceptance-criteria bullet in the request; every "Scenario:" line and every GIVEN/WHEN/THEN line must start at the beginning of the line (only leading whitespace before the keyword).
+{{#grill}}
+{{#answers}}
+Answer {{{id}}} ({{{category}}}): {{{answer}}}
+{{/answers}}
+Parked (out of scope): {{{parked}}}
+{{/grill}}

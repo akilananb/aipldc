@@ -109,7 +109,7 @@ public final class PdlcConfig {
                     asString(rawRole.get("model")),
                     budget == null ? null : ((Number) budget).longValue()));
         }
-        return new AgentsConfig(asString(raw.get("gateway")), roles);
+        return new AgentsConfig(asString(raw.get("gateway")), asString(raw.get("prompts_dir")), roles);
     }
 
     @SuppressWarnings("unchecked")

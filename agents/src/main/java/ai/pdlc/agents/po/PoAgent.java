@@ -1,6 +1,7 @@
 package ai.pdlc.agents.po;
 
 import ai.pdlc.agents.activities.AgentContext;
+import ai.pdlc.agents.templates.PromptTemplates;
 import ai.pdlc.core.config.Profile;
 import ai.pdlc.core.domain.CanonicalState;
 import ai.pdlc.core.domain.Comment;
@@ -20,6 +21,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -38,46 +40,20 @@ public class PoAgent {
 
     private static final Logger log = LoggerFactory.getLogger(PoAgent.class);
 
-    static final String DRAFT_MARKER = "[agent:po]";
-    static final String REVISE_MARKER = "[agent:po-revise]";
-
-    /** {@link StoryParser#scenarios} needs these literal keywords at line-start (no bullets, no
-     * bold markdown) - a real gap found running the pilot against a real model instead of the
-     * stub-llm gateway: a real model happily free-styles a *different* well-formed acceptance
-     * criteria layout (bulleted "- Given ..." under bold headers) that this exact grammar rejects,
-     * silently producing zero scenarios ("DoR unmet: story has no scenarios") and zero build tasks. */
-    private static final String SCENARIO_FORMAT_SPEC = """
-            Use this EXACT format for acceptance criteria (required for machine parsing - do not \
-            use bullets or bold text for the Given/When/Then lines):
-
-            ## Acceptance criteria
-            Scenario: <short-kebab-or-words-scenario-name>
-              GIVEN <precondition>
-              WHEN <action>
-              THEN <observable result>
-
-            Scenario: <another-scenario-name>
-              GIVEN <precondition>
-              WHEN <action>
-              THEN <observable result>
-
-            One scenario per acceptance-criteria bullet in the request; every "Scenario:" line and \
-            every GIVEN/WHEN/THEN line must start at the beginning of the line (only leading \
-            whitespace before the keyword).
-            """;
-
     private static final Pattern CHANGE = Pattern.compile("Change:\\s*(\\S+)");
     private static final Pattern NFR_BULLET = Pattern.compile("^\\s*-\\s*([^:]+):\\s*(.*)$");
 
     private final Ai ai;
     private final BoardPort board;
     private final RepoPort repo;
+    private final PromptTemplates templates;
     private final String poModel;
 
-    public PoAgent(Ai ai, BoardPort board, RepoPort repo, Profile activeProfile) {
+    public PoAgent(Ai ai, BoardPort board, RepoPort repo, PromptTemplates templates, Profile activeProfile) {
         this.ai = ai;
         this.board = board;
         this.repo = repo;
+        this.templates = templates;
         var role = activeProfile.agents().roles().get("po");
         this.poModel = role != null ? role.model() : null;
     }
@@ -87,32 +63,36 @@ public class PoAgent {
         String title = workItem == null ? item.boardId() : safe(workItem.title());
         String description = workItem == null ? "" : safe(workItem.description());
 
-        StringBuilder prompt = new StringBuilder(DRAFT_MARKER).append('\n')
-                .append("Write the story for feature: ").append(title).append('\n')
-                .append("Feature description: ").append(description).append('\n')
-                .append(SCENARIO_FORMAT_SPEC);
-        appendGrill(prompt, grill);
+        Map<String, Object> view = new HashMap<>();
+        view.put("title", title);
+        view.put("description", description);
+        if (grill != null) {
+            view.put("grill", grillView(grill));
+        }
+        String prompt = templates.render("po-draft", view);
 
-        String story = promptRunner().generateText(prompt.toString());
+        String story = promptRunner().generateText(prompt);
         return assemble(story, item, null, item.boardId(), grill);
     }
 
     public StoryDraft revise(WorkItemRef item, PoHandoff previous, List<Comment> comments) {
-        StringBuilder prompt = new StringBuilder(REVISE_MARKER).append('\n')
-                .append("Revise only the lines these comments target; keep the rest verbatim, ")
-                .append("including the exact Scenario/GIVEN/WHEN/THEN formatting of any untouched scenario.\n");
+        List<Map<String, Object>> commentViews = new ArrayList<>();
         for (Comment c : comments) {
-            prompt.append("- ").append(c.target()).append(": ").append(c.text()).append('\n');
+            commentViews.add(Map.of("target", c.target(), "text", c.text()));
         }
 
         // Best-effort: read the previous story so the LLM has the exact text (unavailable in the
         // local in-memory profile where the repo is a separate JVM from control-plane's).
         String previousStory = AgentContext.readFile(repo, "main", (previous.change() == null ? "" : previous.change()) + "/proposal.md");
-        if (previousStory != null) {
-            prompt.append("\nCurrent story:\n").append(previousStory);
-        }
 
-        String revised = promptRunner().generateText(prompt.toString());
+        Map<String, Object> view = new HashMap<>();
+        view.put("comments", commentViews);
+        if (previousStory != null) {
+            view.put("previousStory", Map.of("story", previousStory));
+        }
+        String prompt = templates.render("po-revise", view);
+
+        String revised = promptRunner().generateText(prompt);
         return assemble(revised, item, previous.change(), previous.parent(), null);
     }
 
@@ -234,17 +214,14 @@ public class PoAgent {
         return out;
     }
 
-    private void appendGrill(StringBuilder prompt, GrillHandoff grill) {
-        if (grill == null) {
-            return;
-        }
+    private static Map<String, Object> grillView(GrillHandoff grill) {
+        List<Map<String, Object>> answers = new ArrayList<>();
         for (GrillQuestion q : grill.questions()) {
             if (q.status() == GrillQuestion.Status.ANSWERED) {
-                prompt.append("Answer ").append(q.id()).append(" (").append(q.category().wireValue())
-                        .append("): ").append(q.answer()).append('\n');
+                answers.add(Map.of("id", q.id(), "category", q.category().wireValue(), "answer", q.answer()));
             }
         }
-        prompt.append("Parked (out of scope): ").append(String.join(", ", grill.parked())).append('\n');
+        return Map.of("answers", answers, "parked", String.join(", ", grill.parked()));
     }
 
     private com.embabel.agent.api.common.PromptRunner promptRunner() {

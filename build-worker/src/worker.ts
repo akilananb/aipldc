@@ -5,7 +5,7 @@ import { resolveRepo, type RepoHandle } from './repo';
 import { runBuildTask } from './buildTask';
 import type { BuildResult, ClaimedTask } from './types';
 
-export type BuildRunner = (payload: ClaimedTask['payload'], repo: RepoHandle, acpAgent: string, signal: AbortSignal) => Promise<BuildResult>;
+export type BuildRunner = (payload: ClaimedTask['payload'], repo: RepoHandle, opts: { acpAgent: string; promptTemplateDir?: string }, signal: AbortSignal) => Promise<BuildResult>;
 
 /**
  * Runs one claimed task end to end: resolve its repo, heartbeat the claim lease every {@link
@@ -35,7 +35,7 @@ export async function handleClaim(
   }, cfg.heartbeatIntervalMs);
 
   try {
-    const result = await runner(claimed.payload, repo, cfg.acpAgent, controller.signal);
+    const result = await runner(claimed.payload, repo, { acpAgent: cfg.acpAgent, promptTemplateDir: cfg.promptTemplateDir }, controller.signal);
     await client.postResult(claimed.id, result);
   } catch (err) {
     if (!controller.signal.aborted) {

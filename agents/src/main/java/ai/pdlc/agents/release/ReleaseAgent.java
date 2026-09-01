@@ -1,5 +1,6 @@
 package ai.pdlc.agents.release;
 
+import ai.pdlc.agents.templates.PromptTemplates;
 import ai.pdlc.core.config.Profile;
 import ai.pdlc.core.domain.CanonicalState;
 import ai.pdlc.core.domain.Handoff;
@@ -22,6 +23,7 @@ import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Release agent (playbook §7) as a plain Spring service. The pilot's release pack is 4 of the 8
@@ -38,13 +40,13 @@ public class ReleaseAgent {
 
     private static final Logger log = LoggerFactory.getLogger(ReleaseAgent.class);
 
-    static final String ROLE_MARKER = "[agent:release]";
-
     private final Ai ai;
     private final String releaseModel;
+    private final PromptTemplates templates;
 
-    public ReleaseAgent(Ai ai, Profile activeProfile) {
+    public ReleaseAgent(Ai ai, PromptTemplates templates, Profile activeProfile) {
         this.ai = ai;
+        this.templates = templates;
         var role = activeProfile.agents().roles().get("release");
         this.releaseModel = role != null ? role.model() : null;
     }
@@ -69,11 +71,8 @@ public class ReleaseAgent {
     // -- change notes: one real LLM call, deterministic fallback ---------------------------------
 
     private String changeNotes(PoHandoff po) {
-        String prompt = ROLE_MARKER + "\n"
-                + "Write user-facing change notes (2-3 sentences) for this change, drawn from the "
-                + "story's \"As a / So that\" and scenarios - never from commit messages.\n"
-                + "Change: " + po.change() + "\n"
-                + "Scenarios: " + String.join(", ", po.scenarios());
+        String prompt = templates.render("release-change-notes",
+                Map.of("change", po.change(), "scenarios", String.join(", ", po.scenarios())));
         try {
             String raw = promptRunner().generateText(prompt);
             String text = raw == null ? "" : raw.strip();
@@ -84,8 +83,8 @@ public class ReleaseAgent {
         }
     }
 
-    private static String fallbackChangeNotes(PoHandoff po) {
-        return "This release adds: " + String.join(", ", po.scenarios()) + ".";
+    private String fallbackChangeNotes(PoHandoff po) {
+        return templates.render("release-change-notes-fallback", Map.of("scenarios", String.join(", ", po.scenarios())));
     }
 
     // -- deterministic template assembly ----------------------------------------------------------
@@ -95,10 +94,10 @@ public class ReleaseAgent {
         return new RolloutPlan(10, 60, flag, "flag off + deploy prev");
     }
 
-    private static String rolloutMarkdown(RolloutPlan rollout) {
-        return "- Canary: " + rollout.canaryPct() + "% for " + rollout.soakMinutes() + " minutes\n"
-                + "- Flag: " + rollout.flag() + "\n"
-                + "- Rollback: " + rollout.rollback() + "\n";
+    private String rolloutMarkdown(RolloutPlan rollout) {
+        return templates.render("release-rollout-plan", Map.of(
+                "canaryPct", rollout.canaryPct(), "soakMinutes", rollout.soakMinutes(),
+                "flag", rollout.flag(), "rollback", rollout.rollback()));
     }
 
     /** One rule per NFR + the playbook §7 handoff's own worked example (export-orders-csv rate
@@ -116,29 +115,28 @@ public class ReleaseAgent {
         return rules;
     }
 
-    private static String monitorRulesMarkdown(List<MonitorRule> rules) {
-        StringBuilder sb = new StringBuilder();
+    private String monitorRulesMarkdown(List<MonitorRule> rules) {
+        List<Map<String, Object>> ruleViews = new ArrayList<>();
         for (MonitorRule r : rules) {
-            sb.append("- ").append(r.id()).append(": ").append(r.signal()).append(' ').append(r.threshold())
-                    .append(" -> ").append(r.action()).append(" (owner: ").append(r.owner()).append(")\n");
+            ruleViews.add(Map.of("id", r.id(), "signal", r.signal(), "threshold", r.threshold(),
+                    "action", r.action(), "owner", r.owner()));
         }
-        return sb.toString();
+        return templates.render("release-monitor-rules", Map.of("rules", ruleViews));
     }
 
-    private static String testEvidenceMarkdown(List<Task> tasks, List<BuildResult> results, ReviewHandoff review) {
-        StringBuilder sb = new StringBuilder("## Verifier results\n");
+    private String testEvidenceMarkdown(List<Task> tasks, List<BuildResult> results, ReviewHandoff review) {
+        List<Map<String, Object>> resultViews = new ArrayList<>();
         for (BuildResult r : results) {
             Task task = tasks.stream().filter(t -> t.id().equals(r.taskId())).findFirst().orElse(null);
             String scenario = task == null ? r.taskId() : task.scenario();
-            sb.append("- ").append(r.taskId()).append(' ').append(scenario).append(": ")
-                    .append(r.verifier().result()).append(" (iterations=").append(r.iterations()).append(")\n");
+            resultViews.add(Map.of("taskId", r.taskId(), "scenario", scenario,
+                    "result", r.verifier().result(), "iterations", r.iterations()));
         }
-        sb.append("\n## Traceability\n");
+        List<Map<String, Object>> traceabilityViews = new ArrayList<>();
         for (ReviewHandoff.TraceabilityRow row : review.traceability()) {
-            sb.append("- ").append(row.scenario()).append(" -> ").append(row.testRef())
-                    .append(" -> ").append(row.codeRef()).append('\n');
+            traceabilityViews.add(Map.of("scenario", row.scenario(), "testRef", row.testRef(), "codeRef", row.codeRef()));
         }
-        return sb.toString();
+        return templates.render("release-test-evidence", Map.of("results", resultViews, "traceability", traceabilityViews));
     }
 
     private static String slugOf(String change) {

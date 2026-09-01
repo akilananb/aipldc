@@ -28,6 +28,7 @@ profiles:
       channel: none
     agents:
       gateway: https://openrouter.ai/api/v1
+      # prompts_dir: /app/prompts   # optional: directory of *.mustache files overriding the bundled prompt templates (mount it into the agents container)
       roles:
         grill: { model: anthropic/claude-sonnet-5, budget_tokens: 60000 }
         po:    { model: anthropic/claude-sonnet-5, budget_tokens: 40000 }
@@ -67,6 +68,7 @@ profiles:
       channel: none
     agents:
       gateway: http://litellm:4000
+      # prompts_dir: /app/prompts   # optional: directory of *.mustache files overriding the bundled prompt templates (mount it into the agents container)
       roles:
         grill: { model: anthropic/claude-sonnet, budget_tokens: 60000 }
         po:    { model: anthropic/claude-sonnet, budget_tokens: 40000 }

@@ -44,6 +44,12 @@
       <artifactId>embabel-agent-openai-custom-autoconfigure</artifactId>
     </dependency>
 
+    <!-- Prompt/template rendering for LLM prompts and release-pack markdown. -->
+    <dependency>
+      <groupId>com.github.spullara.mustache.java</groupId>
+      <artifactId>compiler</artifactId>
+    </dependency>
+
     <dependency>
       <groupId>io.temporal</groupId>
       <artifactId>temporal-sdk</artifactId>

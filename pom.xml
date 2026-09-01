@@ -30,6 +30,7 @@
     <temporal.version>1.30.1</temporal.version>
     <junit.version>5.11.3</junit.version>
     <assertj.version>3.26.3</assertj.version>
+    <mustache-java.version>0.9.14</mustache-java.version>
   </properties>
 
   <dependencyManagement>
@@ -64,6 +65,12 @@
         <groupId>org.assertj</groupId>
         <artifactId>assertj-core</artifactId>
         <version>${assertj.version}</version>
+      </dependency>
+
+      <dependency>
+        <groupId>com.github.spullara.mustache.java</groupId>
+        <artifactId>compiler</artifactId>
+        <version>${mustache-java.version}</version>
       </dependency>
 
       <!-- internal modules -->

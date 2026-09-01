@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import Mustache from 'mustache';
 
 export interface AcpSessionResult {
   /** Every JSON-lines event acpx printed, in order - the trace this task's summary is built from. */
@@ -82,42 +83,16 @@ export function runAcpSession(cwd: string, prompt: string, timeoutMs: number, ag
   return promise;
 }
 
-export function buildTaskPrompt(taskId: string, title: string, scenario: string, touches: string[], testPath: string, testFileExists: boolean, canWriteTestPath: boolean): string {
-  const lines = [
-    `You are implementing task ${taskId} for this story: "${title}".`,
-    `Scenario to prove: ${scenario}`,
-    `You may ONLY edit these files: ${touches.join(', ')}`,
-  ];
-  if (!canWriteTestPath) {
-    lines.push(
-      `Do not edit ${testPath} or any other test file, do not weaken or skip any test.`,
-      `Read the test block named "scenario: ${scenario}" in ${testPath} to understand exactly what`,
-      'behavior is required, implement it in the allowed files, then run the repo\'s test command',
-      'yourself to confirm every test passes (not just this scenario\'s) before you finish.',
-    );
-  } else if (!testFileExists) {
-    lines.push(
-      `${testPath} does not exist yet - you MAY create it (and only it, no other test file).`,
-      `Read the story's acceptance criteria under openspec/changes/ in this repo for the exact`,
-      `GIVEN/WHEN/THEN wording of "scenario: ${scenario}", write a real test block named`,
-      `"scenario: ${scenario}" in ${testPath} that asserts that exact behavior (not a test that`,
-      'always passes regardless of your implementation), then implement in the allowed files to',
-      'make it pass, then run the repo\'s test command yourself to confirm every test passes',
-      '(not just this scenario\'s) before you finish.',
-    );
-  } else {
-    lines.push(
-      `${testPath} already exists with other tasks' tests in it but has no test yet for this`,
-      `scenario - you MAY append to it (and only it, no other test file): add ONE new test block`,
-      `named "scenario: ${scenario}" at the end, and do not change, remove, or reorder a single`,
-      'existing line (every other task\'s test in that file must survive byte-for-byte or your',
-      'change is reverted). Read the story\'s acceptance criteria under openspec/changes/ in this',
-      `repo for the exact GIVEN/WHEN/THEN wording of "scenario: ${scenario}" before writing the`,
-      'assertion (not a test that always passes regardless of your implementation), then implement',
-      'in the allowed files to make it pass, then run the repo\'s test command yourself to confirm',
-      'every test passes (not just this scenario\'s) before you finish.',
-    );
-  }
-  lines.push('Stop once all tests pass; do not touch unrelated code.');
-  return lines.join('\n');
+export function buildTaskPrompt(template: string, taskId: string, title: string, scenario: string, touches: string[], testPath: string, testFileExists: boolean, canWriteTestPath: boolean): string {
+  const view = {
+    taskId,
+    title,
+    scenario,
+    touches: touches.join(', '),
+    testPath,
+    forbidTests: !canWriteTestPath,
+    createTest: canWriteTestPath && !testFileExists,
+    appendTest: canWriteTestPath && testFileExists,
+  };
+  return Mustache.render(template, view);
 }

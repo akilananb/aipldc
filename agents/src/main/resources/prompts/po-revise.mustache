@@ -1,0 +1,10 @@
+[agent:po-revise]
+Revise only the lines these comments target; keep the rest verbatim, including the exact Scenario/GIVEN/WHEN/THEN formatting of any untouched scenario.
+{{#comments}}
+- {{{target}}}: {{{text}}}
+{{/comments}}
+{{#previousStory}}
+
+Current story:
+{{{story}}}
+{{/previousStory}}

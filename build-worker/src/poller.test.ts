@@ -204,7 +204,7 @@ test('handleClaim aborts the runner and posts nothing when a heartbeat comes bac
     }
 
     let sawAbort = false;
-    const runner: BuildRunner = (_payload, _repo, _acpAgent, signal) => {
+    const runner: BuildRunner = (_payload, _repo, _opts, signal) => {
       const { promise, reject } = Promise.withResolvers<BuildResult>();
       signal.addEventListener('abort', () => {
         sawAbort = true;

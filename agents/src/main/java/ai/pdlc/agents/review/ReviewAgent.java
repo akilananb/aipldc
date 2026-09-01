@@ -1,5 +1,6 @@
 package ai.pdlc.agents.review;
 
+import ai.pdlc.agents.templates.PromptTemplates;
 import ai.pdlc.core.config.Profile;
 import ai.pdlc.core.domain.CanonicalState;
 import ai.pdlc.core.domain.Handoff;
@@ -17,6 +18,7 @@ import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Review agent (build-order phase 3, {@code docs/agent-playbook.md}'s review-agent role) as a
@@ -32,13 +34,13 @@ public class ReviewAgent {
 
     private static final Logger log = LoggerFactory.getLogger(ReviewAgent.class);
 
-    static final String ROLE_MARKER = "[agent:review]";
-
     private final Ai ai;
     private final String reviewModel;
+    private final PromptTemplates templates;
 
-    public ReviewAgent(Ai ai, Profile activeProfile) {
+    public ReviewAgent(Ai ai, PromptTemplates templates, Profile activeProfile) {
         this.ai = ai;
+        this.templates = templates;
         var role = activeProfile.agents().roles().get("review");
         this.reviewModel = role != null ? role.model() : null;
     }
@@ -104,16 +106,15 @@ public class ReviewAgent {
     // -- LLM (real Embabel Ai API) ---------------------------------------------------------------
 
     private ReviewFinding summaryFinding(PoHandoff po, List<Task> tasks, List<BuildResult> results) {
-        StringBuilder prompt = new StringBuilder(ROLE_MARKER).append('\n')
-                .append("Summarize this PR in one sentence for a human reviewer.\n")
-                .append("Change: ").append(po.change()).append('\n');
+        List<Map<String, Object>> resultViews = new ArrayList<>();
         for (BuildResult r : results) {
             Task task = taskById(tasks, r.taskId());
-            prompt.append("- ").append(task.id()).append(' ').append(task.scenario())
-                    .append(": ").append(r.verifier().result()).append(", iterations=").append(r.iterations()).append('\n');
+            resultViews.add(Map.of("taskId", task.id(), "scenario", task.scenario(),
+                    "result", r.verifier().result(), "iterations", r.iterations()));
         }
+        String prompt = templates.render("review-summary", Map.of("change", po.change(), "results", resultViews));
         try {
-            String raw = promptRunner().generateText(prompt.toString());
+            String raw = promptRunner().generateText(prompt);
             String text = raw == null ? "" : raw.strip();
             return text.isEmpty() ? null : new ReviewFinding(ReviewFinding.Severity.NIT, "summary", text, null);
         } catch (RuntimeException e) {

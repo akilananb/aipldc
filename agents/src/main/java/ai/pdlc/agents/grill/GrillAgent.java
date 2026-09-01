@@ -1,6 +1,7 @@
 package ai.pdlc.agents.grill;
 
 import ai.pdlc.agents.activities.AgentContext;
+import ai.pdlc.agents.templates.PromptTemplates;
 import ai.pdlc.core.config.Profile;
 import ai.pdlc.core.domain.CanonicalState;
 import ai.pdlc.core.domain.GrillHandoff;
@@ -21,6 +22,7 @@ import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -40,8 +42,6 @@ public class GrillAgent {
 
     private static final Logger log = LoggerFactory.getLogger(GrillAgent.class);
 
-    static final String ROLE_MARKER = "[agent:grill]";
-
     /** pii / auth / payment keywords that force a mandatory RISK question (playbook §1 "Validates"). */
     private static final List<String> RISK_KEYWORDS = List.of("pii", "payment", "auth", "password", "credit card", "token");
 
@@ -60,11 +60,13 @@ public class GrillAgent {
 
     private final Ai ai;
     private final BoardPort board;
+    private final PromptTemplates templates;
     private final String grillModel;
 
-    public GrillAgent(Ai ai, BoardPort board, Profile activeProfile) {
+    public GrillAgent(Ai ai, BoardPort board, PromptTemplates templates, Profile activeProfile) {
         this.ai = ai;
         this.board = board;
+        this.templates = templates;
         var role = activeProfile.agents().roles().get("grill");
         this.grillModel = role != null ? role.model() : null;
     }
@@ -143,13 +145,7 @@ public class GrillAgent {
         String title = workItem == null ? item.boardId() : safe(workItem.title());
         String description = workItem == null ? "" : safe(workItem.description());
 
-        String prompt = ROLE_MARKER + "\n"
-                + "Generate grill intake questions (six fixed categories) for this feature.\n"
-                + "Title: " + title + "\n"
-                + "Description: " + description + "\n"
-                + "Respond with JSON only: {\"type_decision\":\"story\",\"questions\":["
-                + "{\"id\":\"q1\",\"category\":\"scope\",\"question\":\"...\",\"evidence\":\"...\"}],"
-                + "\"constraints_hit\":[\"pii\"]}. Each question must cite evidence or be \"assumption-check\".";
+        String prompt = templates.render("grill-questions", Map.of("title", title, "description", description));
 
         GrillResponse response;
         try {

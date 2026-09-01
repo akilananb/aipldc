@@ -6,6 +6,7 @@ import type { BuildResult, ClaimedTask } from './types';
 import { addWorktree, removeWorktree, changedFiles, revertPaths, hasChanges, commitAll, revParse } from './git';
 import { runVerifier } from './verifier';
 import { runAcpSession, buildTaskPrompt } from './acp';
+import { loadBuildTaskTemplate } from './promptTemplate';
 import type { RepoHandle } from './repo';
 
 const ISO_8601_DURATION = /^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?$/;
@@ -50,7 +51,7 @@ export function wasTestContentPreserved(before: string | null, after: string): b
  * when a heartbeat finds the row gone (lease expired / superseded) - the ACP session is killed
  * and this throws so the poller discards the task without posting a result.
  */
-export async function runBuildTask(payload: ClaimedTask['payload'], repo: RepoHandle, acpAgent: string, signal: AbortSignal): Promise<BuildResult> {
+export async function runBuildTask(payload: ClaimedTask['payload'], repo: RepoHandle, opts: { acpAgent: string; promptTemplateDir?: string }, signal: AbortSignal): Promise<BuildResult> {
   const { task, branch, baseBranch } = payload;
   const worktreePath = await mkdtemp(path.join(tmpdir(), `pdlc-task-${task.id}-`));
 
@@ -65,9 +66,10 @@ export async function runBuildTask(payload: ClaimedTask['payload'], repo: RepoHa
     const canWriteTestPath = !hasOwnScenarioTest;
     const effectiveTouches = canWriteTestPath ? [...task.touches, task.testPath] : task.touches;
 
-    const prompt = buildTaskPrompt(task.id, task.title, task.scenario, task.touches, task.testPath, testFileExists, canWriteTestPath);
+    const template = loadBuildTaskTemplate(opts.promptTemplateDir);
+    const prompt = buildTaskPrompt(template, task.id, task.title, task.scenario, task.touches, task.testPath, testFileExists, canWriteTestPath);
     const timeoutMs = parseIso8601DurationMs(task.budget.maxWallClock);
-    const session = await runAcpSession(worktreePath, prompt, timeoutMs, acpAgent, signal);
+    const session = await runAcpSession(worktreePath, prompt, timeoutMs, opts.acpAgent, signal);
     if (session.aborted) {
       throw new Error('task revoked');
     }

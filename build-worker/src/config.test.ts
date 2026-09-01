@@ -35,6 +35,7 @@ test('loadConfig applies defaults when optional env vars are unset', () => {
   assert.equal(cfg.repoToken, undefined);
   assert.equal(cfg.cacheDir, path.join(os.homedir(), '.pdlc-build-worker'));
   assert.equal(cfg.acpAgent, 'omp acp');
+  assert.equal(cfg.promptTemplateDir, undefined);
 });
 
 test('loadConfig overrides every optional env var', () => {
@@ -50,6 +51,7 @@ test('loadConfig overrides every optional env var', () => {
     TARGET_REPO_TOKEN: 'ghp_x',
     BUILD_WORKER_HOME: '/tmp/cache',
     ACP_AGENT_CMD: 'claude-code-acp',
+    PROMPT_TEMPLATE_DIR: '/tmp/prompts',
   });
   assert.equal(cfg.agentName, 'runner-1');
   assert.equal(cfg.agentToken, 's3cret');
@@ -60,6 +62,7 @@ test('loadConfig overrides every optional env var', () => {
   assert.equal(cfg.repoToken, 'ghp_x');
   assert.equal(cfg.cacheDir, '/tmp/cache');
   assert.equal(cfg.acpAgent, 'claude-code-acp');
+  assert.equal(cfg.promptTemplateDir, '/tmp/prompts');
 });
 
 test('loadConfig resolves TARGET_REPO_URL as a remote override', () => {

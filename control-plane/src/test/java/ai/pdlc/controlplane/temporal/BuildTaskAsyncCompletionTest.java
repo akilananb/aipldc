@@ -97,7 +97,7 @@ class BuildTaskAsyncCompletionTest {
                 new BoardConfig("in-memory", "local", "PDLC", Map.of(), Map.of(), new BoardConfig.AuthConfig("none", "kv://none")),
                 new RepoConfig("git", "https://example.test/orders-service.git", "main", "openspec"),
                 new NotifyConfig("none", "none"),
-                new AgentsConfig("http://stub", Map.of()),
+                new AgentsConfig("http://stub", null, Map.of()),
                 Map.of());
         BuildActivitiesImpl buildActivities = new BuildActivitiesImpl(service, activeProfile);
 
