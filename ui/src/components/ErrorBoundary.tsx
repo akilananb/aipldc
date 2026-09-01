@@ -1,4 +1,6 @@
 import { Component, type ReactNode } from 'react';
+import { AlertTriangle } from 'lucide-react';
+import { Box, Button, Callout, Heading } from '@radix-ui/themes';
 
 interface Props {
   children: ReactNode;
@@ -22,10 +24,22 @@ export default class ErrorBoundary extends Component<Props, State> {
   render() {
     if (this.state.error) {
       return (
-        <div style={{ padding: 24 }}>
-          <h2>Something went wrong rendering this view.</h2>
-          <pre style={{ whiteSpace: 'pre-wrap' }}>{String(this.state.error)}</pre>
-        </div>
+        <Box p="6">
+          <Callout.Root color="red" style={{ maxWidth: 720 }}>
+            <Callout.Icon>
+              <AlertTriangle size={15} />
+            </Callout.Icon>
+            <Callout.Text>
+              <Heading size="3" mb="1">
+                Something went wrong rendering this view.
+              </Heading>
+              {String(this.state.error)}
+            </Callout.Text>
+          </Callout.Root>
+          <Button mt="4" onClick={() => window.location.reload()}>
+            Reload
+          </Button>
+        </Box>
       );
     }
     return this.props.children;

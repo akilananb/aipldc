@@ -1,70 +1,34 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import {
-  Badge,
-  Box,
-  Button,
-  Callout,
-  Flex,
-  Heading,
-  Select,
-  Table,
-  Tabs,
-  Text,
-  TextField,
-} from '@radix-ui/themes';
+import { useQuery } from '@tanstack/react-query';
+import { ListTodo } from 'lucide-react';
+import { Badge, Box, Select, Skeleton, Table, Tabs, Text, Tooltip } from '@radix-ui/themes';
 import { api } from '../api';
-import { useIdentity } from '../identity';
-import type { CommentIntent, GateState } from '../types';
-import { stateBadgeColor } from '../ui-utils';
+import type { CommentIntent } from '../types';
+import { extendLineTarget, formatLineTarget, parseLineTarget } from '../ui-utils';
+import PageHeader from '../components/PageHeader';
+import StatusBadge from '../components/StatusBadge';
+import ErrorCallout from '../components/ErrorCallout';
+import EmptyState from '../components/EmptyState';
+import { useReviewActions } from '../review/useReviewActions';
+import GatePanel from '../review/GatePanel';
 import CommentPanel from '../review/CommentPanel';
 import PreviewTab from '../review/PreviewTab';
 import SourceTab from '../review/SourceTab';
 import DiffTab from '../review/DiffTab';
 import ReviewMdTab from '../review/ReviewMdTab';
+import ReleaseTab from '../review/ReleaseTab';
+import TaskDetailPage from './TaskDetailPage';
+import FeaturePage from './FeaturePage';
 
-function TaskStateBadge({ state }: { state: string }) {
-  return <Badge color={stateBadgeColor(state)}>{state}</Badge>;
-}
-
-// Pilot G1 roles. Known simplification: hard-coded client-side to match
-// infra/pdlc.yaml's gates.G1.roles (the REST contract does not expose the
-// role list).
-const G1_ROLES = ['PO', 'SquadLead'];
-
-type Tab = 'preview' | 'source' | 'diff' | 'reviewmd';
-
-function GateBadge({ gate }: { gate: GateState | null }) {
-  if (!gate) {
-    return (
-      <Badge color="gray" variant="soft">
-        no gate
-      </Badge>
-    );
-  }
-  const approvals = Object.values(gate.approvals);
-  const hasPo = approvals.some((a) => a.role === 'PO');
-  const hasLead = approvals.some((a) => a.role === 'SquadLead');
-  if (hasPo && hasLead) {
-    return <Badge color="green">G1 passed</Badge>;
-  }
-  return (
-    <Badge color="amber">
-      awaiting G1 ({approvals.length}/{G1_ROLES.length} approvals)
-    </Badge>
-  );
-}
+type Tab = 'preview' | 'source' | 'diff' | 'tasks' | 'release' | 'reviewmd';
 
 export default function ReviewPage() {
   const { id } = useParams<{ id: string }>();
-  const identity = useIdentity();
-  const queryClient = useQueryClient();
 
   const [selectedVersion, setSelectedVersion] = useState<number | null>(null);
   const [tab, setTab] = useState<Tab>('preview');
   const [draftTarget, setDraftTarget] = useState<string | null>(null);
-  const [note, setNote] = useState('');
 
   const itemQuery = useQuery({
     queryKey: ['item', id],
@@ -117,200 +81,112 @@ export default function ReviewPage() {
     refetchInterval: 2000,
   });
 
-  const addCommentMutation = useMutation({
-    mutationFn: (body: { target: string; text: string; intent: CommentIntent; blocking: boolean }) =>
-      api.addComment(id!, body),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['artifact', id] });
-      void queryClient.invalidateQueries({ queryKey: ['item', id] });
-    },
-  });
-
-  const approveMutation = useMutation({
-    mutationFn: (n: string) => api.approve(id!, n),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['item', id] });
-      void queryClient.invalidateQueries({ queryKey: ['artifact', id] });
-    },
-  });
-
-  const requestChangesMutation = useMutation({
-    mutationFn: () => api.requestChanges(id!),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['item', id] });
-      void queryClient.invalidateQueries({ queryKey: ['artifact', id] });
-    },
-  });
-
   const currentComments = artifactQuery.data?.comments ?? [];
-  const hasOpenBlocking = currentComments.some((c) => c.blocking && c.resolvedInVersion == null);
-
-  const gate = item?.gate ?? null;
-  const currentApprovals = gate?.approvals ?? {};
-  const roleAllowed = G1_ROLES.includes(identity.role);
-  const alreadyApproved = Object.values(currentApprovals).some((a) => a.who === identity.user);
-  const approveDisabled = hasOpenBlocking || !roleAllowed || alreadyApproved;
+  const actions = useReviewActions(id ?? null, currentComments, item?.gate ?? null);
 
   const versions = useMemo(() => {
     if (latestVersion <= 0) return [];
     return Array.from({ length: latestVersion }, (_, i) => i + 1);
   }, [latestVersion]);
 
-  if (itemQuery.isLoading) return <Text color="gray">Loading item…</Text>;
-  if (itemQuery.isError) {
+  if (itemQuery.isLoading) {
     return (
-      <Callout.Root color="red" style={{ maxWidth: 720 }}>
-        <Callout.Text>Failed to load item: {String(itemQuery.error)}</Callout.Text>
-      </Callout.Root>
+      <Box>
+        <Skeleton height="32px" width="320px" mb="3" />
+        <Skeleton height="48px" mb="3" />
+        <Skeleton height="240px" />
+      </Box>
     );
   }
+  if (itemQuery.isError) {
+    return <ErrorCallout title="Failed to load item" error={itemQuery.error} />;
+  }
   if (!item) return null;
+  if (item.kind === 'task') return <TaskDetailPage item={item} />;
+  if (item.kind === 'feature') return <FeaturePage item={item} />;
 
   return (
     <Box>
-      <Flex justify="between" align="start" gap="4" mb="4" wrap="wrap">
-        <Box>
-          <Flex align="center" gap="3">
-            <Link to="/">← Items</Link>
-            <Heading size="4">{item.title}</Heading>
-          </Flex>
-          <Flex gap="2" mt="2" align="center" wrap="wrap">
+      <PageHeader
+        backTo={{ to: '/', label: 'Items' }}
+        title={item.title}
+        badges={
+          <>
             <Badge color="gray">{item.kind}</Badge>
-            <Badge color={stateBadgeColor(item.canonicalState)}>{item.canonicalState}</Badge>
-            <GateBadge gate={gate} />
-            <Text size="2" color="gray">
-              board {item.boardId} · profile {item.profile}
-            </Text>
-          </Flex>
-        </Box>
+            <StatusBadge state={item.canonicalState} />
+          </>
+        }
+        meta={`board ${item.boardId} · profile ${item.profile}`}
+        actions={
+          versions.length > 0 && (
+            <Select.Root
+              value={selectedVersion != null ? String(selectedVersion) : undefined}
+              onValueChange={(v) => setSelectedVersion(Number(v))}
+            >
+              <Select.Trigger style={{ minWidth: 110 }} />
+              <Select.Content>
+                {versions.map((v) => (
+                  <Select.Item key={v} value={String(v)}>
+                    v{v}
+                  </Select.Item>
+                ))}
+              </Select.Content>
+            </Select.Root>
+          )
+        }
+      />
 
-        <Flex direction="column" gap="2" align="end">
-          <Text size="2" color="gray">
-            Version
-          </Text>
-          <Select.Root
-            value={selectedVersion != null ? String(selectedVersion) : undefined}
-            onValueChange={(v) => setSelectedVersion(Number(v))}
-          >
-            <Select.Trigger style={{ minWidth: 110 }} />
-            <Select.Content>
-              {versions.map((v) => (
-                <Select.Item key={v} value={String(v)}>
-                  v{v}
-                </Select.Item>
-              ))}
-            </Select.Content>
-          </Select.Root>
-        </Flex>
-      </Flex>
-
-      {childTasks.length > 0 && (
-        <Box mb="4">
-          <Heading size="3" mb="2">
-            Tasks ({childTasks.length})
-          </Heading>
-          <Table.Root variant="surface" size="1">
-            <Table.Header>
-              <Table.Row>
-                <Table.ColumnHeaderCell>Title</Table.ColumnHeaderCell>
-                <Table.ColumnHeaderCell>State</Table.ColumnHeaderCell>
-                <Table.ColumnHeaderCell>Updated</Table.ColumnHeaderCell>
-              </Table.Row>
-            </Table.Header>
-            <Table.Body>
-              {childTasks.map((task) => (
-                <Table.Row key={task.id}>
-                  <Table.Cell>{task.title}</Table.Cell>
-                  <Table.Cell>
-                    <TaskStateBadge state={task.canonicalState} />
-                  </Table.Cell>
-                  <Table.Cell>
-                    <Text size="2" color="gray">
-                      {new Date(task.updatedAt).toLocaleString()}
-                    </Text>
-                  </Table.Cell>
-                </Table.Row>
-              ))}
-            </Table.Body>
-          </Table.Root>
-        </Box>
-      )}
-
-      <Flex gap="3" align="center" mb="3" wrap="wrap">
-        <Button disabled={approveDisabled} onClick={() => approveMutation.mutate(note)} loading={approveMutation.isPending}>
-          Approve
-        </Button>
-        <Button color="amber" variant="soft" onClick={() => requestChangesMutation.mutate()} loading={requestChangesMutation.isPending}>
-          Request changes
-        </Button>
-        <TextField.Root
-          placeholder="Approval note (optional)"
-          value={note}
-          onChange={(e) => setNote(e.target.value)}
-          style={{ width: 280 }}
-        />
-        <Text size="2" color="gray">
-          signing sha256:{item.latestContentHash}
-        </Text>
-      </Flex>
-
-      <Flex gap="2" mb="3" wrap="wrap">
-        {hasOpenBlocking && <Badge color="red">open blocking comment</Badge>}
-        {!roleAllowed && (
-          <Badge color="gray" variant="soft">
-            role {identity.role} cannot approve G1
-          </Badge>
-        )}
-        {alreadyApproved && <Badge color="green">you already approved</Badge>}
-      </Flex>
-
-      {approveMutation.isError && (
-        <Callout.Root color="red" mb="3" style={{ maxWidth: 720 }}>
-          <Callout.Text>Approve failed: {String(approveMutation.error)}</Callout.Text>
-        </Callout.Root>
-      )}
-      {requestChangesMutation.isError && (
-        <Callout.Root color="red" mb="3" style={{ maxWidth: 720 }}>
-          <Callout.Text>Request changes failed: {String(requestChangesMutation.error)}</Callout.Text>
-        </Callout.Root>
-      )}
+      <Box mb="4">
+        <GatePanel item={item} actions={actions} />
+      </Box>
 
       <Tabs.Root value={tab} onValueChange={(v) => setTab(v as Tab)}>
         <Tabs.List>
           <Tabs.Trigger value="preview">Preview</Tabs.Trigger>
           <Tabs.Trigger value="source">Source</Tabs.Trigger>
-          <Tabs.Trigger value="diff" disabled={selectedVersion == null || selectedVersion <= 1}>
-            Diff
-          </Tabs.Trigger>
+          {selectedVersion == null || selectedVersion <= 1 ? (
+            <Tooltip content="Needs at least two versions">
+              <Tabs.Trigger value="diff" disabled>
+                Diff
+              </Tabs.Trigger>
+            </Tooltip>
+          ) : (
+            <Tabs.Trigger value="diff">Diff</Tabs.Trigger>
+          )}
+          <Tabs.Trigger value="tasks">Tasks ({childTasks.length})</Tabs.Trigger>
+          <Tabs.Trigger value="release">Release</Tabs.Trigger>
           <Tabs.Trigger value="reviewmd">review.md</Tabs.Trigger>
         </Tabs.List>
 
         <Box pt="4">
           <Tabs.Content value="preview">
             {artifactQuery.isLoading && <Text color="gray">Loading version…</Text>}
-            {artifactQuery.isError && (
-              <Callout.Root color="red" style={{ maxWidth: 720 }}>
-                <Callout.Text>Failed to load artifact: {String(artifactQuery.error)}</Callout.Text>
-              </Callout.Root>
-            )}
+            {artifactQuery.isError && <ErrorCallout title="Failed to load artifact" error={artifactQuery.error} />}
             {artifactQuery.data && (
-              <Flex gap="4" align="start">
-                <Box flexGrow="1" style={{ minWidth: 0 }}>
+              <div className="review-layout">
+                <Box style={{ minWidth: 0 }}>
                   <PreviewTab
                     markdown={artifactQuery.data.storyMarkdown}
-                    onLineSelect={(line) => setDraftTarget(`line:${line}`)}
+                    onLineSelect={(line, shift) => setDraftTarget((prev) => extendLineTarget(prev, line, shift))}
+                    onRangeSelect={(start, end) => setDraftTarget(formatLineTarget(start, end))}
+                    selectedRange={parseLineTarget(draftTarget)}
                   />
                 </Box>
-                <Box style={{ width: 380, flexShrink: 0 }}>
+                <div className="review-sidebar">
                   <CommentPanel
                     comments={currentComments}
                     draftTarget={draftTarget}
                     onDraftTarget={setDraftTarget}
-                    onAddComment={addCommentMutation.mutate}
-                    submitting={addCommentMutation.isPending}
+                    onAddComment={(body: { target: string; text: string; intent: CommentIntent; blocking: boolean }) =>
+                      actions.addComment.mutate(body)
+                    }
+                    submitting={actions.addComment.isPending}
+                    onApproveAgentResult={(commentId) => actions.approveAgentResult.mutate(commentId)}
+                    approvingAgentResult={actions.approveAgentResult.isPending}
+                    canApproveAgentResult={actions.g1RoleAllowed}
                   />
-                </Box>
-              </Flex>
+                </div>
+              </div>
             )}
           </Tabs.Content>
 
@@ -331,12 +207,49 @@ export default function ReviewPage() {
             )}
           </Tabs.Content>
 
+          <Tabs.Content value="tasks">
+            {childTasks.length === 0 ? (
+              <EmptyState icon={<ListTodo size={28} />} title="No tasks yet" hint="Tasks appear after the plan agent runs." />
+            ) : (
+              <Table.Root variant="surface" size="1">
+                <Table.Header>
+                  <Table.Row>
+                    <Table.ColumnHeaderCell>Title</Table.ColumnHeaderCell>
+                    <Table.ColumnHeaderCell>State</Table.ColumnHeaderCell>
+                    <Table.ColumnHeaderCell>Updated</Table.ColumnHeaderCell>
+                  </Table.Row>
+                </Table.Header>
+                <Table.Body>
+                  {childTasks.map((task) => (
+                    <Table.Row key={task.id}>
+                      <Table.Cell>
+                        <Link to={`/items/${task.id}`}>{task.title}</Link>
+                      </Table.Cell>
+                      <Table.Cell>
+                        <StatusBadge state={task.canonicalState} />
+                      </Table.Cell>
+                      <Table.Cell>
+                        <Text size="2" color="gray">
+                          {new Date(task.updatedAt).toLocaleString()}
+                        </Text>
+                      </Table.Cell>
+                    </Table.Row>
+                  ))}
+                </Table.Body>
+              </Table.Root>
+            )}
+          </Tabs.Content>
+
+          <Tabs.Content value="release">
+            <ReleaseTab id={id!} />
+          </Tabs.Content>
+
           <Tabs.Content value="reviewmd">
-            <ReviewMdTab
-              loading={reviewMdQuery.isLoading}
-              error={reviewMdQuery.isError ? String(reviewMdQuery.error) : null}
-              content={reviewMdQuery.data ?? null}
-            />
+            {reviewMdQuery.isError ? (
+              <ErrorCallout title="Failed to load review.md" error={reviewMdQuery.error} />
+            ) : (
+              <ReviewMdTab loading={reviewMdQuery.isLoading} error={null} content={reviewMdQuery.data ?? null} />
+            )}
           </Tabs.Content>
         </Box>
       </Tabs.Root>

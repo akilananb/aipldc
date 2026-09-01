@@ -1,5 +1,7 @@
 import ReactDiffViewer, { DiffMethod } from 'react-diff-viewer-continued';
-import { Text } from '@radix-ui/themes';
+import { Box, Skeleton } from '@radix-ui/themes';
+import ErrorCallout from '../components/ErrorCallout';
+import { useAppearance } from '../theme';
 
 interface Props {
   oldMarkdown: string;
@@ -9,19 +11,21 @@ interface Props {
 }
 
 export default function DiffTab({ oldMarkdown, newMarkdown, oldLoading, oldError }: Props) {
-  if (oldLoading) return <Text color="gray">Loading previous version…</Text>;
-  if (oldError) return <Text color="red">Failed to load the previous version.</Text>;
+  const appearance = useAppearance();
+
+  if (oldLoading) return <Skeleton height="240px" />;
+  if (oldError) return <ErrorCallout title="Failed to load the previous version" error="see server logs" />;
 
   return (
-    <div style={{ fontSize: 13 }}>
+    <Box style={{ fontSize: 'var(--font-size-1)' }}>
       <ReactDiffViewer
         oldValue={oldMarkdown}
         newValue={newMarkdown}
         splitView
         showDiffOnly={false}
-        useDarkTheme={false}
+        useDarkTheme={appearance === 'dark'}
         compareMethod={DiffMethod.WORDS}
       />
-    </div>
+    </Box>
   );
 }

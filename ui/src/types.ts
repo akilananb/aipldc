@@ -7,6 +7,7 @@ export interface CommentAnchor {
   anchorText: string;
   nodeType: string;
   scenario: string | null;
+  endLine: number | null;
 }
 
 export interface Comment {
@@ -22,6 +23,10 @@ export interface Comment {
   agentReply: string | null;
   anchor: CommentAnchor | null;
   drifted: boolean;
+  agentName: string | null;
+  agentResultMd: string | null;
+  agentResultStatus: 'running' | 'pending' | 'approved' | 'failed' | null;
+  agentResultApprovedBy: string | null;
 }
 
 export interface ArtifactVersion {
@@ -68,5 +73,43 @@ export interface ItemSummary {
   canonicalState: string;
   updatedAt: string;
   parentId: string | null;
+}
+
+export interface DocApproval {
+  who: string;
+  role: string;
+  version: number;
+  at: string;
+}
+
+export interface SpecDocs {
+  storyId: string;
+  storyTitle: string;
+  slug: string | null;
+  proposalMd: string | null;
+  specMd: string | null;
+  tasksMd: string | null;
+  approvals: DocApproval[];
+}
+
+export interface ReleaseDocument {
+  docId: string;
+  title: string;
+  content: string;
+  checkerRole: string;
+  contentHash: string;
+  signed: boolean;
+}
+
+export interface BoardComment {
+  id: string;
+  by: string;
+  role: string;
+  stage: string;
+  target: string;
+  text: string;
+  intent: string;
+  blocking: boolean;
+  version: number;
 }
 

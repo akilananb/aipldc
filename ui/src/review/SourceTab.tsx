@@ -31,9 +31,12 @@ const decorationsField = StateField.define<DecorationSet>({
       const doc = tr.state.doc;
       const ranges: Range<Decoration>[] = [];
       for (const c of comments) {
-        const line = c.anchor?.line;
-        if (typeof line !== 'number' || line < 1 || line > doc.lines) continue;
-        ranges.push(Decoration.line({ class: 'cm-comment-range' }).range(doc.line(line).from));
+        const start = c.anchor?.line;
+        if (typeof start !== 'number' || start < 1 || start > doc.lines) continue;
+        const end = Math.min(c.anchor?.endLine ?? start, doc.lines);
+        for (let ln = start; ln <= end; ln++) {
+          ranges.push(Decoration.line({ class: 'cm-comment-range' }).range(doc.line(ln).from));
+        }
       }
       deco = Decoration.set(ranges, true);
     }
@@ -80,8 +83,12 @@ class SpacerMarker extends GutterMarker {
 }
 
 const commentTheme = EditorView.theme({
+  '&.cm-editor': {
+    backgroundColor: 'var(--color-panel-solid)',
+    color: 'var(--gray-12)',
+  },
   '.cm-comment-range': {
-    backgroundColor: 'rgba(245, 158, 11, 0.16)',
+    backgroundColor: 'var(--amber-a4)',
   },
   '.cm-comment-gutter': {
     width: '22px',
@@ -90,8 +97,8 @@ const commentTheme = EditorView.theme({
     width: '16px',
     height: '16px',
     borderRadius: '50%',
-    backgroundColor: '#f59e0b',
-    color: '#ffffff',
+    backgroundColor: 'var(--amber-9)',
+    color: 'var(--gray-1)',
     fontSize: '10px',
     fontWeight: 600,
     display: 'flex',

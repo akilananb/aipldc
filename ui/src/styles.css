@@ -5,6 +5,15 @@ body,
   margin: 0;
 }
 
+body {
+  background: var(--color-background);
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent-8);
+  outline-offset: 2px;
+}
+
 /* Line-anchored block hover affordance in the rendered preview. */
 .story-preview .md-block {
   border-radius: 4px;
@@ -15,13 +24,17 @@ body,
 }
 
 .story-preview .md-block:hover {
-  background-color: var(--indigo-a3);
+  background-color: var(--accent-a3);
+}
+
+.story-preview .md-block-selected {
+  background-color: var(--accent-a4);
 }
 
 /* review.md timeline rendering */
 .review-md {
   max-width: 880px;
-  font-size: 14px;
+  font-size: var(--font-size-2);
   line-height: 1.55;
 }
 
@@ -31,4 +44,64 @@ body,
   background: var(--gray-a3);
   border-radius: 4px;
   padding: 1px 4px;
+}
+
+.review-md h3 {
+  border-left: 3px solid var(--accent-6);
+  padding-left: var(--space-3);
+  margin-top: var(--space-5);
+}
+
+/* Compact markdown treatment for agent-result / comment bodies. */
+.comment-md {
+  font-size: var(--font-size-1);
+  line-height: 1.5;
+}
+
+.comment-md h1,
+.comment-md h2,
+.comment-md h3,
+.comment-md h4 {
+  font-size: var(--font-size-2);
+  margin: var(--space-2) 0 var(--space-1);
+}
+
+.comment-md p,
+.comment-md ul,
+.comment-md ol {
+  margin: var(--space-1) 0;
+}
+
+.comment-md pre,
+.comment-md code {
+  font-family: var(--default-font-family, monospace);
+  background: var(--gray-a3);
+  border-radius: 4px;
+  padding: 1px 4px;
+}
+
+.app-container {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: var(--space-5);
+}
+
+.review-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 400px;
+  gap: var(--space-5);
+}
+
+@media (max-width: 1100px) {
+  .review-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+.review-sidebar {
+  position: sticky;
+  top: 76px;
+  max-height: calc(100vh - 92px);
+  overflow-y: auto;
+  align-self: start;
 }
