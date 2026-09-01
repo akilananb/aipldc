@@ -153,7 +153,14 @@ public class FeatureWorkflowImpl implements FeatureWorkflow {
             List<Promise<BuildResult>> pending = new ArrayList<>();
             for (String taskId : wave) {
                 Task task = tasksById.get(taskId);
-                pending.add(Async.function(build::runTask, storyRef, task, branch, defaultBranch));
+                // Every wave's tasks share one activity type ("runTask"), so the Temporal UI's
+                // timeline/history view shows them as indistinguishable bars unless each execution
+                // carries its own summary (SDK "fixed summary" - annotates that view specifically).
+                BuildActivities taskBuild = Workflow.newActivityStub(BuildActivities.class,
+                        ActivityOptions.newBuilder(BUILD_ACTIVITY_OPTIONS)
+                                .setSummary(task.id() + ": " + task.scenario())
+                                .build());
+                pending.add(Async.function(taskBuild::runTask, storyRef, task, branch, defaultBranch));
             }
             for (Promise<BuildResult> p : pending) {
                 results.add(p.get());

@@ -9,5 +9,6 @@ public record ItemSummaryDto(
         String kind,
         String title,
         String canonicalState,
-        OffsetDateTime updatedAt) {
+        OffsetDateTime updatedAt,
+        String parentId) {
 }

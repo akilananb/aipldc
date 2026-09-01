@@ -12,5 +12,6 @@ public record ItemDetailDto(
         String canonicalState,
         Integer latestVersion,
         String latestContentHash,
-        ReviewStateDto gate) {
+        ReviewStateDto gate,
+        String parentId) {
 }

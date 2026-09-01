@@ -13,7 +13,7 @@ services:
       retries: 10
 
   temporal:
-    image: temporalio/auto-setup:1.24
+    image: temporalio/auto-setup:1.27
     depends_on:
       temporal-postgres:
         condition: service_healthy
@@ -27,7 +27,7 @@ services:
       - "7233:7233"
 
   temporal-ui:
-    image: temporalio/ui:2.31.2
+    image: temporalio/ui:2.35.0
     depends_on:
       - temporal
     environment:

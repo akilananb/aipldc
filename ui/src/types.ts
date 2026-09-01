@@ -57,6 +57,7 @@ export interface ItemDetail {
   latestVersion: number;
   latestContentHash: string;
   gate: GateState | null;
+  parentId: string | null;
 }
 
 export interface ItemSummary {
@@ -66,4 +67,6 @@ export interface ItemSummary {
   title: string;
   canonicalState: string;
   updatedAt: string;
+  parentId: string | null;
 }
+

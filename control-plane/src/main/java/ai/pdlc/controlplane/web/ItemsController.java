@@ -68,7 +68,7 @@ public class ItemsController {
     public List<ItemSummaryDto> list() {
         return workItems.findAllByOrderByUpdatedAtDesc().stream()
                 .map(row -> new ItemSummaryDto(row.id(), row.boardId(), row.kind(),
-                        safeTitle(row), row.canonicalState(), row.updatedAt()))
+                        safeTitle(row), row.canonicalState(), row.updatedAt(), row.parentId()))
                 .toList();
     }
 
@@ -79,7 +79,8 @@ public class ItemsController {
         ArtifactEntity latest = artifacts.findByWorkItemIdOrderByVersionDesc(id).stream().findFirst().orElse(null);
         ReviewStateDto gate = queryGate(row);
         return new ItemDetailDto(row.id(), row.profile(), row.boardId(), row.kind(), item.title(), item.description(),
-                row.canonicalState(), latest == null ? null : latest.version(), latest == null ? null : latest.contentHash(), gate);
+                row.canonicalState(), latest == null ? null : latest.version(), latest == null ? null : latest.contentHash(),
+                gate, row.parentId());
     }
 
     @GetMapping(value = "/{id}/review-md", produces = MediaType.TEXT_PLAIN_VALUE)

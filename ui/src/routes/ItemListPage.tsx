@@ -17,6 +17,10 @@ export default function ItemListPage() {
     refetchInterval: 2000,
   });
 
+  // Tasks are children of a story (see WorkItemEntity.parentId) - drill into a story's Tasks
+  // section (ReviewPage) instead of cluttering the top-level list with them.
+  const topLevelItems = itemsQuery.data?.filter((item) => item.kind !== 'task') ?? [];
+
   return (
     <Box>
       <Heading size="4" mb="4">
@@ -43,7 +47,7 @@ export default function ItemListPage() {
             </Table.Row>
           </Table.Header>
           <Table.Body>
-            {itemsQuery.data.map((item) => (
+            {topLevelItems.map((item) => (
               <Table.Row key={item.id}>
                 <Table.RowHeaderCell>
                   <Link to={`/items/${encodeURIComponent(item.id)}`}>{item.id}</Link>
@@ -60,7 +64,7 @@ export default function ItemListPage() {
                 </Table.Cell>
               </Table.Row>
             ))}
-            {itemsQuery.data.length === 0 && (
+            {topLevelItems.length === 0 && (
               <Table.Row>
                 <Table.Cell colSpan={5}>
                   <Text size="2" color="gray">

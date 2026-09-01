@@ -9,6 +9,7 @@ import {
   Flex,
   Heading,
   Select,
+  Table,
   Tabs,
   Text,
   TextField,
@@ -22,6 +23,10 @@ import PreviewTab from '../review/PreviewTab';
 import SourceTab from '../review/SourceTab';
 import DiffTab from '../review/DiffTab';
 import ReviewMdTab from '../review/ReviewMdTab';
+
+function TaskStateBadge({ state }: { state: string }) {
+  return <Badge color={stateBadgeColor(state)}>{state}</Badge>;
+}
 
 // Pilot G1 roles. Known simplification: hard-coded client-side to match
 // infra/pdlc.yaml's gates.G1.roles (the REST contract does not expose the
@@ -70,6 +75,17 @@ export default function ReviewPage() {
 
   const item = itemQuery.data;
   const latestVersion = item?.latestVersion ?? 0;
+
+  // Tasks are their own work_items rows (kind "task", parentId = this story's boardId, see
+  // BoardSideEffectsImpl#publishTasks) - drilled into here instead of cluttering the top-level
+  // list (ItemListPage filters kind "task" out entirely).
+  const tasksQuery = useQuery({
+    queryKey: ['items'],
+    queryFn: api.listItems,
+    enabled: !!item,
+    refetchInterval: 2000,
+  });
+  const childTasks = (tasksQuery.data ?? []).filter((i) => i.kind === 'task' && i.parentId === item?.boardId);
 
   // Keep the selected version pinned to the latest once we know it.
   useEffect(() => {
@@ -187,6 +203,38 @@ export default function ReviewPage() {
           </Select.Root>
         </Flex>
       </Flex>
+
+      {childTasks.length > 0 && (
+        <Box mb="4">
+          <Heading size="3" mb="2">
+            Tasks ({childTasks.length})
+          </Heading>
+          <Table.Root variant="surface" size="1">
+            <Table.Header>
+              <Table.Row>
+                <Table.ColumnHeaderCell>Title</Table.ColumnHeaderCell>
+                <Table.ColumnHeaderCell>State</Table.ColumnHeaderCell>
+                <Table.ColumnHeaderCell>Updated</Table.ColumnHeaderCell>
+              </Table.Row>
+            </Table.Header>
+            <Table.Body>
+              {childTasks.map((task) => (
+                <Table.Row key={task.id}>
+                  <Table.Cell>{task.title}</Table.Cell>
+                  <Table.Cell>
+                    <TaskStateBadge state={task.canonicalState} />
+                  </Table.Cell>
+                  <Table.Cell>
+                    <Text size="2" color="gray">
+                      {new Date(task.updatedAt).toLocaleString()}
+                    </Text>
+                  </Table.Cell>
+                </Table.Row>
+              ))}
+            </Table.Body>
+          </Table.Root>
+        </Box>
+      )}
 
       <Flex gap="3" align="center" mb="3" wrap="wrap">
         <Button disabled={approveDisabled} onClick={() => approveMutation.mutate(note)} loading={approveMutation.isPending}>
