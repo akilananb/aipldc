@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { MapPin } from 'lucide-react';
 import { Avatar, Badge, Box, Button, Card, Checkbox, Flex, Heading, IconButton, Select, Text, TextArea } from '@radix-ui/themes';
 import Markdown from 'react-markdown';
@@ -7,7 +8,8 @@ import rehypeHighlight from 'rehype-highlight';
 import Collapsible from '../components/Collapsible';
 import type { Comment, CommentIntent } from '../types';
 import type { AddCommentBody } from '../api';
-import { intentBadgeColor } from '../ui-utils';
+import { intentBadgeColor, findMentionToken } from '../ui-utils';
+import type { MentionToken } from '../ui-utils';
 
 interface Props {
   comments: Comment[];
@@ -22,6 +24,15 @@ interface Props {
 
 const INTENTS: CommentIntent[] = ['change', 'question', 'note'];
 const AGENT_RESULT_COLLAPSE_THRESHOLD = 600;
+
+// Pilot agent set — hard-coded to match AgentMentions.AGENTS server-side; if the backend set
+// changes, only this list needs editing.
+const MENTION_AGENTS: { name: string; description: string }[] = [
+  { name: 'analyst', description: 'feasibility, effort, risks' },
+  { name: 'architect', description: 'design fit, boundaries, alternatives' },
+  { name: 'qa', description: 'testability, coverage gaps, risk scenarios' },
+  { name: 'dev', description: 'implementation & code questions, reads the repo' },
+];
 
 function groupByTarget(comments: Comment[]): { target: string; comments: Comment[] }[] {
   const map = new Map<string, Comment[]>();
@@ -46,12 +57,73 @@ export default function CommentPanel({
   const [text, setText] = useState('');
   const [intent, setIntent] = useState<CommentIntent>('note');
   const [blocking, setBlocking] = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const [mention, setMention] = useState<MentionToken | null>(null);
+  const [highlight, setHighlight] = useState(0);
+  const [dropdownRect, setDropdownRect] = useState<{ top: number; left: number; width: number } | null>(null);
+
+  const suggestions = mention
+    ? MENTION_AGENTS.filter((a) => a.name.startsWith(mention.query.toLowerCase()))
+    : [];
+  const mentionOpen = suggestions.length > 0 && dropdownRect != null;
+
+  function updateMention() {
+    const el = textareaRef.current;
+    if (!el) {
+      setMention(null);
+      return;
+    }
+    const next = findMentionToken(el.value, el.selectionStart ?? 0);
+    setMention((prev) => {
+      if (prev?.start !== next?.start || prev?.query !== next?.query) setHighlight(0);
+      return next;
+    });
+  }
+
+  // Dropdown renders in a portal (escapes ancestor overflow/contain clipping — e.g. Radix
+  // Card's `contain: paint`, the sidebar's `overflow: auto`), so its position is tracked in
+  // viewport coordinates and re-synced on any scroll (capture, to catch inner scroll
+  // containers) or resize while it's open.
+  useEffect(() => {
+    if (!mention) {
+      setDropdownRect(null);
+      return;
+    }
+    function sync() {
+      const el = textareaRef.current;
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      setDropdownRect({ top: r.bottom, left: r.left, width: r.width });
+    }
+    sync();
+    window.addEventListener('scroll', sync, true);
+    window.addEventListener('resize', sync);
+    return () => {
+      window.removeEventListener('scroll', sync, true);
+      window.removeEventListener('resize', sync);
+    };
+  }, [mention]);
+
+  function acceptSuggestion(name: string) {
+    const el = textareaRef.current;
+    if (!el || !mention) return;
+    const caret = el.selectionStart ?? mention.start + mention.query.length + 1;
+    const next = text.slice(0, mention.start) + '@' + name + ' ' + text.slice(caret);
+    setText(next);
+    setMention(null);
+    const pos = mention.start + name.length + 2;
+    requestAnimationFrame(() => {
+      el.focus();
+      el.setSelectionRange(pos, pos);
+    });
+  }
 
   function submit() {
     if (!draftTarget || !text.trim()) return;
     onAddComment({ target: draftTarget, text: text.trim(), intent, blocking });
     setText('');
     setBlocking(false);
+    setMention(null);
   }
 
   const grouped = groupByTarget(comments);
@@ -86,11 +158,76 @@ export default function CommentPanel({
           </Flex>
 
           <TextArea
-            placeholder="Write a comment… (@analyst, @architect or @qa to request an agent analysis)"
+            ref={textareaRef}
+            placeholder="Write a comment… (@analyst, @architect, @qa or @dev to request an agent analysis)"
             value={text}
-            onChange={(e) => setText(e.target.value)}
+            onChange={(e) => {
+              setText(e.target.value);
+              updateMention();
+            }}
+            onSelect={updateMention}
+            onBlur={() => setMention(null)}
+            onKeyDown={(e) => {
+              if (!mentionOpen) return;
+              if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                setHighlight((h) => (h + 1) % suggestions.length);
+              } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                setHighlight((h) => (h - 1 + suggestions.length) % suggestions.length);
+              } else if (e.key === 'Enter' || e.key === 'Tab') {
+                e.preventDefault();
+                acceptSuggestion(suggestions[highlight].name);
+              } else if (e.key === 'Escape') {
+                e.preventDefault();
+                setMention(null);
+              }
+            }}
             rows={3}
           />
+          {mentionOpen &&
+            dropdownRect &&
+            createPortal(
+              <Box
+                style={{
+                  position: 'fixed',
+                  top: dropdownRect.top,
+                  left: dropdownRect.left,
+                  marginTop: 4,
+                  zIndex: 1000,
+                  minWidth: Math.max(260, dropdownRect.width),
+                  background: 'var(--color-panel-solid)',
+                  border: '1px solid var(--gray-a5)',
+                  borderRadius: 6,
+                  boxShadow: 'var(--shadow-3)',
+                  overflow: 'hidden',
+                }}
+              >
+                {suggestions.map((a, i) => (
+                  <Flex
+                    key={a.name}
+                    align="center"
+                    gap="2"
+                    style={{
+                      padding: '6px 10px',
+                      cursor: 'pointer',
+                      background: i === highlight ? 'var(--accent-a3)' : undefined,
+                    }}
+                    onMouseEnter={() => setHighlight(i)}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => acceptSuggestion(a.name)}
+                  >
+                    <Text size="2" weight="bold">
+                      @{a.name}
+                    </Text>
+                    <Text size="1" color="gray">
+                      {a.description}
+                    </Text>
+                  </Flex>
+                ))}
+              </Box>,
+              document.querySelector('.radix-themes') ?? document.body,
+            )}
 
           <Flex align="center" gap="3" wrap="wrap">
             <Select.Root value={intent} onValueChange={(v) => setIntent(v as CommentIntent)}>

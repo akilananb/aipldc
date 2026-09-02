@@ -190,7 +190,7 @@ public class ArtifactsController {
         AgentMentionWorkflow wf = workflowClient.newWorkflowStub(AgentMentionWorkflow.class, options);
         try {
             WorkflowClient.start(wf::run, new AgentMentionRequest(story.profile(), story.id().toString(),
-                    saved.id().toString(), agentName, request.text(), request.target(), story.specChangePath()));
+                    story.boardId(), saved.id().toString(), agentName, request.text(), request.target(), story.specChangePath()));
         } catch (WorkflowExecutionAlreadyStarted ignored) {
             // webhook-replay-style idempotency; the running workflow will fill the result
         }

@@ -58,3 +58,23 @@ export function extendLineTarget(prev: string | null, line: number, shift: boole
   if (shift && range) return formatLineTarget(Math.min(range.start, line), Math.max(range.end, line));
   return formatLineTarget(line, line);
 }
+
+export interface MentionToken {
+  /** Index of the `@` character. */
+  start: number;
+  /** Text between `@` and the caret, possibly empty. */
+  query: string;
+}
+
+/** Finds the in-progress `@agent` token the caret is inside, mirroring the backend trigger rule
+ * (AgentMentions.java): the `@` must start the text or follow a non-word, non-`@` character, and
+ * the partial name may contain only letters. Returns null when the caret isn't in such a token. */
+export function findMentionToken(text: string, caret: number): MentionToken | null {
+  const upToCaret = text.slice(0, caret);
+  const at = upToCaret.lastIndexOf('@');
+  if (at === -1) return null;
+  if (at > 0 && /[\w@]/.test(upToCaret[at - 1])) return null;
+  const query = upToCaret.slice(at + 1);
+  if (!/^[A-Za-z]*$/.test(query)) return null;
+  return { start: at, query };
+}

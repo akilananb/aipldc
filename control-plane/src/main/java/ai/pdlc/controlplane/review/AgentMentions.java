@@ -8,8 +8,8 @@ import java.util.regex.Pattern;
 
 /** Parses the first @agent mention in a comment. Supported agents are a fixed pilot set. */
 public final class AgentMentions {
-    public static final Set<String> AGENTS = Set.of("analyst", "architect", "qa");
-    private static final Pattern MENTION = Pattern.compile("(?i)(?:^|[^\\w@])@(analyst|architect|qa)\\b");
+    public static final Set<String> AGENTS = Set.of("analyst", "architect", "qa", "dev");
+    private static final Pattern MENTION = Pattern.compile("(?i)(?:^|[^\\w@])@(analyst|architect|qa|dev)\\b");
 
     private AgentMentions() {
     }

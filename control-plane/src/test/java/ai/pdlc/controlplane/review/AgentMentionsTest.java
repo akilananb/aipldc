@@ -14,6 +14,12 @@ class AgentMentionsTest {
         assertThat(AgentMentions.parse("@analyst is this feasible?")).contains("analyst");
         assertThat(AgentMentions.parse("@Architect what about boundaries?")).contains("architect");
         assertThat(AgentMentions.parse("@QA any coverage gaps?")).contains("qa");
+        assertThat(AgentMentions.parse("@Dev which files change?")).contains("dev");
+    }
+
+    @Test
+    void devLikeLongerMentionDoesNotParse() {
+        assertThat(AgentMentions.parse("@developer please")).isEmpty();
     }
 
     @Test
