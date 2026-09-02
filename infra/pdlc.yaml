@@ -10,6 +10,7 @@ profiles:
         needs-clarification: needs-clarification
         ready-for-story: ready-for-story
         awaiting-G1: awaiting-G1
+        queued: queued
         approved: approved
         planned: planned
         in-progress: in-progress
@@ -34,6 +35,8 @@ profiles:
         po:    { model: anthropic/claude-sonnet-5, budget_tokens: 40000 }
         review: { model: anthropic/claude-sonnet-5, budget_tokens: 30000 }
         release: { model: anthropic/claude-sonnet-5, budget_tokens: 30000 }
+        mention: { model: anthropic/claude-sonnet-5, budget_tokens: 20000 }
+        quality: { model: anthropic/claude-sonnet-5, budget_tokens: 20000 }
     gates:
       G1: { roles: [PO, SquadLead], sod: true }
       G2: { roles: [FSDeveloper, QA], sod: true }
@@ -50,6 +53,7 @@ profiles:
         needs-clarification: "Needs Clarification"
         ready-for-story: "Ready for Story"
         awaiting-G1: "Awaiting Approval"
+        queued: New
         approved: Approved
         planned: Planned
         in-progress: Active
@@ -74,6 +78,8 @@ profiles:
         po:    { model: anthropic/claude-sonnet, budget_tokens: 40000 }
         review: { model: anthropic/claude-sonnet, budget_tokens: 30000 }
         release: { model: anthropic/claude-sonnet, budget_tokens: 30000 }
+        mention: { model: anthropic/claude-sonnet, budget_tokens: 20000 }
+        quality: { model: anthropic/claude-sonnet, budget_tokens: 20000 }
     gates:
       G1: { roles: [PO, SquadLead], sod: true }
       G2: { roles: [FSDeveloper, QA], sod: true }

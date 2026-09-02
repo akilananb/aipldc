@@ -53,7 +53,7 @@ public class CommentReanchorer {
         Optional<Line> byHash = lines.stream().filter(l -> l.hash().equals(original.anchorText())).findFirst();
         if (byHash.isPresent()) {
             Line l = byHash.get();
-            return new Anchored(comment, new Anchor(l.number(), l.hash(), original.nodeType(), l.scenario()), false);
+            return new Anchored(comment, new Anchor(l.number(), l.hash(), original.nodeType(), l.scenario(), shiftedEnd(original, l.number())), false);
         }
 
         if (original.scenario() != null) {
@@ -62,11 +62,15 @@ public class CommentReanchorer {
                     .findFirst();
             if (byScenario.isPresent()) {
                 Line l = byScenario.get();
-                return new Anchored(comment, new Anchor(l.number(), l.hash(), original.nodeType(), l.scenario()), false);
+                return new Anchored(comment, new Anchor(l.number(), l.hash(), original.nodeType(), l.scenario(), shiftedEnd(original, l.number())), false);
             }
         }
 
         return new Anchored(comment, original, true); // fallback: same line, drifted
+    }
+
+    private static Integer shiftedEnd(Anchor original, int newStart) {
+        return original.endLine() == null ? null : newStart + (original.endLine() - original.line());
     }
 
     public String toAnchorJson(Anchor anchor) {
@@ -77,7 +81,7 @@ public class CommentReanchorer {
         }
     }
 
-    private Anchor parseAnchor(String anchorJson) {
+    public Anchor parseAnchor(String anchorJson) {
         if (anchorJson == null || anchorJson.isBlank()) {
             return null;
         }

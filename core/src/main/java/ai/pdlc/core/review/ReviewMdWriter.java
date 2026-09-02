@@ -70,6 +70,20 @@ public final class ReviewMdWriter {
         return "\n→ gate %d passed on v%d · state: Approved\n".formatted(gate, version);
     }
 
+    /** {@code ### quality · vN · <verdict> · score <score> · <hh:mm>} — quality agent verdict on a
+     * story draft version (playbook: quality agent hard-blocks gate 1). */
+    public static String qualityBlock(int version, String verdict, int score, OffsetDateTime at) {
+        return "\n### quality · v%d · %s · score %d · %s\n".formatted(version, verdict, score, HM.format(at));
+    }
+
+    /** {@code ### agent-analysis · @<agent> · <target> · <hh:mm> · approved by <who>} followed by
+     * the @-mentioned agent's approved markdown draft. */
+    public static String agentResultBlock(String agentName, String targetDescription, OffsetDateTime at,
+                                          String approvedBy, String markdown) {
+        return "\n### agent-analysis · @%s · %s · %s · approved by %s\n%s\n"
+                .formatted(agentName, targetDescription, HM.format(at), approvedBy, markdown);
+    }
+
     /** {@code ## PR opened · branch -> target} with per-task build results and review findings —
      * build-order phase 3, before gate 2. */
     public static String prOpenedBlock(int taskCount, String branch, String target, String prUrl,

@@ -43,6 +43,22 @@ public class RunRecorder {
         }
     }
 
+    /** Same as {@link #record} but for callers that already hold the control-plane {@code
+     * work_items.id} (no board_id lookup/placeholder-creation needed) — used by the mention flow,
+     * whose {@link ai.pdlc.core.domain.AgentMentionRequest} carries the internal work item id, not
+     * a board-native id. */
+    public void recordById(UUID workItemId, String agent, String workflowRunId, String outcome,
+                            Long tokens, Integer iterations) {
+        try {
+            jdbc.update("""
+                    INSERT INTO runs (work_item_id, agent, workflow_run_id, trace_url, tokens, iterations, outcome)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """, workItemId, agent, workflowRunId, null, tokens, iterations, outcome);
+        } catch (RuntimeException e) {
+            log.warn("[runs] could not record {} run for work item {}: {}", agent, workItemId, e.toString());
+        }
+    }
+
     private UUID findOrCreateWorkItem(WorkItemRef item) {
         List<UUID> ids = jdbc.query(
                 "SELECT id FROM work_items WHERE profile = ? AND board_id = ?",

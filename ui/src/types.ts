@@ -63,6 +63,7 @@ export interface ItemDetail {
   latestContentHash: string;
   gate: GateState | null;
   parentId: string | null;
+  qualityVerdict: string | null;
 }
 
 export interface ItemSummary {
@@ -73,6 +74,15 @@ export interface ItemSummary {
   canonicalState: string;
   updatedAt: string;
   parentId: string | null;
+  qualityVerdict: string | null;
+}
+
+export interface QualityReport {
+  verdict: string;
+  score: number | null;
+  reportMd: string | null;
+  version: number;
+  createdAt: string;
 }
 
 export interface DocApproval {

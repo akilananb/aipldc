@@ -1,17 +1,21 @@
 package ai.pdlc.agents.activities;
 
 import ai.pdlc.agents.grill.GrillAgent;
+import ai.pdlc.agents.mention.MentionAgent;
 import ai.pdlc.agents.monitor.MonitorAgent;
 import ai.pdlc.agents.plan.PlanAgent;
 import ai.pdlc.agents.po.PoAgent;
+import ai.pdlc.agents.quality.QualityAgent;
 import ai.pdlc.agents.release.ReleaseAgent;
 import ai.pdlc.agents.review.ReviewAgent;
+import ai.pdlc.core.domain.AgentMentionRequest;
 import ai.pdlc.core.domain.Comment;
 import ai.pdlc.core.domain.GrillHandoff;
 import ai.pdlc.core.domain.MonitorHandoff;
 import ai.pdlc.core.domain.MonitorRule;
 import ai.pdlc.core.domain.PlanHandoff;
 import ai.pdlc.core.domain.PoHandoff;
+import ai.pdlc.core.domain.QualityReport;
 import ai.pdlc.core.domain.ReleaseHandoff;
 import ai.pdlc.core.domain.ReviewHandoff;
 import ai.pdlc.core.domain.Task;
@@ -25,6 +29,7 @@ import io.temporal.activity.Activity;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
+import java.util.UUID;
 
 /**
  * Hosts {@link AgentActivities} on the {@code reasoning} queue. Pure reasoning: gathers context
@@ -41,18 +46,22 @@ public class AgentActivitiesImpl implements AgentActivities {
     private final ReviewAgent reviewAgent;
     private final ReleaseAgent releaseAgent;
     private final MonitorAgent monitorAgent;
+    private final MentionAgent mentionAgent;
+    private final QualityAgent qualityAgent;
     private final MetricsPort metrics;
     private final RunRecorder runs;
 
     public AgentActivitiesImpl(GrillAgent grillAgent, PoAgent poAgent, PlanAgent planAgent,
                                 ReviewAgent reviewAgent, ReleaseAgent releaseAgent, MonitorAgent monitorAgent,
-                                MetricsPort metrics, RunRecorder runs) {
+                                MentionAgent mentionAgent, QualityAgent qualityAgent, MetricsPort metrics, RunRecorder runs) {
         this.grillAgent = grillAgent;
         this.poAgent = poAgent;
         this.planAgent = planAgent;
         this.reviewAgent = reviewAgent;
         this.releaseAgent = releaseAgent;
         this.monitorAgent = monitorAgent;
+        this.mentionAgent = mentionAgent;
+        this.qualityAgent = qualityAgent;
         this.metrics = metrics;
         this.runs = runs;
     }
@@ -70,9 +79,9 @@ public class AgentActivitiesImpl implements AgentActivities {
     }
 
     @Override
-    public StoryDraft poDraft(WorkItemRef item, GrillHandoff grill) {
+    public List<StoryDraft> poDraft(WorkItemRef item, GrillHandoff grill) {
         try {
-            StoryDraft result = poAgent.draft(item, grill);
+            List<StoryDraft> result = poAgent.draft(item, grill);
             runs.record(item, "po", workflowId(), "ok", null, null);
             return result;
         } catch (RuntimeException e) {
@@ -89,6 +98,18 @@ public class AgentActivitiesImpl implements AgentActivities {
             return result;
         } catch (RuntimeException e) {
             runs.record(item, "po", workflowId(), "error", null, null);
+            throw e;
+        }
+    }
+
+    @Override
+    public QualityReport evaluateQuality(WorkItemRef item, String subjectKind, String contentMd) {
+        try {
+            QualityReport result = qualityAgent.evaluate(subjectKind, contentMd);
+            runs.record(item, "quality", workflowId(), "ok", null, null);
+            return result;
+        } catch (RuntimeException e) {
+            runs.record(item, "quality", workflowId(), "error", null, null);
             throw e;
         }
     }
@@ -137,6 +158,19 @@ public class AgentActivitiesImpl implements AgentActivities {
             return result;
         } catch (RuntimeException e) {
             runs.record(story, "monitor", workflowId(), "error", null, null);
+            throw e;
+        }
+    }
+
+    @Override
+    public String mentionAnalyze(AgentMentionRequest request) {
+        UUID workItemId = UUID.fromString(request.workItemId());
+        try {
+            String result = mentionAgent.analyze(request);
+            runs.recordById(workItemId, "mention", workflowId(), "ok", null, null);
+            return result;
+        } catch (RuntimeException e) {
+            runs.recordById(workItemId, "mention", workflowId(), "error", null, null);
             throw e;
         }
     }

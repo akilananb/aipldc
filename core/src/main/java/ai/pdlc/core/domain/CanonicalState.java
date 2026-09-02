@@ -19,6 +19,7 @@ public enum CanonicalState {
     NEEDS_CLARIFICATION("needs-clarification"),
     READY_FOR_STORY("ready-for-story"),
     AWAITING_G1("awaiting-G1"),
+    QUEUED("queued"),
     APPROVED("approved"),
     PLANNED("planned"),
     IN_PROGRESS("in-progress"),

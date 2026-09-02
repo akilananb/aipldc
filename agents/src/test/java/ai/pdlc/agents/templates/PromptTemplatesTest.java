@@ -46,6 +46,14 @@ class PromptTemplatesTest {
             whitespace before the keyword).
             """;
 
+    /** Verbatim from {@code po-draft.mustache} lines 18-20 — the multi-story actor/factor split
+     * instruction appended after {@link #SCENARIO_FORMAT_SPEC}. */
+    private static final String MULTI_STORY_SPEC = """
+            If the feature involves MULTIPLE distinct actors/user types (e.g. admin vs customer) or clearly separable factors, write one complete story PER actor/factor, each following the full format above, separated by a line containing exactly:
+            ===STORY===
+            Write a single story (no separator) when one actor covers the whole feature.
+            """;
+
     @Test
     void grillQuestionsRendersByteExactAndStartsWithMarker() {
         String expected = "[agent:grill]" + "\n"
@@ -69,7 +77,8 @@ class PromptTemplatesTest {
         String expected = "[agent:po]" + "\n"
                 + "Write the story for feature: Export orders CSV\n"
                 + "Feature description: Let SquadLead export orders as PII-safe CSV.\n"
-                + SCENARIO_FORMAT_SPEC;
+                + SCENARIO_FORMAT_SPEC
+                + MULTI_STORY_SPEC;
 
         Map<String, Object> view = new HashMap<>();
         view.put("title", "Export orders CSV");
@@ -86,6 +95,7 @@ class PromptTemplatesTest {
                 .append("Write the story for feature: Export orders CSV\n")
                 .append("Feature description: Let SquadLead export orders as PII-safe CSV.\n")
                 .append(SCENARIO_FORMAT_SPEC)
+                .append(MULTI_STORY_SPEC)
                 .append("Answer q1 (scope): CSV export only\n")
                 .append("Answer q2 (risk): Rate-limited\n")
                 .append("Parked (out of scope): q3, q4\n");

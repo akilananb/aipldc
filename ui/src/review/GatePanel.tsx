@@ -19,9 +19,20 @@ export default function GatePanel({ item, actions }: Props) {
   const gate = item.gate;
   const approvals = Object.values(gate?.approvals ?? {});
   const stage = gate?.stage;
+  const qualityBlocked = item.qualityVerdict === 'failed';
 
   const g2Allowed = GATE_ROLES.G2.includes(identity.role);
   const g2DisabledReason = !g2Allowed ? `Role ${identity.role} is not a Gate 2 checker` : null;
+
+  if (item.canonicalState === 'queued') {
+    return (
+      <Panel>
+        <Text size="2" color="gray">
+          Queued — waiting for the previous story to finish.
+        </Text>
+      </Panel>
+    );
+  }
 
   return (
     <Panel>
@@ -32,9 +43,9 @@ export default function GatePanel({ item, actions }: Props) {
 
       {(stage == null || stage === 'awaiting-G1') && (
         <Flex gap="3" align="center" wrap="wrap">
-          <Tooltip content={actions.disabledReason ?? ''}>
+          <Tooltip content={qualityBlocked ? 'Quality evaluation has not passed' : (actions.disabledReason ?? '')}>
             <Button
-              disabled={actions.approveDisabled}
+              disabled={actions.approveDisabled || qualityBlocked}
               onClick={() => actions.approve.mutate(note)}
               loading={actions.approve.isPending}
             >

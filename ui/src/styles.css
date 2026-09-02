@@ -38,12 +38,24 @@ body {
   line-height: 1.55;
 }
 
-.review-md pre,
 .review-md code {
   font-family: var(--default-font-family, monospace);
   background: var(--gray-a3);
   border-radius: 4px;
   padding: 1px 4px;
+}
+
+.review-md pre {
+  background: var(--gray-a3);
+  border-radius: 6px;
+  padding: var(--space-3);
+  overflow-x: auto;
+}
+
+.review-md pre code {
+  background: none;
+  padding: 0;
+  border-radius: 0;
 }
 
 .review-md h3 {
@@ -72,12 +84,81 @@ body {
   margin: var(--space-1) 0;
 }
 
-.comment-md pre,
 .comment-md code {
   font-family: var(--default-font-family, monospace);
   background: var(--gray-a3);
   border-radius: 4px;
   padding: 1px 4px;
+}
+
+.comment-md pre {
+  background: var(--gray-a3);
+  border-radius: 6px;
+  padding: var(--space-3);
+  overflow-x: auto;
+}
+
+.comment-md pre code {
+  background: none;
+  padding: 0;
+  border-radius: 0;
+}
+
+/* Fenced code-block syntax highlighting (rehype-highlight), tuned to the Radix color scales so
+ * it tracks the active light/dark appearance automatically. */
+:where(.review-md, .comment-md) .hljs-comment,
+:where(.review-md, .comment-md) .hljs-quote {
+  color: var(--gray-9);
+  font-style: italic;
+}
+
+:where(.review-md, .comment-md) .hljs-keyword,
+:where(.review-md, .comment-md) .hljs-selector-tag,
+:where(.review-md, .comment-md) .hljs-literal,
+:where(.review-md, .comment-md) .hljs-type {
+  color: var(--accent-11);
+  font-weight: 600;
+}
+
+:where(.review-md, .comment-md) .hljs-string,
+:where(.review-md, .comment-md) .hljs-doctag,
+:where(.review-md, .comment-md) .hljs-addition {
+  color: var(--green-11);
+}
+
+:where(.review-md, .comment-md) .hljs-number,
+:where(.review-md, .comment-md) .hljs-deletion {
+  color: var(--red-11);
+}
+
+:where(.review-md, .comment-md) .hljs-title,
+:where(.review-md, .comment-md) .hljs-section,
+:where(.review-md, .comment-md) .hljs-name,
+:where(.review-md, .comment-md) .hljs-built_in,
+:where(.review-md, .comment-md) .hljs-builtin-name {
+  color: var(--blue-11);
+}
+
+:where(.review-md, .comment-md) .hljs-attr,
+:where(.review-md, .comment-md) .hljs-attribute,
+:where(.review-md, .comment-md) .hljs-variable,
+:where(.review-md, .comment-md) .hljs-template-variable,
+:where(.review-md, .comment-md) .hljs-symbol,
+:where(.review-md, .comment-md) .hljs-bullet,
+:where(.review-md, .comment-md) .hljs-link {
+  color: var(--orange-11);
+}
+
+:where(.review-md, .comment-md) .hljs-meta {
+  color: var(--gray-9);
+}
+
+:where(.review-md, .comment-md) .hljs-emphasis {
+  font-style: italic;
+}
+
+:where(.review-md, .comment-md) .hljs-strong {
+  font-weight: 700;
 }
 
 .app-container {

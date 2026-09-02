@@ -1,5 +1,6 @@
 package ai.pdlc.core.workflow;
 
+import ai.pdlc.core.domain.AgentMentionRequest;
 import ai.pdlc.core.domain.Comment;
 import ai.pdlc.core.domain.GrillHandoff;
 import ai.pdlc.core.domain.GrillQuestion;
@@ -8,6 +9,7 @@ import ai.pdlc.core.domain.MonitorHandoff;
 import ai.pdlc.core.domain.MonitorRule;
 import ai.pdlc.core.domain.PlanHandoff;
 import ai.pdlc.core.domain.PoHandoff;
+import ai.pdlc.core.domain.QualityReport;
 import ai.pdlc.core.domain.ReleaseDocument;
 import ai.pdlc.core.domain.ReleaseHandoff;
 import ai.pdlc.core.domain.ReviewFinding;
@@ -25,15 +27,22 @@ import java.util.concurrent.CopyOnWriteArrayList;
  * In-process fake of the reasoning activities (no LLM calls) for {@link FeatureWorkflowImplTest}.
  * When {@code startWithOpenQuestion} is true, the first {@code grillEvaluate} call returns one
  * {@code open} question that only resolves once a matching board comment arrives — exercising the
- * stale-escalation timer branch.
+ * stale-escalation timer branch. When {@code storyCount} is 2, {@code poDraft} returns two distinct
+ * stories (simulating a PO agent actor/factor split). {@code failStoryQualityOnce} makes the first
+ * {@code evaluateQuality("story", …)} call FAIL (auto-revise round exercised), every later call —
+ * including the auto-revised one — PASS.
  */
 class FakeAgentActivities implements AgentActivities {
 
     final List<WorkItemRef> grillCalls = new CopyOnWriteArrayList<>();
     final List<WorkItemRef> reviseCalls = new CopyOnWriteArrayList<>();
+    final List<String> qualityCalls = new CopyOnWriteArrayList<>();
     boolean startWithOpenQuestion = false;
     boolean returnBlockerFinding = false;
     boolean returnMonitorTrip = false;
+    int storyCount = 1;
+    boolean failStoryQualityOnce = false;
+    private boolean storyQualityFailedOnce = false;
 
     @Override
     public GrillHandoff grillEvaluate(WorkItemRef item, GrillHandoff previous, List<BoardCommentEvent> newComments) {
@@ -65,15 +74,21 @@ class FakeAgentActivities implements AgentActivities {
     }
 
     @Override
-    public StoryDraft poDraft(WorkItemRef item, GrillHandoff grill) {
-        Handoff envelope = new Handoff("po-agent", "plan-agent", item.boardId(),
-                ai.pdlc.core.domain.CanonicalState.AWAITING_G1, List.of(), 0.9, List.of(), List.of());
-        PoHandoff handoff = new PoHandoff(envelope, item.boardId(), "openspec/changes/export-orders-csv",
-                List.of("export-current-view", "rate-limit"), java.util.Map.of(), List.of("orders-service/export"),
-                java.util.Map.of("I", "pass", "N", "pass", "V", "pass", "E", "pass", "S", "pass", "T", "pass"),
-                List.of(), java.util.Map.of());
-        String story = "# Export the filtered orders view to CSV\n\n## Acceptance criteria\nScenario: rate limit\n  GIVEN 10 exports in the last hour\n  WHEN the 11th export happens\n  THEN the next returns 429\n";
-        return new StoryDraft(handoff, story, java.util.Map.of("specs/orders/spec.md", "ADDED rate-limit requirement"));
+    public List<StoryDraft> poDraft(WorkItemRef item, GrillHandoff grill) {
+        List<StoryDraft> drafts = new ArrayList<>();
+        for (int i = 0; i < storyCount; i++) {
+            String suffix = i == 0 ? "" : "-b";
+            Handoff envelope = new Handoff("po-agent", "plan-agent", item.boardId(),
+                    ai.pdlc.core.domain.CanonicalState.AWAITING_G1, List.of(), 0.9, List.of(), List.of());
+            PoHandoff handoff = new PoHandoff(envelope, item.boardId(), "openspec/changes/export-orders-csv" + suffix,
+                    List.of("export-current-view", "rate-limit"), java.util.Map.of(), List.of("orders-service/export"),
+                    java.util.Map.of("I", "pass", "N", "pass", "V", "pass", "E", "pass", "S", "pass", "T", "pass"),
+                    List.of(), java.util.Map.of());
+            String story = "# Export the filtered orders view to CSV" + suffix
+                    + "\n\n## Acceptance criteria\nScenario: rate limit\n  GIVEN 10 exports in the last hour\n  WHEN the 11th export happens\n  THEN the next returns 429\n";
+            drafts.add(new StoryDraft(handoff, story, java.util.Map.of("specs/orders/spec.md", "ADDED rate-limit requirement")));
+        }
+        return drafts;
     }
 
     @Override
@@ -81,6 +96,16 @@ class FakeAgentActivities implements AgentActivities {
         reviseCalls.add(item);
         String story = "# Export the filtered orders view to CSV\n\n## Acceptance criteria\nScenario: rate limit\n  GIVEN 10 exports (20 for admin) in the last hour\n  WHEN the 11th export happens\n  THEN the next returns 429\n";
         return new StoryDraft(previous, story, java.util.Map.of("specs/orders/spec.md", "ADDED rate-limit requirement now has two thresholds"));
+    }
+
+    @Override
+    public QualityReport evaluateQuality(WorkItemRef item, String subjectKind, String contentMd) {
+        qualityCalls.add(subjectKind + ":" + item.boardId());
+        if ("story".equals(subjectKind) && failStoryQualityOnce && !storyQualityFailedOnce) {
+            storyQualityFailedOnce = true;
+            return new QualityReport("story", false, 40, List.of("missing NFR"), "VERDICT: FAIL");
+        }
+        return new QualityReport(subjectKind, true, 90, List.of(), "VERDICT: PASS");
     }
 
     @Override
@@ -126,5 +151,10 @@ class FakeAgentActivities implements AgentActivities {
                 ? List.of(new MonitorHandoff.Trip(rules.isEmpty() ? "none" : rules.get(0).id(), "evidence", "bug", "PO"))
                 : List.of();
         return new MonitorHandoff(envelope, trips);
+    }
+
+    @Override
+    public String mentionAnalyze(AgentMentionRequest request) {
+        return "fake mention result for " + request.agentName();
     }
 }

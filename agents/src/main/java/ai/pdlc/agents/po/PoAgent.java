@@ -22,9 +22,11 @@ import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -42,6 +44,7 @@ public class PoAgent {
 
     private static final Pattern CHANGE = Pattern.compile("Change:\\s*(\\S+)");
     private static final Pattern NFR_BULLET = Pattern.compile("^\\s*-\\s*([^:]+):\\s*(.*)$");
+    private static final Pattern STORY_SEPARATOR = Pattern.compile("(?m)^===STORY===\\s*$");
 
     private final Ai ai;
     private final BoardPort board;
@@ -58,7 +61,7 @@ public class PoAgent {
         this.poModel = role != null ? role.model() : null;
     }
 
-    public StoryDraft draft(WorkItemRef item, GrillHandoff grill) {
+    public List<StoryDraft> draft(WorkItemRef item, GrillHandoff grill) {
         WorkItem workItem = AgentContext.readWorkItem(board, item);
         String title = workItem == null ? item.boardId() : safe(workItem.title());
         String description = workItem == null ? "" : safe(workItem.description());
@@ -71,8 +74,29 @@ public class PoAgent {
         }
         String prompt = templates.render("po-draft", view);
 
-        String story = promptRunner().generateText(prompt);
-        return assemble(story, item, null, item.boardId(), grill);
+        String output = promptRunner().generateText(prompt);
+        List<String> parts = new ArrayList<>();
+        for (String part : STORY_SEPARATOR.split(output)) {
+            String trimmed = part.strip();
+            if (!trimmed.isEmpty()) {
+                parts.add(trimmed);
+            }
+        }
+        if (parts.isEmpty()) {
+            parts.add(output.strip());
+        }
+
+        List<StoryDraft> drafts = new ArrayList<>();
+        Set<String> seenChanges = new HashSet<>();
+        for (String part : parts) {
+            StoryDraft draft = assemble(part, item, null, item.boardId(), grill);
+            if (!seenChanges.add(draft.handoff().change())) {
+                draft = assemble(part, item, draft.handoff().change() + "-s" + (drafts.size() + 1), item.boardId(), grill);
+                seenChanges.add(draft.handoff().change());
+            }
+            drafts.add(draft);
+        }
+        return drafts;
     }
 
     public StoryDraft revise(WorkItemRef item, PoHandoff previous, List<Comment> comments) {

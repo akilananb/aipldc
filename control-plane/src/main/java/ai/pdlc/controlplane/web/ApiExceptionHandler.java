@@ -36,4 +36,9 @@ public class ApiExceptionHandler {
     public ResponseEntity<Map<String, String>> handleBuildTaskGone(BuildTaskGoneException e) {
         return ResponseEntity.status(HttpStatus.GONE).body(Map.of("error", e.getMessage()));
     }
+
+    @ExceptionHandler(ConflictException.class)
+    public ResponseEntity<Map<String, String>> handleConflict(ConflictException e) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("error", e.getMessage()));
+    }
 }

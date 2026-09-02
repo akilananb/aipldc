@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Badge, Box, Button, Card, Flex, Heading, Text, Tooltip } from '@radix-ui/themes';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import rehypeHighlight from 'rehype-highlight';
 import { toast } from 'sonner';
 import { api, errorMessage } from '../api';
 import { useIdentity } from '../identity';
@@ -77,7 +78,7 @@ export default function ReleaseTab({ id }: Props) {
             </Flex>
             <Box className="review-md">
               <Collapsible maxHeight={300} defaultCollapsed>
-                <Markdown remarkPlugins={[remarkGfm]}>{doc.content}</Markdown>
+                <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>{doc.content}</Markdown>
               </Collapsible>
             </Box>
             {!doc.signed && (

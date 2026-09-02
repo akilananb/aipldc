@@ -28,7 +28,7 @@ class InfraPdlcYamlTest {
         assertThat(local.gate("G2").sod()).isTrue();
         assertThat(local.gate("G3").roles()).containsExactly("PO", "SquadLead", "QA");
         assertThat(local.gate("G3").sod()).isTrue();
-        assertThat(local.agents().roles()).containsKeys("grill", "po", "review", "release");
+        assertThat(local.agents().roles()).containsKeys("grill", "po", "review", "release", "quality");
     }
 
     @Test

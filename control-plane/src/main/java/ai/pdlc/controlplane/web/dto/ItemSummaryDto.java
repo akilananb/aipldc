@@ -10,5 +10,6 @@ public record ItemSummaryDto(
         String title,
         String canonicalState,
         OffsetDateTime updatedAt,
-        String parentId) {
+        String parentId,
+        String qualityVerdict) {
 }

@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Badge, Box, Flex, Tabs, Text } from '@radix-ui/themes';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import rehypeHighlight from 'rehype-highlight';
 import { api, errorMessage } from '../api';
 import type { CommentIntent, DocApproval, ItemDetail } from '../types';
 import { extendLineTarget, formatLineTarget, parseLineTarget } from '../ui-utils';
@@ -15,6 +16,7 @@ import GatePanel from '../review/GatePanel';
 import CommentPanel from '../review/CommentPanel';
 import PreviewTab from '../review/PreviewTab';
 import ReviewMdTab from '../review/ReviewMdTab';
+import QualityTab from '../review/QualityTab';
 
 interface Props {
   item: ItemDetail;
@@ -111,7 +113,7 @@ export default function TaskDetailPage({ item }: Props) {
       <Box mb="4">
         <Panel title="Context">
           <Box className="review-md">
-            <Markdown remarkPlugins={[remarkGfm]}>{item.description}</Markdown>
+            <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>{item.description}</Markdown>
           </Box>
         </Panel>
       </Box>
@@ -127,6 +129,7 @@ export default function TaskDetailPage({ item }: Props) {
           <Tabs.Trigger value="story">Story & comments</Tabs.Trigger>
           <Tabs.Trigger value="spec">Design spec</Tabs.Trigger>
           <Tabs.Trigger value="tasks">Tasks plan</Tabs.Trigger>
+          <Tabs.Trigger value="quality">Quality</Tabs.Trigger>
         </Tabs.List>
 
         <Box pt="4">
@@ -178,6 +181,9 @@ export default function TaskDetailPage({ item }: Props) {
               error={specDocsQuery.isError ? errorMessage(specDocsQuery.error) : null}
               content={docs?.tasksMd ?? null}
             />
+          </Tabs.Content>
+          <Tabs.Content value="quality">
+            <QualityTab id={item.id} />
           </Tabs.Content>
         </Box>
       </Tabs.Root>

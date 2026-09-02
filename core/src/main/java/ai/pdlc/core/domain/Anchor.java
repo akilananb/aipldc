@@ -14,11 +14,17 @@ import java.util.HexFormat;
  * @param anchorText sha256 hex of the trimmed text of that line
  * @param nodeType   remark/markdown node type, e.g. {@code heading|paragraph|listItem|code}
  * @param scenario   enclosing "Scenario: <name>" heading, or {@code null}
+ * @param endLine    1-based inclusive end line of a multi-line range anchor, or {@code null} for a single line
  */
-public record Anchor(int line, String anchorText, String nodeType, String scenario) {
+public record Anchor(int line, String anchorText, String nodeType, String scenario, Integer endLine) {
 
     public static Anchor forLine(int line, String lineText, String nodeType, String scenario) {
-        return new Anchor(line, hash(lineText), nodeType, scenario);
+        return new Anchor(line, hash(lineText), nodeType, scenario, null);
+    }
+
+    /** Range anchor; normalizes a degenerate range (endLine <= line) to a single-line anchor. */
+    public static Anchor forRange(int line, int endLine, String lineText, String nodeType, String scenario) {
+        return new Anchor(line, hash(lineText), nodeType, scenario, endLine > line ? endLine : null);
     }
 
     public static String hash(String lineText) {

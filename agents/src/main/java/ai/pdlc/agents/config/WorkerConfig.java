@@ -1,6 +1,7 @@
 package ai.pdlc.agents.config;
 
 import ai.pdlc.agents.activities.AgentActivitiesImpl;
+import ai.pdlc.core.workflow.AgentMentionWorkflowImpl;
 import ai.pdlc.core.workflow.FeatureWorkflowImpl;
 import ai.pdlc.core.workflow.TaskQueues;
 import io.temporal.client.WorkflowClient;
@@ -25,7 +26,7 @@ public class WorkerConfig {
     public WorkerFactory workerFactory(WorkflowClient client, AgentActivitiesImpl agentActivities) {
         factory = WorkerFactory.newInstance(client);
         Worker worker = factory.newWorker(TaskQueues.REASONING);
-        worker.registerWorkflowImplementationTypes(FeatureWorkflowImpl.class);
+        worker.registerWorkflowImplementationTypes(FeatureWorkflowImpl.class, AgentMentionWorkflowImpl.class);
         worker.registerActivitiesImplementations(agentActivities);
         factory.start();
         return factory;

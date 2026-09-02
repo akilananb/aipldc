@@ -343,4 +343,100 @@ class FeatureWorkflowImplTest {
         assertThat(boardSideEffects.monitorEvaluations.get(0).anyTripped()).isTrue();
         assertThat(boardSideEffects.monitorEvaluations.get(0).trips()).hasSize(1);
     }
+
+    @Test
+    void qualityFailureAutoRevisesThenGateOpens() throws Exception {
+        testEnv = TestWorkflowEnvironment.newInstance();
+        Worker worker = testEnv.newWorker(TaskQueues.REASONING);
+        worker.registerWorkflowImplementationTypes(FeatureWorkflowImpl.class);
+        agentActivities = new FakeAgentActivities();
+        agentActivities.failStoryQualityOnce = true;
+        worker.registerActivitiesImplementations(agentActivities);
+
+        Worker boardWorker = testEnv.newWorker(TaskQueues.BOARD);
+        boardSideEffects = new FakeBoardSideEffects();
+        boardWorker.registerActivitiesImplementations(boardSideEffects);
+
+        Worker buildWorker = testEnv.newWorker(TaskQueues.BUILD);
+        buildActivities = new FakeBuildActivities();
+        buildWorker.registerActivitiesImplementations(buildActivities);
+
+        testEnv.start();
+
+        WorkflowClient client = testEnv.getWorkflowClient();
+        WorkflowOptions options = WorkflowOptions.newBuilder()
+                .setTaskQueue(TaskQueues.REASONING)
+                .setWorkflowId("feature-local-4412-quality-fail")
+                .build();
+        FeatureWorkflow wf = client.newWorkflowStub(FeatureWorkflow.class, options);
+        WorkflowClient.start(wf::run, new WorkItemRef("local", "4412-quality-fail"));
+
+        awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G1 && s.version() == 2);
+        assertThat(agentActivities.reviseCalls).hasSize(1);
+        assertThat(boardSideEffects.qualityReportsSaved).hasSize(2);
+        assertThat(boardSideEffects.qualityReportsSaved.get(0)).endsWith(":1:failed");
+        assertThat(boardSideEffects.qualityReportsSaved.get(1)).endsWith(":2:passed");
+
+        wf.approve(new Approval("po@acme", "PO", "story", 2, "hash-v2", Instant.now()));
+        wf.approve(new Approval("lead@acme", "SquadLead", "story", 2, "hash-v2", Instant.now()));
+
+        // Gate 1 still opens normally once the quality gate passed and both approvals land.
+        awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G2);
+    }
+
+    @Test
+    void secondStoryQueuedUntilFirstDone() throws Exception {
+        testEnv = TestWorkflowEnvironment.newInstance();
+        Worker worker = testEnv.newWorker(TaskQueues.REASONING);
+        worker.registerWorkflowImplementationTypes(FeatureWorkflowImpl.class);
+        agentActivities = new FakeAgentActivities();
+        agentActivities.storyCount = 2;
+        worker.registerActivitiesImplementations(agentActivities);
+
+        Worker boardWorker = testEnv.newWorker(TaskQueues.BOARD);
+        boardSideEffects = new FakeBoardSideEffects();
+        boardWorker.registerActivitiesImplementations(boardSideEffects);
+
+        Worker buildWorker = testEnv.newWorker(TaskQueues.BUILD);
+        buildActivities = new FakeBuildActivities();
+        buildWorker.registerActivitiesImplementations(buildActivities);
+
+        testEnv.start();
+
+        WorkflowClient client = testEnv.getWorkflowClient();
+        WorkflowOptions options = WorkflowOptions.newBuilder()
+                .setTaskQueue(TaskQueues.REASONING)
+                .setWorkflowId("feature-local-4412-multi-story")
+                .build();
+        FeatureWorkflow wf = client.newWorkflowStub(FeatureWorkflow.class, options);
+        WorkflowClient.start(wf::run, new WorkItemRef("local", "4412-multi-story"));
+
+        awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G1);
+        assertThat(boardSideEffects.published).hasSize(2);
+        assertThat(boardSideEffects.queuedFlags).containsExactly(false, true);
+        assertThat(boardSideEffects.activatedStories).isEmpty();
+        assertThat(wf.state().activeStoryBoardId()).isEqualTo("story-0");
+
+        // Drive story 1 (the active one) fully through G1 -> plan -> build -> G2 -> release -> G3 -> deploy.
+        wf.approve(new Approval("po@acme", "PO", "story", 1, "hash-v1", Instant.now()));
+        wf.approve(new Approval("lead@acme", "SquadLead", "story", 1, "hash-v1", Instant.now()));
+        awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G2);
+        wf.approve(new Approval("fsdev@acme", "FSDeveloper", "pr", 1, "hash-pr-v1", Instant.now()));
+        wf.approve(new Approval("qa@acme", "QA", "pr", 1, "hash-pr-v1", Instant.now()));
+        awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G3);
+        wf.approve(new Approval("po@acme", "PO", "release-pack:change-notes", 1, "hash-doc", Instant.now()));
+        wf.approve(new Approval("lead@acme", "SquadLead", "release-pack:rollout-plan", 1, "hash-doc", Instant.now()));
+        wf.approve(new Approval("qa@acme", "QA", "release-pack:monitor-rules", 1, "hash-doc", Instant.now()));
+        wf.approve(new Approval("qa@acme", "QA", "release-pack:test-evidence", 1, "hash-doc", Instant.now()));
+
+        // Story 2 activates and becomes the pipeline's active story only after story 1 finishes.
+        awaitState(wf, s -> "story-1".equals(s.activeStoryBoardId()));
+        assertThat(boardSideEffects.activatedStories).extracting(WorkItemRef::boardId).containsExactly("story-1");
+        assertThat(wf.state().stage()).isEqualTo(CanonicalState.AWAITING_G1);
+
+        // Drive story 2 through gate 1 to prove the workflow reaches it and doesn't hang.
+        wf.approve(new Approval("po@acme", "PO", "story", 1, "hash-v1", Instant.now()));
+        wf.approve(new Approval("lead@acme", "SquadLead", "story", 1, "hash-v1", Instant.now()));
+        awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G2);
+    }
 }

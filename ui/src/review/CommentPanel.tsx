@@ -3,6 +3,7 @@ import { MapPin } from 'lucide-react';
 import { Avatar, Badge, Box, Button, Card, Checkbox, Flex, Heading, IconButton, Select, Text, TextArea } from '@radix-ui/themes';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import rehypeHighlight from 'rehype-highlight';
 import Collapsible from '../components/Collapsible';
 import type { Comment, CommentIntent } from '../types';
 import type { AddCommentBody } from '../api';
@@ -149,7 +150,7 @@ export default function CommentPanel({
 function AgentMarkdown({ content }: { content: string }) {
   const body = (
     <Box className="comment-md">
-      <Markdown remarkPlugins={[remarkGfm]}>{content}</Markdown>
+      <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>{content}</Markdown>
     </Box>
   );
   if (content.length > AGENT_RESULT_COLLAPSE_THRESHOLD) {

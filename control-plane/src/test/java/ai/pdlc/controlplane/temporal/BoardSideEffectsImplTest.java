@@ -4,6 +4,7 @@ import ai.pdlc.controlplane.persistence.ArtifactRepository;
 import ai.pdlc.controlplane.persistence.CommentRepository;
 import ai.pdlc.controlplane.persistence.PrRepository;
 import ai.pdlc.controlplane.persistence.ReleaseDocumentRepository;
+import ai.pdlc.controlplane.persistence.QualityReportRepository;
 import ai.pdlc.controlplane.persistence.ReviewEventRepository;
 import ai.pdlc.controlplane.persistence.WorkItemEntity;
 import ai.pdlc.controlplane.persistence.WorkItemRepository;
@@ -90,6 +91,8 @@ class BoardSideEffectsImplTest {
     @Autowired
     ReviewEventRepository reviewEvents;
     @Autowired
+    QualityReportRepository qualityReports;
+    @Autowired
     JdbcTemplate jdbc;
 
     @Test
@@ -111,7 +114,7 @@ class BoardSideEffectsImplTest {
         ReviewTrailService reviewTrail = new ReviewTrailService(pdlcConfig, repo, reviewEvents);
 
         BoardSideEffectsImpl impl = new BoardSideEffectsImpl(pdlcConfig, board, repo, ci,
-                workItems, artifacts, comments, reviewTrail, prs, releaseDocuments, jdbc);
+                workItems, artifacts, comments, reviewTrail, prs, releaseDocuments, qualityReports, jdbc);
 
         Handoff envelope = new Handoff("monitor-agent", "grill-agent", "4412", CanonicalState.DONE,
                 List.of(), 0.9, List.of(), List.of());

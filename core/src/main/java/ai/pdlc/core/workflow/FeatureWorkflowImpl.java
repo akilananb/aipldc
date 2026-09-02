@@ -8,6 +8,7 @@ import ai.pdlc.core.domain.GrillHandoff;
 import ai.pdlc.core.domain.MonitorHandoff;
 import ai.pdlc.core.domain.PlanHandoff;
 import ai.pdlc.core.domain.PoHandoff;
+import ai.pdlc.core.domain.QualityReport;
 import ai.pdlc.core.domain.ReleaseDocument;
 import ai.pdlc.core.domain.ReleaseHandoff;
 import ai.pdlc.core.domain.ReviewFinding;
@@ -31,6 +32,13 @@ import java.util.Map;
  * scope — see {@link #run} step 12). Contains no LLM/HTTP calls and no wall-clock reads outside
  * {@link Workflow}; all I/O lives in {@link AgentActivities}, {@link BoardSideEffects} and
  * {@link BuildActivities} (orchestration-decision §5 determinism rule).
+ *
+ * <p>When the PO agent splits a feature into multiple stories (by actor/factor), every story flows
+ * through the full G1→plan→build→G2→G3 pipeline <em>sequentially</em> in this one workflow
+ * execution (a user-settled decision: not child workflows) — see the per-story loop in {@link #run}
+ * step 3-12. Story 0 starts {@code awaiting-G1} immediately; every later story is published
+ * {@code queued} and only flips to {@code awaiting-G1} via {@link BoardSideEffects#activateStory}
+ * once the previous story's episode completes.
  */
 public class FeatureWorkflowImpl implements FeatureWorkflow {
 
@@ -43,6 +51,11 @@ public class FeatureWorkflowImpl implements FeatureWorkflow {
 
     /** Author identity for blocker findings the review agent seeds as blocking comments. */
     static final String REVIEW_BOT_IDENTITY = "review-agent-bot";
+
+    /** Author identity for quality findings the quality agent seeds as (non-blocking) comments on
+     * a failed story verdict — visible in the comment stream even though they don't block the gate
+     * signal surface directly (the {@link #qualityPassed} flag does that instead). */
+    static final String QUALITY_BOT_IDENTITY = "quality-agent-bot";
 
     /** Prefix for a release document's {@code Approval.stage()}/{@code Comment.stage()} — tech-stack
      * §3.1 "Gate 3 uses the same shape"; {@code Comment.stage()}'s own doc comment names this
@@ -91,6 +104,10 @@ public class FeatureWorkflowImpl implements FeatureWorkflow {
      * review) until it passes, then gate 2 (PR review), then gate 3 (release pack); the same 4
      * signals drive every episode sequentially (tech-stack §3.1: every gate reuses this shape). */
     private GateConfig activeGate;
+    /** Set once the quality agent's story verdict passes (directly, or after up to 2 auto-revise
+     * rounds, or after a human requestChanges cycle re-evaluates) — {@link #gateSatisfied} hard-
+     * blocks gate 1 while this is false, independent of the approval/comment signal surface. */
+    private boolean qualityPassed;
 
     @Override
     public void run(WorkItemRef item) {
@@ -119,109 +136,171 @@ public class FeatureWorkflowImpl implements FeatureWorkflow {
         board.transitionReadyForStory(item, grill);
         stage = CanonicalState.READY_FOR_STORY;
 
-        // 3. Draft the story + spec delta; create the child story item; awaiting-G1.
-        StoryDraft draft = agents.poDraft(item, grill);
-        PublishResult published = board.publishStory(item, draft);
-        storyRef = new WorkItemRef(item.profile(), published.storyBoardId());
-        currentPoHandoff = draft.handoff();
-        version = published.version();
-        stage = CanonicalState.AWAITING_G1;
-
-        // 4 + 5. Signal handlers (comment/approve/requestChanges/commentAdded) drive state below;
-        // wait for gate 1: two named, distinct-identity approvals on the current version, no open
-        // blocking comments.
-        Workflow.await(this::gateSatisfied);
-        board.transitionApproved(storyRef, version, 1);
-        stage = CanonicalState.APPROVED;
-
-        // 6. Plan: deterministic task breakdown from the spec delta's ADDED/MODIFIED scenarios.
-        PlanHandoff plan = agents.planTasks(storyRef, currentPoHandoff);
-        String defaultBranch = board.publishTasks(storyRef, plan);
-        stage = CanonicalState.PLANNED;
-
-        // 7. Build loop: omp over ACP, one shared story branch, wave by wave (a wave only starts
-        // once every earlier wave's tasks have returned).
-        String branch = "story/" + storyRef.boardId();
-        board.transitionInProgress(storyRef);
-        stage = CanonicalState.IN_PROGRESS;
-        Map<String, Task> tasksById = new LinkedHashMap<>();
-        for (Task t : plan.tasks()) {
-            tasksById.put(t.id(), t);
-        }
-        List<BuildResult> results = new ArrayList<>();
-        for (List<String> wave : plan.waves()) {
-            List<Promise<BuildResult>> pending = new ArrayList<>();
-            for (String taskId : wave) {
-                Task task = tasksById.get(taskId);
-                // Every wave's tasks share one activity type ("runTask"), so the Temporal UI's
-                // timeline/history view shows them as indistinguishable bars unless each execution
-                // carries its own summary (SDK "fixed summary" - annotates that view specifically).
-                BuildActivities taskBuild = Workflow.newActivityStub(BuildActivities.class,
-                        ActivityOptions.newBuilder(BUILD_ACTIVITY_OPTIONS)
-                                .setSummary(task.id() + ": " + task.scenario())
-                                .build());
-                pending.add(Async.function(taskBuild::runTask, storyRef, task, branch, defaultBranch));
-            }
-            for (Promise<BuildResult> p : pending) {
-                results.add(p.get());
-            }
+        // 3. Draft the story (or one story per actor/factor - PO agent split); publish every draft
+        // upfront so the UI can show every queued story immediately. Only index 0 starts active
+        // (awaiting-G1); the rest are queued until the pipeline reaches them below.
+        List<StoryDraft> drafts = agents.poDraft(item, grill);
+        List<PublishResult> published = new ArrayList<>();
+        for (int i = 0; i < drafts.size(); i++) {
+            published.add(board.publishStory(item, drafts.get(i), i, i > 0));
         }
 
-        // 8. Review the accumulated diff once, open the PR, post findings; awaiting-G2.
-        ReviewHandoff review = agents.reviewStory(storyRef, currentPoHandoff, plan.tasks(), results);
-        board.openStoryPr(storyRef, branch, plan.tasks(), results, review);
-        stage = CanonicalState.AWAITING_G2;
-
-        // 9. Gate 2: reuse the same approve/comment/requestChanges signal surface, now scoped to
-        // gate 2's roles (FSDeveloper, QA) and a fresh version/approval episode. Blocker findings
-        // from the review agent seed the open-blocking-comments set so gate 2 cannot pass while
-        // any remain open - the same mechanism gate 1 uses for human blocking comments
-        // (ReviewHandoff#hasBlockers()'s contract, otherwise unenforced).
-        activeGate = gate2;
-        version = 1;
-        approvals.clear();
-        comments.clear();
-        int findingIndex = 0;
-        for (ReviewFinding finding : review.findings()) {
-            if (finding.severity() == ReviewFinding.Severity.BLOCKER) {
-                comments.add(new Comment("finding-" + findingIndex++, REVIEW_BOT_IDENTITY, "review-agent", "pr",
-                        finding.file() != null ? finding.file() : finding.category(), finding.message(),
-                        Comment.Intent.CHANGE, true, version));
+        // 4-12. Sequential-in-one-workflow: each story runs the full G1->plan->build->G2->G3
+        // pipeline in turn before the next story activates.
+        for (int i = 0; i < drafts.size(); i++) {
+            storyRef = new WorkItemRef(item.profile(), published.get(i).storyBoardId());
+            currentPoHandoff = drafts.get(i).handoff();
+            version = published.get(i).version();
+            approvals.clear();
+            documentSignatures.clear();
+            comments.clear();
+            currentRelease = null;
+            activeGate = gate1;
+            qualityPassed = false;
+            if (i > 0) {
+                board.activateStory(storyRef);
             }
+            stage = CanonicalState.AWAITING_G1;
+
+            // Quality gate (hard-blocks G1): evaluate, auto-revise up to 2 rounds on FAIL, then
+            // fall through to the human requestChanges cycle (which re-evaluates - see below).
+            String storyMd = drafts.get(i).storyMarkdown();
+            QualityReport q = agents.evaluateQuality(storyRef, "story", storyMd);
+            board.saveQualityReport(storyRef, version, q);
+            int rounds = 0;
+            while (!q.passed() && rounds < 2) {
+                rounds++;
+                version++;
+                approvals.clear();
+                List<Comment> qualityComments = new ArrayList<>();
+                for (int fi = 0; fi < q.findings().size(); fi++) {
+                    qualityComments.add(new Comment("quality-" + version + "-" + fi, QUALITY_BOT_IDENTITY,
+                            "quality-agent", "story", "quality", q.findings().get(fi), Comment.Intent.CHANGE,
+                            false, version));
+                }
+                StoryDraft revised = agents.poRevise(storyRef, currentPoHandoff, qualityComments);
+                board.publishRevision(storyRef, version, revised, List.of());
+                currentPoHandoff = revised.handoff();
+                storyMd = revised.storyMarkdown();
+                q = agents.evaluateQuality(storyRef, "story", storyMd);
+                board.saveQualityReport(storyRef, version, q);
+            }
+            qualityPassed = q.passed();
+
+            // 4 + 5. Signal handlers (comment/approve/requestChanges/commentAdded) drive state
+            // below; wait for gate 1: quality passed, two named distinct-identity approvals on the
+            // current version, no open blocking comments.
+            Workflow.await(this::gateSatisfied);
+            board.transitionApproved(storyRef, version, 1);
+            stage = CanonicalState.APPROVED;
+
+            // 6. Plan: deterministic task breakdown from the spec delta's ADDED/MODIFIED scenarios.
+            PlanHandoff plan = agents.planTasks(storyRef, currentPoHandoff);
+            PublishTasksResult publishedTasks = board.publishTasks(storyRef, plan);
+            String defaultBranch = publishedTasks.defaultBranch();
+            stage = CanonicalState.PLANNED;
+
+            // Advisory per-task quality pass: the plan agent is deterministic (no revise path), so
+            // a failing task verdict is surfaced in the UI but never blocks the build loop.
+            for (Task t : plan.tasks()) {
+                String taskBoardId = publishedTasks.taskBoardIds().get(t.id());
+                if (taskBoardId == null) {
+                    continue;
+                }
+                WorkItemRef taskRef = new WorkItemRef(item.profile(), taskBoardId);
+                QualityReport taskQuality = agents.evaluateQuality(taskRef, "task", taskContent(t));
+                board.saveQualityReport(taskRef, 1, taskQuality);
+            }
+
+            // 7. Build loop: omp over ACP, one shared story branch, wave by wave (a wave only starts
+            // once every earlier wave's tasks have returned).
+            String branch = "story/" + storyRef.boardId();
+            board.transitionInProgress(storyRef);
+            stage = CanonicalState.IN_PROGRESS;
+            Map<String, Task> tasksById = new LinkedHashMap<>();
+            for (Task t : plan.tasks()) {
+                tasksById.put(t.id(), t);
+            }
+            List<BuildResult> results = new ArrayList<>();
+            for (List<String> wave : plan.waves()) {
+                List<Promise<BuildResult>> pending = new ArrayList<>();
+                for (String taskId : wave) {
+                    Task task = tasksById.get(taskId);
+                    // Every wave's tasks share one activity type ("runTask"), so the Temporal UI's
+                    // timeline/history view shows them as indistinguishable bars unless each
+                    // execution carries its own summary (SDK "fixed summary" - annotates that view
+                    // specifically).
+                    BuildActivities taskBuild = Workflow.newActivityStub(BuildActivities.class,
+                            ActivityOptions.newBuilder(BUILD_ACTIVITY_OPTIONS)
+                                    .setSummary(task.id() + ": " + task.scenario())
+                                    .build());
+                    pending.add(Async.function(taskBuild::runTask, storyRef, task, branch, defaultBranch));
+                }
+                for (Promise<BuildResult> p : pending) {
+                    results.add(p.get());
+                }
+            }
+
+            // 8. Review the accumulated diff once, open the PR, post findings; awaiting-G2.
+            ReviewHandoff review = agents.reviewStory(storyRef, currentPoHandoff, plan.tasks(), results);
+            board.openStoryPr(storyRef, branch, plan.tasks(), results, review);
+            stage = CanonicalState.AWAITING_G2;
+
+            // 9. Gate 2: reuse the same approve/comment/requestChanges signal surface, now scoped to
+            // gate 2's roles (FSDeveloper, QA) and a fresh version/approval episode. Blocker findings
+            // from the review agent seed the open-blocking-comments set so gate 2 cannot pass while
+            // any remain open - the same mechanism gate 1 uses for human blocking comments
+            // (ReviewHandoff#hasBlockers()'s contract, otherwise unenforced).
+            activeGate = gate2;
+            version = 1;
+            approvals.clear();
+            comments.clear();
+            int findingIndex = 0;
+            for (ReviewFinding finding : review.findings()) {
+                if (finding.severity() == ReviewFinding.Severity.BLOCKER) {
+                    comments.add(new Comment("finding-" + findingIndex++, REVIEW_BOT_IDENTITY, "review-agent", "pr",
+                            finding.file() != null ? finding.file() : finding.category(), finding.message(),
+                            Comment.Intent.CHANGE, true, version));
+                }
+            }
+            Workflow.await(this::gateSatisfied);
+            board.transitionApproved(storyRef, version, 2);
+            stage = CanonicalState.APPROVED;
+
+            // 10. Release agent drafts the pack (playbook §7); publish it, awaiting-G3.
+            ReleaseHandoff release = agents.draftReleasePack(storyRef, currentPoHandoff, plan.tasks(), results, review);
+            board.publishReleasePack(storyRef, release);
+            currentRelease = release;
+            stage = CanonicalState.AWAITING_G3;
+
+            // 11. Gate 3: a document-level "sign" is the same `approve` signal, `stage:
+            // "release-pack:<doc-id>"`; gate 3 opens once every document has a signature from its
+            // own named checker role (tech-stack §3.1, §3.4) - see gate3Satisfied/approveDocument.
+            activeGate = gate3;
+            version = 1;
+            approvals.clear();
+            documentSignatures.clear();
+            comments.clear();
+            Workflow.await(this::gateSatisfied);
+            board.transitionApproved(storyRef, version, 3);
+            stage = CanonicalState.APPROVED;
+
+            // 12. Deploy (playbook §7 step 6), then one monitor evaluation pass (playbook §8 step
+            // 1-3). A true multi-day watch window (the real default) is out of pilot scope; this
+            // proves the rule-evaluation -> evidence -> filed-card mechanism once, deterministically,
+            // right after deploy - a later phase would re-trigger this on a schedule instead of
+            // ending the workflow (or, for a multi-story feature, moving on to the next story).
+            board.deployRelease(storyRef, release, branch);
+            stage = CanonicalState.DONE;
+            MonitorHandoff monitorResult = agents.evaluateMonitorRules(storyRef, release.monitorRules());
+            board.fileMonitorCards(storyRef, monitorResult);
         }
-        Workflow.await(this::gateSatisfied);
-        board.transitionApproved(storyRef, version, 2);
-        stage = CanonicalState.APPROVED;
-
-        // 10. Release agent drafts the pack (playbook §7); publish it, awaiting-G3.
-        ReleaseHandoff release = agents.draftReleasePack(storyRef, currentPoHandoff, plan.tasks(), results, review);
-        board.publishReleasePack(storyRef, release);
-        currentRelease = release;
-        stage = CanonicalState.AWAITING_G3;
-
-        // 11. Gate 3: a document-level "sign" is the same `approve` signal, `stage:
-        // "release-pack:<doc-id>"`; gate 3 opens once every document has a signature from its own
-        // named checker role (tech-stack §3.1, §3.4) - see gate3Satisfied/approveDocument.
-        activeGate = gate3;
-        version = 1;
-        approvals.clear();
-        documentSignatures.clear();
-        comments.clear();
-        Workflow.await(this::gateSatisfied);
-        board.transitionApproved(storyRef, version, 3);
-        stage = CanonicalState.APPROVED;
-
-        // 12. Deploy (playbook §7 step 6), then one monitor evaluation pass (playbook §8 step 1-3).
-        // A true multi-day watch window (the real default) is out of pilot scope; this proves the
-        // rule-evaluation -> evidence -> filed-card mechanism once, deterministically, right after
-        // deploy - a later phase would re-trigger this on a schedule instead of ending the workflow.
-        board.deployRelease(storyRef, release, branch);
-        stage = CanonicalState.DONE;
-        MonitorHandoff monitorResult = agents.evaluateMonitorRules(storyRef, release.monitorRules());
-        board.fileMonitorCards(storyRef, monitorResult);
     }
 
     private boolean gateSatisfied() {
+        if (stage == CanonicalState.AWAITING_G1 && !qualityPassed) {
+            return false;
+        }
         if (!openBlockingComments().isEmpty()) {
             return false;
         }
@@ -306,6 +385,9 @@ public class FeatureWorkflowImpl implements FeatureWorkflow {
             StoryDraft revised = agents.poRevise(storyRef, currentPoHandoff, openComments);
             board.publishRevision(storyRef, version, revised, resolvedIds);
             currentPoHandoff = revised.handoff();
+            QualityReport q = agents.evaluateQuality(storyRef, "story", revised.storyMarkdown());
+            board.saveQualityReport(storyRef, version, q);
+            qualityPassed = q.passed();
         }
         if (stage == CanonicalState.AWAITING_G3) {
             documentSignatures.clear(); // pack_version bump invalidates every signature (playbook §7 "Rules")
@@ -325,7 +407,8 @@ public class FeatureWorkflowImpl implements FeatureWorkflow {
     @Override
     public ReviewState state() {
         Map<String, Approval> currentApprovals = stage == CanonicalState.AWAITING_G3 ? documentSignatures : approvals;
-        return new ReviewState(version, Map.copyOf(currentApprovals), openBlockingComments(), stage);
+        return new ReviewState(version, Map.copyOf(currentApprovals), openBlockingComments(), stage,
+                storyRef == null ? null : storyRef.boardId());
     }
 
     private boolean sodAllows(Approval a) {
@@ -341,5 +424,13 @@ public class FeatureWorkflowImpl implements FeatureWorkflow {
             }
         }
         return true;
+    }
+
+    /** Advisory task-quality content: a task has no markdown draft of its own (unlike a story), so
+     * this assembles the same fields {@code BoardSideEffectsImpl#taskDescription} writes to the
+     * board item description, for the quality agent to evaluate. */
+    private static String taskContent(Task t) {
+        return "# " + t.title() + "\n\nScenario: " + t.scenario() + "\nArea: " + t.area()
+                + "\nTouches: " + String.join(", ", t.touches()) + "\nTest: " + t.testPath();
     }
 }

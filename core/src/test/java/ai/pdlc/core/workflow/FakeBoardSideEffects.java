@@ -5,12 +5,15 @@ import ai.pdlc.core.domain.GrillHandoff;
 import ai.pdlc.core.domain.MonitorHandoff;
 import ai.pdlc.core.domain.PRRef;
 import ai.pdlc.core.domain.PlanHandoff;
+import ai.pdlc.core.domain.QualityReport;
 import ai.pdlc.core.domain.ReleaseHandoff;
 import ai.pdlc.core.domain.ReviewHandoff;
 import ai.pdlc.core.domain.Task;
 import ai.pdlc.core.domain.WorkItemRef;
 
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -20,12 +23,15 @@ class FakeBoardSideEffects implements BoardSideEffects {
     final List<WorkItemRef> readyForStoryCalls = new CopyOnWriteArrayList<>();
     final List<WorkItemRef> grillQuestionsPosted = new CopyOnWriteArrayList<>();
     final List<StoryDraft> published = new CopyOnWriteArrayList<>();
+    final List<Boolean> queuedFlags = new CopyOnWriteArrayList<>();
     final List<StoryDraft> revisions = new CopyOnWriteArrayList<>();
     final List<Integer> approvedVersions = new CopyOnWriteArrayList<>();
+    final List<WorkItemRef> activatedStories = new CopyOnWriteArrayList<>();
+    /** (boardId, version, verdict) tuples captured by {@link #saveQualityReport}. */
+    final List<String> qualityReportsSaved = new CopyOnWriteArrayList<>();
     final AtomicInteger staleEscalations = new AtomicInteger();
 
     GateConfig gate1 = new GateConfig(List.of("PO", "SquadLead"), true);
-    String storyBoardId = "4413";
 
     @Override
     public GateConfig loadGate1Config(String profile) {
@@ -43,9 +49,10 @@ class FakeBoardSideEffects implements BoardSideEffects {
     }
 
     @Override
-    public PublishResult publishStory(WorkItemRef feature, StoryDraft draft) {
+    public PublishResult publishStory(WorkItemRef feature, StoryDraft draft, int storyIndex, boolean queued) {
         published.add(draft);
-        return new PublishResult(storyBoardId, 1, "hash-v1");
+        queuedFlags.add(queued);
+        return new PublishResult("story-" + storyIndex, 1, "hash-v1");
     }
 
     @Override
@@ -64,6 +71,16 @@ class FakeBoardSideEffects implements BoardSideEffects {
         staleEscalations.incrementAndGet();
     }
 
+    @Override
+    public void activateStory(WorkItemRef story) {
+        activatedStories.add(story);
+    }
+
+    @Override
+    public void saveQualityReport(WorkItemRef item, int version, QualityReport report) {
+        qualityReportsSaved.add(item.boardId() + ":" + version + ":" + (report.passed() ? "passed" : "failed"));
+    }
+
     GateConfig gate2 = new GateConfig(List.of("FSDeveloper", "QA"), true);
     String defaultBranch = "main";
     final List<PlanHandoff> tasksPublished = new CopyOnWriteArrayList<>();
@@ -76,9 +93,13 @@ class FakeBoardSideEffects implements BoardSideEffects {
     }
 
     @Override
-    public String publishTasks(WorkItemRef story, PlanHandoff plan) {
+    public PublishTasksResult publishTasks(WorkItemRef story, PlanHandoff plan) {
         tasksPublished.add(plan);
-        return defaultBranch;
+        Map<String, String> taskBoardIds = new LinkedHashMap<>();
+        for (Task t : plan.tasks()) {
+            taskBoardIds.put(t.id(), "task-" + t.id());
+        }
+        return new PublishTasksResult(defaultBranch, taskBoardIds);
     }
 
     @Override
@@ -119,5 +140,10 @@ class FakeBoardSideEffects implements BoardSideEffects {
     @Override
     public void fileMonitorCards(WorkItemRef story, MonitorHandoff monitor) {
         monitorEvaluations.add(monitor);
+    }
+
+    @Override
+    public void saveAgentMentionResult(String commentId, String markdown, String status) {
+        // Not exercised by FeatureWorkflowImplTest; the mention flow has its own workflow.
     }
 }

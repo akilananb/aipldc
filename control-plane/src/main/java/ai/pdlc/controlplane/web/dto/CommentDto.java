@@ -16,5 +16,9 @@ public record CommentDto(
         Integer resolvedInVersion,
         String agentReply,
         Anchor anchor,
-        boolean drifted) {
+        boolean drifted,
+        String agentName,
+        String agentResultMd,
+        String agentResultStatus,
+        String agentResultApprovedBy) {
 }

@@ -3,6 +3,7 @@ package ai.pdlc.core.workflow;
 import ai.pdlc.core.config.GateConfig;
 import ai.pdlc.core.domain.GrillHandoff;
 import ai.pdlc.core.domain.MonitorHandoff;
+import ai.pdlc.core.domain.QualityReport;
 import ai.pdlc.core.domain.PRRef;
 import ai.pdlc.core.domain.PlanHandoff;
 import ai.pdlc.core.domain.ReleaseHandoff;
@@ -37,9 +38,12 @@ public interface BoardSideEffects {
     void transitionReadyForStory(WorkItemRef item, GrillHandoff grill);
 
     /** Creates the child User Story, writes the spec delta + story files, inserts {@code artifacts} v1,
-     * appends the {@code review.md} v1 block, sets {@code awaiting-G1}. */
+     * appends the {@code review.md} v1 block. {@code storyIndex} is this story's position among a
+     * multi-story split (0 = first/active); {@code queued} sets state {@code queued} instead of
+     * {@code awaiting-G1} for every story after the first — it only becomes {@code awaiting-G1} once
+     * {@link #activateStory} runs. */
     @ActivityMethod
-    PublishResult publishStory(WorkItemRef feature, StoryDraft draft);
+    PublishResult publishStory(WorkItemRef feature, StoryDraft draft, int storyIndex, boolean queued);
 
     /** Writes the revised story/spec delta, inserts the new {@code artifacts} row, appends the
      * {@code review.md} revision block, replies to the given comment ids as resolved. */
@@ -62,9 +66,10 @@ public interface BoardSideEffects {
 
     /** Creates one board Task item per {@link Task} (kind {@code task}, parent = the story),
      * writes {@code tasks.md} next to the story's spec delta, sets {@code planned}. Returns the
-     * profile's repo default branch — the target the story's PR opens against. */
+     * profile's repo default branch (the target the story's PR opens against) plus each task's
+     * board id, keyed by {@link Task#id()} — used to file each task's advisory quality report. */
     @ActivityMethod
-    String publishTasks(WorkItemRef story, PlanHandoff plan);
+    PublishTasksResult publishTasks(WorkItemRef story, PlanHandoff plan);
 
     /** Build loop starting: {@code board.transition(in-progress)}. */
     @ActivityMethod
@@ -97,4 +102,18 @@ public interface BoardSideEffects {
      * evidence attached, state {@code new} — playbook §8 "Produces"). No-op if nothing tripped. */
     @ActivityMethod
     void fileMonitorCards(WorkItemRef story, MonitorHandoff monitor);
+
+    /** Stores the agent's draft (status pending|failed) on the mention comment; appends review_events. */
+    @ActivityMethod
+    void saveAgentMentionResult(String commentId, String markdown, String status);
+
+    /** A queued story (see {@link #publishStory}) becomes the pipeline's active story once the
+     * previous story's episode finishes: {@code board.transition(awaiting-G1)}. */
+    @ActivityMethod
+    void activateStory(WorkItemRef story);
+
+    /** Persists one quality-agent verdict for a story/task draft version and appends it to the
+     * dual audit trail (review_events always; review.md too, for stories). */
+    @ActivityMethod
+    void saveQualityReport(WorkItemRef item, int version, QualityReport report);
 }

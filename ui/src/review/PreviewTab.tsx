@@ -3,6 +3,7 @@ import { MousePointerClick } from 'lucide-react';
 import { Flex, Text } from '@radix-ui/themes';
 import Markdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import rehypeHighlight from 'rehype-highlight';
 import type { LineRange } from '../ui-utils';
 
 interface Props {
@@ -96,7 +97,7 @@ export default function PreviewTab({ markdown, onLineSelect, onRangeSelect, sele
         }}
         onMouseUp={handleMouseUp}
       >
-        <Markdown remarkPlugins={[remarkGfm]} components={components}>
+        <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]} components={components}>
           {markdown}
         </Markdown>
       </div>

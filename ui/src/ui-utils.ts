@@ -11,6 +11,8 @@ export function stateBadgeColor(state: string): BadgeColor {
     case 'awaiting-G3':
     case 'needs-clarification':
       return 'amber';
+    case 'queued':
+      return 'blue';
     case 'stale':
       return 'red';
     case 'done':

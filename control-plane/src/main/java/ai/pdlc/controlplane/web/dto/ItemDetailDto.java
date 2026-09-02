@@ -13,5 +13,6 @@ public record ItemDetailDto(
         Integer latestVersion,
         String latestContentHash,
         ReviewStateDto gate,
-        String parentId) {
+        String parentId,
+        String qualityVerdict) {
 }

@@ -68,7 +68,7 @@ class WebhookControllerTest {
 
         @Override
         public ReviewState state() {
-            return new ReviewState(1, Map.of(), List.of(), ai.pdlc.core.domain.CanonicalState.NEW);
+            return new ReviewState(1, Map.of(), List.of(), ai.pdlc.core.domain.CanonicalState.NEW, null);
         }
     }
 

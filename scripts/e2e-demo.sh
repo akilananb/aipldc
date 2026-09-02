@@ -81,6 +81,24 @@ poll "story awaiting-G1" 60 bash -c \
 log "5/9 Story v1"
 api "$BASE/api/artifacts/$STORY_ID/versions/1" | jq -r .storyMarkdown
 
+# 5b. Poll until the quality agent's story verdict passes — the quality gate hard-blocks gate 1
+# (auto-revise up to 2 rounds may run first), so every approve call below must wait for this.
+log "5b/9 Poll for quality verdict == passed"
+QUALITY_DEADLINE=$((SECONDS + 120))
+QUALITY_JSON="{}"
+while true; do
+  QUALITY_JSON=$(curl -s "$BASE/api/items/$STORY_ID/quality")
+  if echo "$QUALITY_JSON" | jq -e 'select(.verdict=="passed")' >/dev/null 2>&1; then
+    log "    OK: quality verdict passed (score $(echo "$QUALITY_JSON" | jq -r .score))"
+    break
+  fi
+  if [ "$SECONDS" -ge "$QUALITY_DEADLINE" ]; then
+    log "FAIL: quality verdict did not pass within 120s; last response: $QUALITY_JSON"
+    exit 1
+  fi
+  sleep 3
+done
+
 # 6. Blocking comment on line 13; approve while blocking comment is open must not pass the gate.
 log "6/9 POST blocking comment (line:13)"
 api -X POST "$BASE/api/artifacts/$STORY_ID/comments" \

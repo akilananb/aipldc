@@ -8,17 +8,22 @@ import ai.pdlc.controlplane.persistence.ArtifactEntity;
 import ai.pdlc.controlplane.persistence.ArtifactRepository;
 import ai.pdlc.controlplane.persistence.WorkItemEntity;
 import ai.pdlc.controlplane.persistence.WorkItemRepository;
+import ai.pdlc.controlplane.persistence.QualityReportEntity;
+import ai.pdlc.controlplane.persistence.QualityReportRepository;
 import ai.pdlc.controlplane.review.ReviewTrailService;
 import ai.pdlc.controlplane.temporal.WorkflowStubs;
 import ai.pdlc.controlplane.web.dto.ApproveRequest;
 import ai.pdlc.controlplane.web.dto.ItemDetailDto;
 import ai.pdlc.controlplane.web.dto.ItemSummaryDto;
 import ai.pdlc.controlplane.web.dto.ReviewStateDto;
+import ai.pdlc.controlplane.web.dto.QualityReportDto;
+import ai.pdlc.controlplane.web.dto.SpecDocsDto;
 import ai.pdlc.core.config.PdlcConfig;
 import ai.pdlc.core.domain.Approval;
 import ai.pdlc.core.domain.WorkItem;
 import ai.pdlc.core.domain.WorkItemRef;
 import ai.pdlc.core.port.BoardPort;
+import ai.pdlc.core.port.RepoPort;
 import ai.pdlc.core.review.ReviewMdWriter;
 import ai.pdlc.core.workflow.FeatureWorkflow;
 import ai.pdlc.core.workflow.ReviewState;
@@ -37,38 +42,47 @@ import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 @RestController
 @RequestMapping("/api/items")
 public class ItemsController {
 
+    private static final Pattern AREA_PATTERN = Pattern.compile("Area:\\s*([^\\s·]+)");
+
     private final WorkItemRepository workItems;
     private final ArtifactRepository artifacts;
     private final ApprovalRepository approvalOps;
+    private final QualityReportRepository qualityReports;
     private final BoardPort board;
     private final PdlcConfig pdlcConfig;
     private final WorkflowStubs workflowStubs;
     private final IdentityResolver identityResolver;
     private final ReviewTrailService reviewTrail;
+    private final RepoPort repo;
 
     public ItemsController(WorkItemRepository workItems, ArtifactRepository artifacts,
-                            ApprovalRepository approvalOps, BoardPort board, PdlcConfig pdlcConfig,
-                            WorkflowStubs workflowStubs, IdentityResolver identityResolver, ReviewTrailService reviewTrail) {
+                            ApprovalRepository approvalOps, QualityReportRepository qualityReports, BoardPort board,
+                            PdlcConfig pdlcConfig, WorkflowStubs workflowStubs, IdentityResolver identityResolver,
+                            ReviewTrailService reviewTrail, RepoPort repo) {
         this.workItems = workItems;
         this.artifacts = artifacts;
         this.approvalOps = approvalOps;
+        this.qualityReports = qualityReports;
         this.board = board;
         this.pdlcConfig = pdlcConfig;
         this.workflowStubs = workflowStubs;
         this.identityResolver = identityResolver;
         this.reviewTrail = reviewTrail;
+        this.repo = repo;
     }
 
     @GetMapping
     public List<ItemSummaryDto> list() {
         return workItems.findAllByOrderByUpdatedAtDesc().stream()
                 .map(row -> new ItemSummaryDto(row.id(), row.boardId(), row.kind(),
-                        safeTitle(row), row.canonicalState(), row.updatedAt(), row.parentId()))
+                        safeTitle(row), row.canonicalState(), row.updatedAt(), row.parentId(), latestQualityVerdict(row.id())))
                 .toList();
     }
 
@@ -80,7 +94,15 @@ public class ItemsController {
         ReviewStateDto gate = queryGate(row);
         return new ItemDetailDto(row.id(), row.profile(), row.boardId(), row.kind(), item.title(), item.description(),
                 row.canonicalState(), latest == null ? null : latest.version(), latest == null ? null : latest.contentHash(),
-                gate, row.parentId());
+                gate, row.parentId(), latestQualityVerdict(row.id()));
+    }
+
+    @GetMapping("/{id}/quality")
+    public QualityReportDto quality(@PathVariable UUID id) {
+        WorkItemEntity row = requireItem(id);
+        QualityReportEntity latest = qualityReports.findByWorkItemIdOrderByCreatedAtDesc(row.id()).stream().findFirst()
+                .orElseThrow(() -> new NotFoundException("No quality report for item " + id));
+        return new QualityReportDto(latest.verdict(), latest.score(), latest.reportMd(), latest.version(), latest.createdAt().toString());
     }
 
     @GetMapping(value = "/{id}/review-md", produces = MediaType.TEXT_PLAIN_VALUE)
@@ -99,6 +121,37 @@ public class ItemsController {
         return board.listComments(new WorkItemRef(row.profile(), row.boardId()));
     }
 
+    @GetMapping("/{id}/spec-docs")
+    public SpecDocsDto specDocs(@PathVariable UUID id) {
+        WorkItemEntity row = requireItem(id);
+        WorkItemEntity storyRow = switch (row.kind()) {
+            case "story" -> row;
+            case "task" -> workItems.findByProfileAndBoardId(row.profile(), row.parentId())
+                    .orElseThrow(() -> new NotFoundException("No parent story for task " + id));
+            default -> throw new NotFoundException("No spec docs for kind " + row.kind());
+        };
+
+        String slug = storyRow.specChangePath();
+        String proposalMd = null;
+        String specMd = null;
+        String tasksMd = null;
+        if (slug != null) {
+            String defaultBranch = pdlcConfig.profile(row.profile()).repo().defaultBranch();
+            proposalMd = readOrNull(defaultBranch, slug + "/proposal.md");
+            tasksMd = readOrNull(defaultBranch, slug + "/tasks.md");
+            Matcher areaMatch = proposalMd == null ? null : AREA_PATTERN.matcher(proposalMd);
+            String area = areaMatch != null && areaMatch.find() ? areaMatch.group(1) : "default";
+            specMd = readOrNull(defaultBranch, slug + "/specs/" + area + "/spec.md");
+        }
+
+        List<SpecDocsDto.DocApproval> approvals = artifacts.findByWorkItemIdOrderByVersionDesc(storyRow.id()).stream()
+                .flatMap(a -> approvalOps.findByArtifactIdAndVersion(a.id(), a.version()).stream())
+                .map(e -> new SpecDocsDto.DocApproval(e.authorSub(), e.role(), e.version(), e.at()))
+                .toList();
+
+        return new SpecDocsDto(storyRow.id(), safeTitle(storyRow), slug, proposalMd, specMd, tasksMd, approvals);
+    }
+
     @PostMapping("/{id}/approve")
     public ResponseEntity<ReviewStateDto> approve(@PathVariable UUID id, @RequestBody ApproveRequest request, HttpServletRequest httpRequest) {
         Identity identity = identityResolver.resolve(httpRequest);
@@ -111,9 +164,19 @@ public class ItemsController {
         ArtifactEntity latest = artifacts.findByWorkItemIdOrderByVersionDesc(id).stream().findFirst()
                 .orElseThrow(() -> new NotFoundException("No artifact for item " + id));
 
-        Approval approval = new Approval(identity.user(), identity.role(), "story", latest.version(), latest.contentHash(), Instant.now());
         WorkItemRef featureRef = new WorkItemRef(story.profile(), story.parentId());
         FeatureWorkflow stub = workflowStubs.featureWorkflow(featureRef);
+
+        ReviewState pre = stub.state();
+        if (pre.activeStoryBoardId() != null && !pre.activeStoryBoardId().equals(story.boardId())) {
+            throw new ConflictException("Story is queued; the previous story must finish first");
+        }
+        String qualityVerdict = latestQualityVerdict(story.id());
+        if (qualityVerdict != null && !"passed".equals(qualityVerdict)) {
+            throw new ConflictException("Quality evaluation has not passed for this story");
+        }
+
+        Approval approval = new Approval(identity.user(), identity.role(), "story", latest.version(), latest.contentHash(), Instant.now());
         stub.approve(approval);
 
         ReviewState state = stub.state();
@@ -137,9 +200,16 @@ public class ItemsController {
         WorkItemEntity story = requireItem(id);
         WorkItemRef featureRef = new WorkItemRef(story.profile(), story.parentId());
         FeatureWorkflow stub = workflowStubs.featureWorkflow(featureRef);
+
+        ReviewState pre = stub.state();
+        if (pre.activeStoryBoardId() != null && !pre.activeStoryBoardId().equals(story.boardId())) {
+            throw new ConflictException("Story is queued; the previous story must finish first");
+        }
+
         stub.requestChanges(identity.user());
         return ResponseEntity.ok(ReviewStateDto.from(stub.state()));
     }
+
 
     private WorkItemEntity requireItem(UUID id) {
         return workItems.findById(id).orElseThrow(() -> new NotFoundException("No work item " + id));
@@ -159,8 +229,25 @@ public class ItemsController {
         }
         try {
             FeatureWorkflow stub = workflowStubs.featureWorkflow(new WorkItemRef(row.profile(), row.parentId()));
-            return ReviewStateDto.from(stub.state());
+            ReviewState state = stub.state();
+            if (!row.boardId().equals(state.activeStoryBoardId())) {
+                return null;
+            }
+            return ReviewStateDto.from(state);
         } catch (RuntimeException notRunning) {
+            return null;
+        }
+    }
+
+    private String latestQualityVerdict(UUID workItemId) {
+        return qualityReports.findByWorkItemIdOrderByCreatedAtDesc(workItemId).stream().findFirst()
+                .map(QualityReportEntity::verdict).orElse(null);
+    }
+
+    private String readOrNull(String branch, String path) {
+        try {
+            return repo.readFile(branch, path);
+        } catch (RuntimeException notFound) {
             return null;
         }
     }

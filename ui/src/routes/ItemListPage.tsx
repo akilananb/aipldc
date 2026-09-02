@@ -11,6 +11,7 @@ import EmptyState from '../components/EmptyState';
 import StatusBadge from '../components/StatusBadge';
 import RelativeTime from '../components/RelativeTime';
 import { stateBadgeColor } from '../ui-utils';
+import QualityIcon from '../components/QualityIcon';
 
 type KindFilter = 'all' | 'feature' | 'story';
 
@@ -130,6 +131,7 @@ export default function ItemListPage() {
               <Table.ColumnHeaderCell>Title</Table.ColumnHeaderCell>
               <Table.ColumnHeaderCell>Kind</Table.ColumnHeaderCell>
               <Table.ColumnHeaderCell>State</Table.ColumnHeaderCell>
+              <Table.ColumnHeaderCell>Quality</Table.ColumnHeaderCell>
               <Table.ColumnHeaderCell>Attention</Table.ColumnHeaderCell>
               <Table.ColumnHeaderCell>Updated</Table.ColumnHeaderCell>
             </Table.Row>
@@ -164,6 +166,9 @@ export default function ItemListPage() {
                   <Table.Cell>{item.kind}</Table.Cell>
                   <Table.Cell>
                     <StatusBadge state={item.canonicalState} />
+                  </Table.Cell>
+                  <Table.Cell>
+                    <QualityIcon verdict={item.qualityVerdict} />
                   </Table.Cell>
                   <Table.Cell>
                     {needsAttention(item.canonicalState) && <Badge color="amber">needs your review</Badge>}

@@ -10,6 +10,7 @@ import PageHeader from '../components/PageHeader';
 import StatusBadge from '../components/StatusBadge';
 import ErrorCallout from '../components/ErrorCallout';
 import EmptyState from '../components/EmptyState';
+import QualityIcon from '../components/QualityIcon';
 import { useReviewActions } from '../review/useReviewActions';
 import GatePanel from '../review/GatePanel';
 import CommentPanel from '../review/CommentPanel';
@@ -17,11 +18,12 @@ import PreviewTab from '../review/PreviewTab';
 import SourceTab from '../review/SourceTab';
 import DiffTab from '../review/DiffTab';
 import ReviewMdTab from '../review/ReviewMdTab';
+import QualityTab from '../review/QualityTab';
 import ReleaseTab from '../review/ReleaseTab';
 import TaskDetailPage from './TaskDetailPage';
 import FeaturePage from './FeaturePage';
 
-type Tab = 'preview' | 'source' | 'diff' | 'tasks' | 'release' | 'reviewmd';
+type Tab = 'preview' | 'source' | 'diff' | 'tasks' | 'quality' | 'release' | 'reviewmd';
 
 export default function ReviewPage() {
   const { id } = useParams<{ id: string }>();
@@ -154,6 +156,7 @@ export default function ReviewPage() {
             <Tabs.Trigger value="diff">Diff</Tabs.Trigger>
           )}
           <Tabs.Trigger value="tasks">Tasks ({childTasks.length})</Tabs.Trigger>
+          <Tabs.Trigger value="quality">Quality</Tabs.Trigger>
           <Tabs.Trigger value="release">Release</Tabs.Trigger>
           <Tabs.Trigger value="reviewmd">review.md</Tabs.Trigger>
         </Tabs.List>
@@ -216,6 +219,7 @@ export default function ReviewPage() {
                   <Table.Row>
                     <Table.ColumnHeaderCell>Title</Table.ColumnHeaderCell>
                     <Table.ColumnHeaderCell>State</Table.ColumnHeaderCell>
+                    <Table.ColumnHeaderCell>Quality</Table.ColumnHeaderCell>
                     <Table.ColumnHeaderCell>Updated</Table.ColumnHeaderCell>
                   </Table.Row>
                 </Table.Header>
@@ -229,6 +233,9 @@ export default function ReviewPage() {
                         <StatusBadge state={task.canonicalState} />
                       </Table.Cell>
                       <Table.Cell>
+                        <QualityIcon verdict={task.qualityVerdict} />
+                      </Table.Cell>
+                      <Table.Cell>
                         <Text size="2" color="gray">
                           {new Date(task.updatedAt).toLocaleString()}
                         </Text>
@@ -238,6 +245,10 @@ export default function ReviewPage() {
                 </Table.Body>
               </Table.Root>
             )}
+          </Tabs.Content>
+
+          <Tabs.Content value="quality">
+            <QualityTab id={id!} />
           </Tabs.Content>
 
           <Tabs.Content value="release">

@@ -2,6 +2,7 @@ package ai.pdlc.agents;
 
 import ai.pdlc.agents.grill.GrillAgent;
 import ai.pdlc.agents.po.PoAgent;
+import ai.pdlc.agents.quality.QualityAgent;
 import ai.pdlc.agents.release.ReleaseAgent;
 import ai.pdlc.agents.review.ReviewAgent;
 import ai.pdlc.agents.templates.PromptTemplates;
@@ -69,7 +70,7 @@ class AgentSpringWiringTest {
     @Test
     void springContainerConstructsPromptTemplatesAndAllFourAgentsViaConstructorInjection() {
         try (AnnotationConfigApplicationContext ctx = new AnnotationConfigApplicationContext()) {
-            ctx.register(TestBeans.class, PromptTemplates.class, GrillAgent.class, PoAgent.class, ReviewAgent.class, ReleaseAgent.class);
+            ctx.register(TestBeans.class, PromptTemplates.class, GrillAgent.class, PoAgent.class, ReviewAgent.class, ReleaseAgent.class, QualityAgent.class);
             ctx.refresh();
 
             assertThat(ctx.getBean(PromptTemplates.class)).isNotNull();
@@ -77,6 +78,7 @@ class AgentSpringWiringTest {
             assertThat(ctx.getBean(PoAgent.class)).isNotNull();
             assertThat(ctx.getBean(ReviewAgent.class)).isNotNull();
             assertThat(ctx.getBean(ReleaseAgent.class)).isNotNull();
+            assertThat(ctx.getBean(QualityAgent.class)).isNotNull();
 
             // Prove it's the Profile-taking constructor that won (not an accidental default), and
             // that the rendered prompt actually flows through the classpath-default template.

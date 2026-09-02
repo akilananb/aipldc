@@ -8,6 +8,8 @@ import ai.pdlc.controlplane.persistence.PrEntity;
 import ai.pdlc.controlplane.persistence.PrRepository;
 import ai.pdlc.controlplane.persistence.ReleaseDocumentEntity;
 import ai.pdlc.controlplane.persistence.ReleaseDocumentRepository;
+import ai.pdlc.controlplane.persistence.QualityReportEntity;
+import ai.pdlc.controlplane.persistence.QualityReportRepository;
 import ai.pdlc.controlplane.persistence.WorkItemEntity;
 import ai.pdlc.controlplane.persistence.WorkItemRepository;
 import ai.pdlc.controlplane.review.ReviewTrailService;
@@ -19,6 +21,7 @@ import ai.pdlc.core.domain.GrillHandoff;
 import ai.pdlc.core.domain.GrillQuestion;
 import ai.pdlc.core.domain.MonitorHandoff;
 import ai.pdlc.core.domain.PRRef;
+import ai.pdlc.core.domain.QualityReport;
 import ai.pdlc.core.domain.PlanHandoff;
 import ai.pdlc.core.domain.ReleaseDocument;
 import ai.pdlc.core.domain.ReleaseHandoff;
@@ -37,7 +40,10 @@ import ai.pdlc.core.review.ReviewMdWriter;
 import ai.pdlc.core.workflow.BoardSideEffects;
 import ai.pdlc.core.workflow.BuildResult;
 import ai.pdlc.core.workflow.PublishResult;
+import ai.pdlc.core.workflow.PublishTasksResult;
 import ai.pdlc.core.workflow.StoryDraft;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
@@ -56,6 +62,8 @@ import java.util.UUID;
 @Component
 public class BoardSideEffectsImpl implements BoardSideEffects {
 
+    private static final Logger log = LoggerFactory.getLogger(BoardSideEffectsImpl.class);
+
     private static final String MAKER_BOT_IDENTITY = "po-agent-bot";
     private static final String GRILL_BOT_IDENTITY = "grill-agent-bot";
     private static final String RELEASE_BOT_IDENTITY = "release-agent-bot";
@@ -70,12 +78,14 @@ public class BoardSideEffectsImpl implements BoardSideEffects {
     private final ReviewTrailService reviewTrail;
     private final PrRepository prs;
     private final ReleaseDocumentRepository releaseDocuments;
+    private final QualityReportRepository qualityReports;
     private final JdbcTemplate jdbc;
 
     public BoardSideEffectsImpl(PdlcConfig pdlcConfig, BoardPort board, RepoPort repo, CiPort ci,
                                  WorkItemRepository workItems, ArtifactRepository artifacts,
                                  CommentRepository comments, ReviewTrailService reviewTrail,
-                                 PrRepository prs, ReleaseDocumentRepository releaseDocuments, JdbcTemplate jdbc) {
+                                 PrRepository prs, ReleaseDocumentRepository releaseDocuments,
+                                 QualityReportRepository qualityReports, JdbcTemplate jdbc) {
         this.pdlcConfig = pdlcConfig;
         this.board = board;
         this.repo = repo;
@@ -86,6 +96,7 @@ public class BoardSideEffectsImpl implements BoardSideEffects {
         this.reviewTrail = reviewTrail;
         this.prs = prs;
         this.releaseDocuments = releaseDocuments;
+        this.qualityReports = qualityReports;
         this.jdbc = jdbc;
     }
 
@@ -109,17 +120,18 @@ public class BoardSideEffectsImpl implements BoardSideEffects {
     }
 
     @Override
-    public PublishResult publishStory(WorkItemRef feature, StoryDraft draft) {
+    public PublishResult publishStory(WorkItemRef feature, StoryDraft draft, int storyIndex, boolean queued) {
         ensureWorkItem(feature, "feature", null);
 
-        String idempotencyKey = feature.workflowId() + ":publishStory";
+        String idempotencyKey = feature.workflowId() + ":publishStory:" + storyIndex;
         String title = firstHeadingOrDefault(draft.storyMarkdown(), "Untitled story");
         var created = board.createItem(feature.profile(), "story", Map.of(
                 "title", title,
                 "description", draft.storyMarkdown(),
                 "_idempotencyKey", idempotencyKey), feature.boardId());
         WorkItemRef storyRef = new WorkItemRef(feature.profile(), created.id());
-        board.transition(storyRef, CanonicalState.AWAITING_G1);
+        CanonicalState initialState = queued ? CanonicalState.QUEUED : CanonicalState.AWAITING_G1;
+        board.transition(storyRef, initialState);
 
         String slug = draft.handoff().change();
         Map<String, String> files = changeFolderFiles(slug, draft);
@@ -128,7 +140,7 @@ public class BoardSideEffectsImpl implements BoardSideEffects {
 
         String contentHash = Anchor.hash(draft.storyMarkdown());
         WorkItemEntity storyRow = ensureWorkItem(storyRef, "story", feature.boardId());
-        workItems.save(storyRow.withCanonicalState(CanonicalState.AWAITING_G1.wireValue()).withSpecChangePath(slug));
+        workItems.save(storyRow.withCanonicalState(initialState.wireValue()).withSpecChangePath(slug));
         artifacts.save(ArtifactEntity.newRow(storyRow.id(), "story", 1, contentHash, commit.sha(), MAKER_BOT_IDENTITY));
 
         String investSummary = draft.handoff().investAllPass() ? "INVEST pass" : "INVEST partial";
@@ -201,16 +213,18 @@ public class BoardSideEffectsImpl implements BoardSideEffects {
     }
 
     @Override
-    public String publishTasks(WorkItemRef story, PlanHandoff plan) {
+    public PublishTasksResult publishTasks(WorkItemRef story, PlanHandoff plan) {
         WorkItemEntity storyRow = workItems.findByProfileAndBoardId(story.profile(), story.boardId())
                 .orElseThrow(() -> new IllegalStateException("No work_items row for story " + story));
 
+        Map<String, String> taskBoardIds = new LinkedHashMap<>();
         for (Task task : plan.tasks()) {
             var created = board.createItem(story.profile(), "task", Map.of(
                     "title", task.title(),
                     "description", taskDescription(task),
                     "_idempotencyKey", story.workflowId() + ":task:" + task.id()), story.boardId());
             ensureWorkItem(new WorkItemRef(story.profile(), created.id()), "task", story.boardId());
+            taskBoardIds.put(task.id(), created.id());
         }
 
         String defaultBranch = pdlcConfig.profile(story.profile()).repo().defaultBranch();
@@ -224,7 +238,7 @@ public class BoardSideEffectsImpl implements BoardSideEffects {
         reviewTrail.appendReviewEvent(storyRow.id(), "planned",
                 Map.of("tasks", plan.tasks().size(), "waves", plan.waves().size()));
 
-        return defaultBranch;
+        return new PublishTasksResult(defaultBranch, taskBoardIds);
     }
 
     @Override
@@ -448,5 +462,46 @@ public class BoardSideEffectsImpl implements BoardSideEffects {
                     .append(" -> ").append(row.codeRef()).append('\n');
         }
         return sb.toString();
+    }
+
+    @Override
+    public void saveAgentMentionResult(String commentId, String markdown, String status) {
+        CommentEntity entity = comments.findById(UUID.fromString(commentId)).orElse(null);
+        if (entity == null) {
+            log.warn("Agent mention result for comment {} dropped: comment row no longer exists", commentId);
+            return;
+        }
+        comments.save(entity.withAgentResult(markdown, status));
+
+        ArtifactEntity artifact = artifacts.findById(entity.artifactId()).orElse(null);
+        if (artifact == null) {
+            log.warn("Agent mention result for comment {} saved, but its artifact {} no longer exists; skipping review_events", commentId, entity.artifactId());
+            return;
+        }
+        reviewTrail.appendReviewEvent(artifact.workItemId(), "agent-result-drafted",
+                Map.of("commentId", commentId, "agent", entity.agentName(), "status", status));
+    }
+
+    @Override
+    public void activateStory(WorkItemRef story) {
+        WorkItemEntity storyRow = workItems.findByProfileAndBoardId(story.profile(), story.boardId())
+                .orElseThrow(() -> new IllegalStateException("No work_items row for story " + story));
+        board.transition(story, CanonicalState.AWAITING_G1);
+        workItems.save(storyRow.withCanonicalState(CanonicalState.AWAITING_G1.wireValue()));
+        reviewTrail.appendReviewEvent(storyRow.id(), "story-activated", Map.of("boardId", story.boardId()));
+    }
+
+    @Override
+    public void saveQualityReport(WorkItemRef item, int version, QualityReport report) {
+        WorkItemEntity row = workItems.findByProfileAndBoardId(item.profile(), item.boardId())
+                .orElseThrow(() -> new IllegalStateException("No work_items row for " + item));
+        String verdict = report.passed() ? "passed" : "failed";
+        qualityReports.save(QualityReportEntity.newRow(row.id(), version, report.subjectKind(), verdict, report.score(), report.reportMd()));
+        reviewTrail.appendReviewEvent(row.id(), "quality-evaluated",
+                Map.of("version", version, "verdict", verdict, "score", report.score()));
+        if (row.specChangePath() != null) {
+            reviewTrail.appendReviewMd(item, row.specChangePath(),
+                    ReviewMdWriter.qualityBlock(version, verdict, report.score(), OffsetDateTime.now()));
+        }
     }
 }

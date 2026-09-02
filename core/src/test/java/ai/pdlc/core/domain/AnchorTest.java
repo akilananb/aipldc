@@ -35,4 +35,17 @@ class AnchorTest {
         Anchor v2 = Anchor.forLine(15, lineText, "listItem", "rate limit"); // same text, shifted down
         assertThat(v2.anchorText()).isEqualTo(v1.anchorText());
     }
+
+    @Test
+    void forRangeNormalizesDegenerateRangesToSingleLine() {
+        Anchor range = Anchor.forRange(13, 17, "GIVEN a range", "paragraph", null);
+        assertThat(range.line()).isEqualTo(13);
+        assertThat(range.endLine()).isEqualTo(17);
+
+        Anchor same = Anchor.forRange(13, 13, "GIVEN a range", "paragraph", null);
+        assertThat(same.endLine()).isNull();
+
+        Anchor reversed = Anchor.forRange(13, 4, "GIVEN a range", "paragraph", null);
+        assertThat(reversed.endLine()).isNull();
+    }
 }

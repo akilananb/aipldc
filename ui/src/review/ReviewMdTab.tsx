@@ -1,5 +1,6 @@
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import rehypeHighlight from 'rehype-highlight';
 import { Box, Callout, Text } from '@radix-ui/themes';
 
 interface Props {
@@ -19,7 +20,7 @@ export default function ReviewMdTab({ loading, error, content }: Props) {
   }
   return (
     <Box className="review-md">
-      <Markdown remarkPlugins={[remarkGfm]}>{content ?? '*No review.md yet.*'}</Markdown>
+      <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>{content ?? '*No review.md yet.*'}</Markdown>
     </Box>
   );
 }

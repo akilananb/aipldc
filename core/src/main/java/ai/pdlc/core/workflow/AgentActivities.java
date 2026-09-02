@@ -1,8 +1,10 @@
 package ai.pdlc.core.workflow;
 
+import ai.pdlc.core.domain.AgentMentionRequest;
 import ai.pdlc.core.domain.Comment;
 import ai.pdlc.core.domain.GrillHandoff;
 import ai.pdlc.core.domain.MonitorHandoff;
+import ai.pdlc.core.domain.QualityReport;
 import ai.pdlc.core.domain.MonitorRule;
 import ai.pdlc.core.domain.PlanHandoff;
 import ai.pdlc.core.domain.PoHandoff;
@@ -32,13 +34,21 @@ public interface AgentActivities {
     @ActivityMethod
     GrillHandoff grillEvaluate(WorkItemRef item, GrillHandoff previous, List<BoardCommentEvent> newComments);
 
-    /** Drafts the story + spec delta from the resolved grill handoff. */
+    /** Drafts the story + spec delta from the resolved grill handoff. Returns one {@link StoryDraft}
+     * per distinct actor/factor when the PO agent splits the feature into multiple stories
+     * (single-actor features return a singleton list). */
     @ActivityMethod
-    StoryDraft poDraft(WorkItemRef item, GrillHandoff grill);
+    List<StoryDraft> poDraft(WorkItemRef item, GrillHandoff grill);
 
     /** Revises only the lines the open comments target; re-runs INVEST/DoR; replies to every comment. */
     @ActivityMethod
     StoryDraft poRevise(WorkItemRef item, PoHandoff previous, List<Comment> openComments);
+
+    /** Evaluates one story/task draft's INVEST/clarity/testability quality (playbook: quality
+     * agent). {@code subjectKind} is {@code "story"} or {@code "task"}; a story verdict hard-blocks
+     * gate 1, a task verdict is advisory only. */
+    @ActivityMethod
+    QualityReport evaluateQuality(WorkItemRef item, String subjectKind, String contentMd);
 
     /** Deterministic task breakdown from the approved story's spec delta — one task per
      * ADDED/MODIFIED scenario, sequenced into waves by file-conflict/dependency order. */
@@ -59,4 +69,8 @@ public interface AgentActivities {
      * baseline; a trip gathers evidence for one filed card (playbook §8). */
     @ActivityMethod
     MonitorHandoff evaluateMonitorRules(WorkItemRef story, List<MonitorRule> rules);
+
+    /** One-shot LLM analysis for an @-mentioned agent (analyst|architect|qa); returns raw markdown. */
+    @ActivityMethod
+    String mentionAnalyze(AgentMentionRequest request);
 }
