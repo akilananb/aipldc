@@ -33,8 +33,19 @@ window.PARTS[1] = `
       </div>
     </div>
     <svg class="loop-hero" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="A loop drawing itself on load">
-      <circle id="p1-title-arc" cx="100" cy="100" r="90" fill="none" stroke="var(--loop)" stroke-width="9" stroke-linecap="round"/>
-      <polygon points="180,58 196,72 172,78" fill="var(--loop)"/>
+      <defs>
+        <linearGradient id="sc-loop-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stop-color="var(--loop)"/>
+          <stop offset="60%" stop-color="#00A3E0"/>
+          <stop offset="100%" stop-color="var(--pass)"/>
+        </linearGradient>
+        <filter id="sc-hero-glow" x="-20%" y="-20%" width="140%" height="140%">
+          <feDropShadow dx="0" dy="4" stdDeviation="8" flood-color="rgba(4, 115, 234, 0.4)"/>
+        </filter>
+      </defs>
+      <circle cx="100" cy="100" r="90" fill="none" stroke="rgba(4, 115, 234, 0.1)" stroke-width="10"/>
+      <circle id="p1-title-arc" cx="100" cy="100" r="90" fill="none" stroke="url(#sc-loop-grad)" stroke-width="10" stroke-linecap="round" filter="url(#sc-hero-glow)"/>
+      <polygon points="180,56 198,72 172,80" fill="var(--pass)"/>
     </svg>
   </div>
 </section>

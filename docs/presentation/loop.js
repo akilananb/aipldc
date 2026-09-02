@@ -100,21 +100,68 @@
   function nodeShapeSvg(n) {
     var cls = 'fnode ' + (n.cls || '');
     if (n.shape === 'circle') {
-      return '<circle class="' + cls + '" cx="' + n.cx + '" cy="' + n.cy + '" r="' + n.r + '"/>' +
-        '<text class="flabel" x="' + n.cx + '" y="' + (n.cy + n.r + 18) + '">' + esc(n.label) + '</text>';
+      return '<circle cx="' + n.cx + '" cy="' + n.cy + '" r="' + (n.r + 6) + '" fill="none" stroke="rgba(4,115,234,0.22)" stroke-width="1.5" stroke-dasharray="4 3"/>' +
+        '<circle class="' + cls + '" cx="' + n.cx + '" cy="' + n.cy + '" r="' + n.r + '"/>' +
+        '<g transform="translate(' + n.cx + ',' + (n.cy - 2) + ')" opacity="0.85">' +
+        '<circle cx="0" cy="-6" r="5.5" fill="var(--ink)"/>' +
+        '<path d="M-10,10 C-10,4 10,4 10,10 Z" fill="var(--ink)"/>' +
+        '</g>' +
+        '<text class="flabel" x="' + n.cx + '" y="' + (n.cy + n.r + 18) + '">' + esc(n.label) + '</text>' +
+        '<text class="flabel sub" x="' + n.cx + '" y="' + (n.cy + n.r + 32) + '">HUMAN PROMPT</text>';
     }
     if (n.shape === 'diamond') {
       var hw = n.w / 2, hh = n.h / 2;
       var pts = [[n.cx, n.cy - hh], [n.cx + hw, n.cy], [n.cx, n.cy + hh], [n.cx - hw, n.cy]]
         .map(function (p) { return p[0] + ',' + p[1]; }).join(' ');
+      var innerPts = [[n.cx, n.cy - hh + 7], [n.cx + hw - 10, n.cy], [n.cx, n.cy + hh - 7], [n.cx - hw + 10, n.cy]]
+        .map(function (p) { return p[0] + ',' + p[1]; }).join(' ');
+      var parts = n.label.split('·').map(function (s) { return s.trim(); });
+      var gateId = parts[0] || 'GATE';
+      var gateRole = parts[1] || '';
       return '<polygon class="' + cls + '" points="' + pts + '"/>' +
-        '<text class="flabel" x="' + n.cx + '" y="' + (n.cy + n.h / 2 + 16) + '">' + esc(n.label) + '</text>';
+        '<polygon points="' + innerPts + '" fill="none" stroke="rgba(217, 56, 30, 0.25)" stroke-width="1"/>' +
+        '<text class="flabel badge" x="' + n.cx + '" y="' + (n.cy - 14) + '">GOVERNANCE</text>' +
+        '<text class="flabel" style="font-size:15px;font-weight:700;fill:var(--stop)" x="' + n.cx + '" y="' + (n.cy + 3) + '">' + esc(gateId) + '</text>' +
+        '<text class="flabel sub" x="' + n.cx + '" y="' + (n.cy + 19) + '">' + esc(gateRole) + '</text>';
     }
-    // rect, chip, strip, small — all boxes with center label
-    var rx = (n.shape === 'chip' || n.shape === 'strip') ? n.h / 2 : 8;
-    return '<rect class="' + cls + '" x="' + (n.cx - n.w / 2) + '" y="' + (n.cy - n.h / 2) +
-      '" width="' + n.w + '" height="' + n.h + '" rx="' + rx + '"/>' +
-      '<text class="flabel" x="' + n.cx + '" y="' + (n.cy + 5) + '">' + esc(n.label) + '</text>';
+    if (n.shape === 'strip') {
+      return '<rect class="' + cls + '" x="' + (n.cx - n.w / 2) + '" y="' + (n.cy - n.h / 2) + '" width="' + n.w + '" height="' + n.h + '" rx="17"/>' +
+        '<text class="flabel sub" style="font-size:10.5px;font-weight:700;letter-spacing:.04em" x="' + n.cx + '" y="' + (n.cy + 4) + '">' + esc(n.label.toUpperCase()) + '</text>';
+    }
+    if (n.shape === 'chip') {
+      return '<rect class="' + cls + '" x="' + (n.cx - n.w / 2) + '" y="' + (n.cy - n.h / 2) + '" width="' + n.w + '" height="' + n.h + '" rx="15"/>' +
+        '<text class="flabel sub" style="font-size:11px;font-weight:700" x="' + n.cx + '" y="' + (n.cy + 4) + '">' + esc(n.label) + '</text>';
+    }
+    if (n.shape === 'small') {
+      if (n.name === 'card') {
+        return '<rect class="' + cls + '" x="' + (n.cx - n.w / 2) + '" y="' + (n.cy - n.h / 2) + '" width="' + n.w + '" height="' + n.h + '" rx="8"/>' +
+          '<path d="M' + (n.cx - n.w / 2 + 5) + ',' + (n.cy - n.h / 2 + 2) + ' h' + (n.w - 10) + '" stroke="var(--stop)" stroke-width="2.5" stroke-linecap="round"/>' +
+          '<text class="flabel badge" style="fill:var(--stop)" x="' + n.cx + '" y="' + (n.cy - 3) + '">INCIDENT</text>' +
+          '<text class="flabel" style="font-size:12px" x="' + n.cx + '" y="' + (n.cy + 12) + '">' + esc(n.label) + '</text>';
+      }
+      return '<rect class="' + cls + '" x="' + (n.cx - n.w / 2) + '" y="' + (n.cy - n.h / 2) + '" width="' + n.w + '" height="' + n.h + '" rx="6"/>' +
+        '<text class="flabel sub" style="font-size:9.5px;font-weight:700" x="' + n.cx + '" y="' + (n.cy + 3) + '">' + esc(n.label.toUpperCase()) + '</text>';
+    }
+
+    // Standard rect cards (w: 150, h: 56)
+    var stripeColor = n.cls === 'amber' ? 'var(--loop)' : (n.cls === 'verify' ? 'var(--pass)' : (n.cls === 'card' ? 'var(--sc-navy)' : 'var(--line)'));
+    var stripeSvg = '<path d="M' + (n.cx - n.w / 2 + 6) + ',' + (n.cy - n.h / 2 + 2) + ' h' + (n.w - 12) + '" stroke="' + stripeColor + '" stroke-width="2.5" stroke-linecap="round"/>';
+    var textSvg = '';
+    if (n.label.indexOf('·') !== -1) {
+      var p = n.label.split('·').map(function (s) { return s.trim(); });
+      textSvg = '<text class="flabel" x="' + n.cx + '" y="' + (n.cy - 1) + '">' + esc(p[0]) + '</text>' +
+        '<text class="flabel sub" x="' + n.cx + '" y="' + (n.cy + 15) + '">' + esc(p[1]) + '</text>';
+    } else if (n.label.indexOf('+') !== -1) {
+      var p = n.label.split('+').map(function (s) { return s.trim(); });
+      textSvg = '<text class="flabel" x="' + n.cx + '" y="' + (n.cy - 1) + '">' + esc(p[0]) + '</text>' +
+        '<text class="flabel sub" x="' + n.cx + '" y="' + (n.cy + 15) + '">+ ' + esc(p[1]) + '</text>';
+    } else if (n.cls === 'amber') {
+      textSvg = '<text class="flabel badge" x="' + n.cx + '" y="' + (n.cy - 6) + '">✦ AGENT</text>' +
+        '<text class="flabel" x="' + n.cx + '" y="' + (n.cy + 12) + '">' + esc(n.label) + '</text>';
+    } else {
+      textSvg = '<text class="flabel" x="' + n.cx + '" y="' + (n.cy + 5) + '">' + esc(n.label) + '</text>';
+    }
+    return '<rect class="' + cls + '" x="' + (n.cx - n.w / 2) + '" y="' + (n.cy - n.h / 2) + '" width="' + n.w + '" height="' + n.h + '" rx="10"/>' + stripeSvg + textSvg;
   }
 
   function boundaryPoint(node, tx, ty) {
@@ -151,15 +198,24 @@
     var cls = 'fedge' + (e.dashed ? ' dashed' : '') + (e.pass ? ' pass' : '') + (e.stop ? ' stop' : '') +
       (e.thin ? ' thin' : '') + (extraCls ? ' ' + extraCls : '');
     var mid = midpoint(e);
-    var labelSvg = e.label ? '<text class="elabel" x="' + mid.x + '" y="' + (mid.y - 6) + '">' + esc(e.label) + '</text>' : '';
-    var pathSvg = '<path id="' + id + '" class="' + cls + '" d="' + edgeD(e) + '" marker-end="url(#arrow)"/>';
+    var markerRef = 'url(#arrow' + (e.pass ? '-pass' : (e.stop ? '-stop' : '')) + ')';
+    var pathSvg = '<path id="' + id + '" class="' + cls + '" d="' + edgeD(e) + '" marker-end="' + markerRef + '"/>';
+    var labelSvg = '';
+    if (e.label) {
+      var w = Math.max(48, e.label.length * 7.5 + 16);
+      var h = 20;
+      var bgCls = 'elabel-bg' + (e.pass ? ' pass' : (e.stop ? ' stop' : ''));
+      var txtCls = 'elabel' + (e.pass ? ' pass' : (e.stop ? ' stop' : ''));
+      labelSvg = '<rect class="' + bgCls + '" x="' + (mid.x - w / 2) + '" y="' + (mid.y - 15) + '" width="' + w + '" height="' + h + '" rx="10"/>' +
+        '<text class="' + txtCls + '" x="' + mid.x + '" y="' + (mid.y - 1) + '">' + esc(e.label) + '</text>';
+    }
     var flowSvg = '';
     if (!noFlow) {
       var a = NODE_MAP[e.a], b = NODE_MAP[e.b];
       var dist = Math.hypot(b.cx - a.cx, b.cy - a.cy);
       var dur = Math.max(1.6, Math.min(3.2, dist / 140));
       var dotCls = 'flowdot' + (e.pass ? ' pass' : (e.stop ? ' stop' : ''));
-      var r = e.thin ? 2.5 : 3;
+      var r = e.thin ? 2.5 : 3.5;
       flowSvg = '<circle class="' + dotCls + '" r="' + r + '"><animateMotion dur="' + dur + 's" repeatCount="indefinite"><mpath href="#' + id + '"/></animateMotion></circle>';
     }
     return pathSvg + labelSvg + flowSvg;
@@ -241,11 +297,22 @@
     }
 
     var svg = '<svg class="loopcanvas-svg" data-ns="' + ns + '" viewBox="0 0 ' + VB_W + ' ' + VB_H + '" xmlns="http://www.w3.org/2000/svg">' +
-      '<defs><marker id="arrow-' + ns + '" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">' +
-      '<path d="M0,0 L10,5 L0,10 z" fill="var(--ink-2)"/></marker></defs>' +
+      '<defs>' +
+      '<pattern id="grid-' + ns + '" width="24" height="24" patternUnits="userSpaceOnUse"><circle cx="2" cy="2" r="0.8" fill="rgba(2,11,67,0.06)"/></pattern>' +
+      '<marker id="arrow-' + ns + '" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="8" markerHeight="8" orient="auto-start-reverse">' +
+      '<path d="M1,2 L10,6 L1,10 L3,6 Z" fill="#6E8299"/></marker>' +
+      '<marker id="arrow-pass-' + ns + '" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="8" markerHeight="8" orient="auto-start-reverse">' +
+      '<path d="M1,2 L10,6 L1,10 L3,6 Z" fill="var(--pass)"/></marker>' +
+      '<marker id="arrow-stop-' + ns + '" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="8" markerHeight="8" orient="auto-start-reverse">' +
+      '<path d="M1,2 L10,6 L1,10 L3,6 Z" fill="var(--stop)"/></marker>' +
+      '</defs>' +
+      '<rect width="100%" height="100%" fill="url(#grid-' + ns + ')"/>' +
+      '<g opacity="0.35"><text x="24" y="30" font-family="var(--mono)" font-size="10" font-weight="600" fill="var(--ink-2)" letter-spacing="0.08em">SC DIGITAL WORKFLOW PIPELINE // ENGINE</text></g>' +
       bodyParts.join('') + tokenSvg + '</svg>';
-    // Namespace the arrow marker + strip the placeholder ids into real namespaced ids.
-    svg = svg.replace(/url\(#arrow\)/g, 'url(#arrow-' + ns + ')')
+    // Namespace the arrow markers + strip the placeholder ids into real namespaced ids.
+    svg = svg.replace(/url\(#arrow-pass\)/g, 'url(#arrow-pass-' + ns + ')')
+      .replace(/url\(#arrow-stop\)/g, 'url(#arrow-stop-' + ns + ')')
+      .replace(/url\(#arrow\)/g, 'url(#arrow-' + ns + ')')
       .replace(/__ID_n_/g, ns + '-n-')
       .replace(/__ID_e_/g, ns + '-e-');
 
