@@ -1,9 +1,10 @@
 import { useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { Inbox, Search } from 'lucide-react';
-import { Badge, Box, Flex, Heading, SegmentedControl, Skeleton, Table, Text, TextField } from '@radix-ui/themes';
+import { ChevronDown, ChevronRight, Inbox, Search } from 'lucide-react';
+import { Badge, Box, Flex, Heading, IconButton, SegmentedControl, Skeleton, Table, Text, TextField } from '@radix-ui/themes';
 import { api } from '../api';
+import type { ItemSummary } from '../types';
 import { useIdentity } from '../identity';
 import { GATE_ROLES } from '../gates';
 import ErrorCallout from '../components/ErrorCallout';
@@ -33,6 +34,7 @@ export default function ItemListPage() {
   const [search, setSearch] = useState('');
   const [kindFilter, setKindFilter] = useState<KindFilter>('all');
   const [activeStates, setActiveStates] = useState<Set<string>>(new Set());
+  const [collapsedFeatures, setCollapsedFeatures] = useState<Set<string>>(new Set());
 
   // Tasks are children of a story (see WorkItemEntity.parentId) - drill into a story's Tasks
   // section (ReviewPage) instead of cluttering the top-level list (ItemListPage filters kind
@@ -52,6 +54,43 @@ export default function ItemListPage() {
       return true;
     });
   }, [topLevelItems, kindFilter, activeStates, search]);
+
+  // Group stories under their parent feature (accordion-style row nesting) when no kind filter
+  // narrows the view; a story whose parent feature didn't pass the current filters renders as
+  // its own top-level row instead of disappearing.
+  const rows = useMemo<Array<{ item: ItemSummary; children: ItemSummary[] }>>(() => {
+    if (kindFilter !== 'all') {
+      return filteredItems.map((item) => ({ item, children: [] }));
+    }
+    const features = filteredItems.filter((i) => i.kind === 'feature');
+    const stories = filteredItems.filter((i) => i.kind === 'story');
+    const featureBoardIds = new Set(features.map((f) => f.boardId));
+    const childrenByFeature = new Map<string, ItemSummary[]>();
+    const orphanStories: ItemSummary[] = [];
+    for (const story of stories) {
+      if (story.parentId && featureBoardIds.has(story.parentId)) {
+        const list = childrenByFeature.get(story.parentId) ?? [];
+        list.push(story);
+        childrenByFeature.set(story.parentId, list);
+      } else {
+        orphanStories.push(story);
+      }
+    }
+    const grouped = [
+      ...features.map((f) => ({ item: f, children: childrenByFeature.get(f.boardId) ?? [] })),
+      ...orphanStories.map((s) => ({ item: s, children: [] as ItemSummary[] })),
+    ];
+    return grouped.sort((a, b) => new Date(b.item.updatedAt).getTime() - new Date(a.item.updatedAt).getTime());
+  }, [filteredItems, kindFilter]);
+
+  function toggleFeatureCollapsed(boardId: string) {
+    setCollapsedFeatures((prev) => {
+      const next = new Set(prev);
+      if (next.has(boardId)) next.delete(boardId);
+      else next.add(boardId);
+      return next;
+    });
+  }
 
   function toggleState(state: string) {
     setActiveStates((prev) => {
@@ -137,46 +176,13 @@ export default function ItemListPage() {
             </Table.Row>
           </Table.Header>
           <Table.Body>
-            {filteredItems.map((item) => {
-              const unavailable = item.title === '(unavailable)';
+            {rows.map(({ item, children }) => {
+              const collapsed = collapsedFeatures.has(item.boardId);
               return (
-                <Table.Row
-                  key={item.id}
-                  style={{ cursor: 'pointer' }}
-                  onClick={() => navigate(`/items/${encodeURIComponent(item.id)}`)}
-                >
-                  <Table.RowHeaderCell>
-                    <Link
-                      to={`/items/${encodeURIComponent(item.id)}`}
-                      onClick={(e) => e.stopPropagation()}
-                      style={{ color: 'inherit', textDecoration: 'none' }}
-                    >
-                      <Text
-                        weight="bold"
-                        color={unavailable ? 'gray' : undefined}
-                        style={unavailable ? { fontStyle: 'italic' } : undefined}
-                      >
-                        {unavailable ? 'Untitled — board item missing' : item.title}
-                      </Text>
-                    </Link>
-                    <Text as="div" size="1" color="gray">
-                      board {item.boardId}
-                    </Text>
-                  </Table.RowHeaderCell>
-                  <Table.Cell>{item.kind}</Table.Cell>
-                  <Table.Cell>
-                    <StatusBadge state={item.canonicalState} />
-                  </Table.Cell>
-                  <Table.Cell>
-                    <QualityIcon verdict={item.qualityVerdict} />
-                  </Table.Cell>
-                  <Table.Cell>
-                    {needsAttention(item.canonicalState) && <Badge color="amber">needs your review</Badge>}
-                  </Table.Cell>
-                  <Table.Cell>
-                    <RelativeTime iso={item.updatedAt} />
-                  </Table.Cell>
-                </Table.Row>
+                <>
+                  {renderRow(item, { hasChildren: children.length > 0, collapsed })}
+                  {children.length > 0 && !collapsed && children.map((child) => renderRow(child, { indent: true }))}
+                </>
               );
             })}
           </Table.Body>
@@ -184,4 +190,68 @@ export default function ItemListPage() {
       )}
     </Box>
   );
+
+  function renderRow(
+    item: ItemSummary,
+    opts: { indent?: boolean; hasChildren?: boolean; collapsed?: boolean } = {},
+  ) {
+    const unavailable = item.title === '(unavailable)';
+    return (
+      <Table.Row
+        key={item.id}
+        style={{ cursor: 'pointer' }}
+        onClick={() => navigate(`/items/${encodeURIComponent(item.id)}`)}
+      >
+        <Table.RowHeaderCell>
+          <Flex align="center" gap="1">
+            {opts.hasChildren ? (
+              <IconButton
+                size="1"
+                variant="ghost"
+                color="gray"
+                aria-label={opts.collapsed ? 'Expand stories' : 'Collapse stories'}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  toggleFeatureCollapsed(item.boardId);
+                }}
+              >
+                {opts.collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
+              </IconButton>
+            ) : (
+              <Box style={{ width: 24, flexShrink: 0 }} />
+            )}
+            <Box style={{ paddingLeft: opts.indent ? 20 : 0, minWidth: 0 }}>
+              <Link
+                to={`/items/${encodeURIComponent(item.id)}`}
+                onClick={(e) => e.stopPropagation()}
+                style={{ color: 'inherit', textDecoration: 'none' }}
+              >
+                <Text
+                  weight="bold"
+                  color={unavailable ? 'gray' : undefined}
+                  style={unavailable ? { fontStyle: 'italic' } : undefined}
+                >
+                  {unavailable ? 'Untitled — board item missing' : item.title}
+                </Text>
+              </Link>
+              <Text as="div" size="1" color="gray">
+                board {item.boardId}
+              </Text>
+            </Box>
+          </Flex>
+        </Table.RowHeaderCell>
+        <Table.Cell>{item.kind}</Table.Cell>
+        <Table.Cell>
+          <StatusBadge state={item.canonicalState} />
+        </Table.Cell>
+        <Table.Cell>
+          <QualityIcon verdict={item.qualityVerdict} />
+        </Table.Cell>
+        <Table.Cell>{needsAttention(item.canonicalState) && <Badge color="amber">needs your review</Badge>}</Table.Cell>
+        <Table.Cell>
+          <RelativeTime iso={item.updatedAt} />
+        </Table.Cell>
+      </Table.Row>
+    );
+  }
 }

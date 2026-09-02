@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Badge, Button, Flex, Text, TextField, Tooltip } from '@radix-ui/themes';
+import { Badge, Box, Button, Flex, Text, TextField, Tooltip } from '@radix-ui/themes';
 import Panel from '../components/Panel';
 import CopyHash from '../components/CopyHash';
 import { useIdentity } from '../identity';
@@ -36,10 +36,12 @@ export default function GatePanel({ item, actions }: Props) {
 
   return (
     <Panel>
-      <Flex justify="between" align="center" gap="4" wrap="wrap" mb="3">
-        <GateProgress state={item.canonicalState} />
+      <Flex justify="end" align="center" mb="2">
         <CopyHash hash={item.latestContentHash} />
       </Flex>
+      <Box mb="3" style={{ overflowX: 'auto', paddingBottom: 8 }}>
+        <GateProgress item={item} />
+      </Box>
 
       {(stage == null || stage === 'awaiting-G1') && (
         <Flex gap="3" align="center" wrap="wrap">

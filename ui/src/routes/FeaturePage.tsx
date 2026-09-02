@@ -9,7 +9,6 @@ import PageHeader from '../components/PageHeader';
 import StatusBadge from '../components/StatusBadge';
 import EmptyState from '../components/EmptyState';
 import Panel from '../components/Panel';
-import GateProgress from '../review/GateProgress';
 
 interface Props {
   item: ItemDetail;
@@ -32,12 +31,7 @@ export default function FeaturePage({ item }: Props) {
 
   return (
     <Box>
-      <PageHeader
-        backTo={{ to: '/', label: 'Items' }}
-        title={item.title}
-        badges={<StatusBadge state={item.canonicalState} />}
-        meta={<GateProgress state={item.canonicalState} />}
-      />
+      <PageHeader backTo={{ to: '/', label: 'Items' }} title={item.title} badges={<StatusBadge state={item.canonicalState} />} />
 
       <Box mb="4">
         <Panel title="Stories">
