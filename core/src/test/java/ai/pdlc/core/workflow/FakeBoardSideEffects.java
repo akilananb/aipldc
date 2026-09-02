@@ -113,6 +113,19 @@ class FakeBoardSideEffects implements BoardSideEffects {
         return new PRRef("1", "local://prs/1");
     }
 
+    /** boardId of each task {@link #recordTaskResults} transitioned to done, in call order. */
+    final List<String> taskResultsRecorded = new CopyOnWriteArrayList<>();
+
+    @Override
+    public void recordTaskResults(WorkItemRef story, Map<String, String> taskBoardIds, List<BuildResult> results) {
+        for (BuildResult r : results) {
+            String taskBoardId = taskBoardIds.get(r.taskId());
+            if (taskBoardId != null) {
+                taskResultsRecorded.add(taskBoardId);
+            }
+        }
+    }
+
     GateConfig gate3 = new GateConfig(List.of("PO", "SquadLead", "QA"), true);
     final List<ReleaseHandoff> releasePacksPublished = new CopyOnWriteArrayList<>();
     final List<ReleaseHandoff> deployedReleases = new CopyOnWriteArrayList<>();

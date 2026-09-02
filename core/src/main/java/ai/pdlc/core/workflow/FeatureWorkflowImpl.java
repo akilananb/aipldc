@@ -241,6 +241,8 @@ public class FeatureWorkflowImpl implements FeatureWorkflow {
                 }
             }
 
+            board.recordTaskResults(storyRef, publishedTasks.taskBoardIds(), results);
+
             // 8. Review the accumulated diff once, open the PR, post findings; awaiting-G2.
             ReviewHandoff review = agents.reviewStory(storyRef, currentPoHandoff, plan.tasks(), results);
             board.openStoryPr(storyRef, branch, plan.tasks(), results, review);

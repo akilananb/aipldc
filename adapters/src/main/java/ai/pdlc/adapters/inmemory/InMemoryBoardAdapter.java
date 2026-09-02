@@ -43,6 +43,22 @@ public final class InMemoryBoardAdapter implements BoardPort {
 
     private final Map<String, Map<String, Item>> byProfile = new ConcurrentHashMap<>();
     private final Map<String, AtomicLong> idSeqByProfile = new ConcurrentHashMap<>();
+    private final Map<String, Map<String, String>> idempotencyByProfile = new ConcurrentHashMap<>();
+    private final long startingSequence;
+
+    public InMemoryBoardAdapter() {
+        this(4412);
+    }
+
+    /** {@code startingSequence} - the first auto-minted board id this instance hands out. This
+     * process's in-memory sequence has no memory of a prior process's ids; a caller backed by
+     * durable storage (control-plane's Postgres work_items table) MUST seed this above whatever
+     * numeric board id is already on record there, or a restart will reissue an old id and {@code
+     * ensureWorkItem}'s (profile, board_id) lookup will silently rebind a brand-new work item to
+     * an unrelated pre-existing row. */
+    public InMemoryBoardAdapter(long startingSequence) {
+        this.startingSequence = startingSequence;
+    }
 
     private Map<String, Item> itemsFor(String profile) {
         return byProfile.computeIfAbsent(profile, p -> new ConcurrentHashMap<>());
@@ -61,10 +77,26 @@ public final class InMemoryBoardAdapter implements BoardPort {
         return requireItem(ref).snapshot();
     }
 
+    /** Creates a new item, or - when the caller passes {@code _idempotencyKey} - returns the item
+     * from an earlier call with the same key unchanged. Callers that create board cards from a
+     * Temporal activity (publishTasks/publishStory/publishReleasePack/fileMonitorCards) rely on this:
+     * activities are at-least-once, and without dedup a retry silently doubles every card. */
     @Override
     public WorkItem createItem(String profile, String kind, Map<String, Object> fields, String parentBoardId) {
         Map<String, Item> items = itemsFor(profile);
-        AtomicLong seq = idSeqByProfile.computeIfAbsent(profile, p -> new AtomicLong(4412));
+        Object rawKey = fields.get("_idempotencyKey");
+        if (rawKey == null) {
+            return createNewItem(profile, items, kind, fields, parentBoardId).snapshot();
+        }
+        String idempotencyKey = String.valueOf(rawKey);
+        Map<String, String> index = idempotencyByProfile.computeIfAbsent(profile, p -> new ConcurrentHashMap<>());
+        String id = index.computeIfAbsent(idempotencyKey,
+                k -> createNewItem(profile, items, kind, fields, parentBoardId).id);
+        return items.get(id).snapshot();
+    }
+
+    private Item createNewItem(String profile, Map<String, Item> items, String kind, Map<String, Object> fields, String parentBoardId) {
+        AtomicLong seq = idSeqByProfile.computeIfAbsent(profile, p -> new AtomicLong(startingSequence));
         String id;
         do {
             id = String.valueOf(seq.getAndIncrement());
@@ -77,8 +109,8 @@ public final class InMemoryBoardAdapter implements BoardPort {
         item.state = CanonicalState.NEW;
         item.parentId = parentBoardId;
         item.areaPath = String.valueOf(fields.getOrDefault("areaPath", ""));
-        itemsFor(profile).put(id, item);
-        return item.snapshot();
+        items.put(id, item);
+        return item;
     }
 
     @Override

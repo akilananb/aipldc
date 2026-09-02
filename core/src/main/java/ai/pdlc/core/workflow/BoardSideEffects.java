@@ -14,6 +14,7 @@ import io.temporal.activity.ActivityInterface;
 import io.temporal.activity.ActivityMethod;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * Board/repo/DB write activities, hosted by control-plane's own worker on task queue
@@ -81,6 +82,14 @@ public interface BoardSideEffects {
      * block, sets {@code awaiting-G2}. */
     @ActivityMethod
     PRRef openStoryPr(WorkItemRef story, String branch, List<Task> tasks, List<BuildResult> results, ReviewHandoff review);
+
+    /** Build loop finished: transitions each task's board card to {@code done} and re-saves its
+     * quality report from the real verifier outcome (green/red), superseding the pre-build
+     * advisory-only check {@link #publishTasks} recorded (task board cards otherwise stay stuck
+     * at {@code new} with a stale quality badge forever, even once the story reaches {@code done}).
+     * No-op for any task whose board id is unknown, mirroring {@link #publishTasks}'s own guard. */
+    @ActivityMethod
+    void recordTaskResults(WorkItemRef story, Map<String, String> taskBoardIds, List<BuildResult> results);
 
     /** Reads {@code gates.G3} for {@code profile} from {@code pdlc.yaml}; fails workflow start if absent. */
     @ActivityMethod

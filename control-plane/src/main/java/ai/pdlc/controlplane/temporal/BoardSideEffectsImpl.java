@@ -44,6 +44,7 @@ import ai.pdlc.core.workflow.PublishTasksResult;
 import ai.pdlc.core.workflow.StoryDraft;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
@@ -53,6 +54,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * {@link BoardSideEffects} activity implementation, hosted by control-plane's own Temporal worker
@@ -292,6 +295,38 @@ public class BoardSideEffectsImpl implements BoardSideEffects {
     }
 
     @Override
+    public void recordTaskResults(WorkItemRef story, Map<String, String> taskBoardIds, List<BuildResult> results) {
+        for (BuildResult r : results) {
+            String taskBoardId = taskBoardIds.get(r.taskId());
+            if (taskBoardId == null) {
+                continue;
+            }
+            WorkItemRef taskRef = new WorkItemRef(story.profile(), taskBoardId);
+            WorkItemEntity taskRow = workItems.findByProfileAndBoardId(taskRef.profile(), taskRef.boardId()).orElse(null);
+            if (taskRow == null) {
+                continue;
+            }
+
+            board.transition(taskRef, CanonicalState.DONE);
+            workItems.save(taskRow.withCanonicalState(CanonicalState.DONE.wireValue()));
+
+            boolean passed = "green".equals(r.verifier().result());
+            List<String> findings = new ArrayList<>();
+            if (!passed) {
+                findings.add("verifier: " + r.verifier().notes());
+            }
+            if (r.escalation() != null) {
+                findings.add("escalation: " + r.escalation());
+            }
+            String reportMd = "VERDICT: " + (passed ? "PASS" : "FAIL")
+                    + "\nverifier: " + r.verifier().result() + " (" + r.verifier().notes() + ")"
+                    + "\ncommit: " + r.commitSha() + "\niterations: " + r.iterations()
+                    + (r.escalation() != null ? "\nescalation: " + r.escalation() : "");
+            saveQualityReport(taskRef, 2, new QualityReport("task", passed, passed ? 100 : 0, findings, reportMd));
+        }
+    }
+
+    @Override
     public GateConfig loadGate3Config(String profile) {
         return pdlcConfig.profile(profile).gate("G3");
     }
@@ -419,10 +454,13 @@ public class BoardSideEffectsImpl implements BoardSideEffects {
         return sb.toString().stripTrailing();
     }
 
+    private static final Pattern HEADING = Pattern.compile("^#{1,6}\\s+(.*\\S)\\s*$");
+
     private static String firstHeadingOrDefault(String markdown, String fallback) {
         for (String line : markdown.lines().toList()) {
-            if (line.startsWith("# ")) {
-                return line.substring(2).trim();
+            Matcher m = HEADING.matcher(line);
+            if (m.matches()) {
+                return m.group(1);
             }
         }
         return fallback;

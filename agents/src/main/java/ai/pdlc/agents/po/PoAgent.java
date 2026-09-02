@@ -65,6 +65,7 @@ public class PoAgent {
         WorkItem workItem = AgentContext.readWorkItem(board, item);
         String title = workItem == null ? item.boardId() : safe(workItem.title());
         String description = workItem == null ? "" : safe(workItem.description());
+        String areaPath = workItem == null ? null : workItem.areaPath();
 
         Map<String, Object> view = new HashMap<>();
         view.put("title", title);
@@ -89,9 +90,9 @@ public class PoAgent {
         List<StoryDraft> drafts = new ArrayList<>();
         Set<String> seenChanges = new HashSet<>();
         for (String part : parts) {
-            StoryDraft draft = assemble(part, item, null, item.boardId(), grill);
+            StoryDraft draft = assemble(part, item, null, item.boardId(), grill, areaPath);
             if (!seenChanges.add(draft.handoff().change())) {
-                draft = assemble(part, item, draft.handoff().change() + "-s" + (drafts.size() + 1), item.boardId(), grill);
+                draft = assemble(part, item, draft.handoff().change() + "-s" + (drafts.size() + 1), item.boardId(), grill, areaPath);
                 seenChanges.add(draft.handoff().change());
             }
             drafts.add(draft);
@@ -117,15 +118,23 @@ public class PoAgent {
         String prompt = templates.render("po-revise", view);
 
         String revised = promptRunner().generateText(prompt);
-        return assemble(revised, item, previous.change(), previous.parent(), null);
+        String areaPath = previous.areas().isEmpty() ? null : previous.areas().get(0);
+        return assemble(revised, item, previous.change(), previous.parent(), null, areaPath);
     }
 
     // -- deterministic ---------------------------------------------------------------------------
 
-    private StoryDraft assemble(String storyMarkdown, WorkItemRef item, String knownChange, String parent, GrillHandoff grill) {
+    private StoryDraft assemble(String storyMarkdown, WorkItemRef item, String knownChange, String parent, GrillHandoff grill, String areaPath) {
         String story = appendOutOfScope(storyMarkdown, grill);
         String change = knownChange != null ? knownChange : extractChange(story);
         String area = StoryParser.area(story);
+        if (area == null && areaPath != null && !areaPath.isBlank()) {
+            // The draft/revise prompts don't reliably emit the "Feature: ... Area: X" marker
+            // StoryParser.area() looks for (LLM output varies run to run); inject it deterministically
+            // from the feature's board areaPath so plan-agent area resolution never depends on LLM luck.
+            story = injectArea(story, areaPath);
+            area = areaPath;
+        }
         String slug = slugOf(change);
 
         Map<String, String> specDeltaFiles = buildSpecDelta(story, area);
@@ -140,6 +149,22 @@ public class PoAgent {
                 List.of("board:" + item.profile() + ":" + item.boardId(), "repo:" + slug), 0.8, List.of(), List.of());
         PoHandoff handoff = new PoHandoff(envelope, parent, change, scenarios, nfr, areas, invest, dorUnmet, Map.of());
         return new StoryDraft(handoff, story, specDeltaFiles);
+    }
+
+    /** Inserts a plain {@code Area: <areaPath>} line right after the first {@code ## } heading (or
+     * at the top if none), matching {@link StoryParser#area}'s {@code Area:\s*([^\s·]+)} regex -
+     * deliberately plain text, not bold/markdown, so the regex's {@code \s*} matches. */
+    static String injectArea(String storyMarkdown, String areaPath) {
+        List<String> lines = new ArrayList<>(StoryParser.lines(storyMarkdown));
+        int insertAt = 0;
+        for (int i = 0; i < lines.size(); i++) {
+            if (lines.get(i).trim().startsWith("## ")) {
+                insertAt = i + 1;
+                break;
+            }
+        }
+        lines.add(insertAt, "Area: " + areaPath);
+        return String.join("\n", lines);
     }
 
     /** Every parked question becomes an "Out of scope" line, if not already covered (playbook §2 step 2). */
