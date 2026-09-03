@@ -17,7 +17,7 @@ window.PARTS[1] = `
     animation: p1-spin 8s linear 2s infinite;
   }
   @keyframes p1-spin {
-    to { transform: rotate(-360deg); }
+    to { transform: rotate(360deg); }
   }
   .p1-legend { display:flex; flex-wrap:wrap; gap:8px; margin-top:20px; }
   .p1-legend .card-chip { min-width:0; }
