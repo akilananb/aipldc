@@ -4,20 +4,12 @@ window.PARTS_INIT = window.PARTS_INIT || {};
 window.PARTS[1] = `
 <style>
   /* Part 1 bespoke one-offs — every selector scoped under the p1- prefix. */
-  #p1-title-arc {
-    stroke-dasharray: 565.5;
-    stroke-dashoffset: 565.5;
-    animation: p1-draw-arc 1.8s cubic-bezier(.45,0,.2,1) .2s forwards;
-  }
-  @keyframes p1-draw-arc {
-    to { stroke-dashoffset: 0; }
-  }
   #p1-spin-group {
     transform-origin: 100px 100px;
-    animation: p1-spin 8s linear 2s infinite;
+    animation: p1-spin 8s linear infinite;
   }
   @keyframes p1-spin {
-    to { transform: rotate(-360deg); }
+    to { transform: rotate(360deg); }
   }
   .p1-legend { display:flex; flex-wrap:wrap; gap:8px; margin-top:20px; }
   .p1-legend .card-chip { min-width:0; }
@@ -28,16 +20,6 @@ window.PARTS[1] = `
   <div class="title-grid">
     <div>
       <h1>AI PDLC — Loops, Workflows, and the Software Factory</h1>
-      <p class="small" style="font-size:20px;color:var(--ink-2);margin-top:6px;">90 minutes · we build one loop, piece by piece, until it is a factory</p>
-      <div class="callout" style="margin-top:18px;">One diagram. It starts as two boxes and grows a stage at a time. By the end it runs end to end.</div>
-      <div class="p1-legend">
-        <span class="card-chip"><b>→</b> / space: next slide</span>
-        <span class="card-chip"><b>←</b>: back</span>
-        <span class="card-chip"><b>Home</b> / <b>End</b>: jump</span>
-        <span class="card-chip"><b>N</b>: notes</span>
-        <span class="card-chip"><b>T</b>: reset timer</span>
-        <span class="card-chip"><b>F</b>: fullscreen</span>
-      </div>
     </div>
     <svg class="loop-hero" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="A loop drawing itself on load">
       <defs>
@@ -53,7 +35,7 @@ window.PARTS[1] = `
       <circle cx="100" cy="100" r="90" fill="none" stroke="rgba(4, 115, 234, 0.1)" stroke-width="10"/>
       <g id="p1-spin-group">
         <circle id="p1-title-arc" cx="100" cy="100" r="90" fill="none" stroke="url(#sc-loop-grad)" stroke-width="10" stroke-linecap="round" filter="url(#sc-hero-glow)"/>
-        <polygon points="186,56 168,72 194,80" fill="var(--pass)"/>
+        <polygon points="114,10 96,1 96,19" fill="var(--pass)"/>
       </g>
     </svg>
   </div>

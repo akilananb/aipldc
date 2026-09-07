@@ -52,7 +52,8 @@ window.PARTS_INIT[N] = function () { /* wire this part's buttons/anims by id */ 
 ## `LoopCanvas` (in `loop.js`, Director-owned — writers only call `.mount`)
 
 ```js
-LoopCanvas.mount(containerEl, { stage, ns, silhouette = false, token = false, revealFrom = stage });
+LoopCanvas.mount(containerEl, { stage, ns, silhouette = false, token = false, drawIn = false, revealFrom = stage });
+LoopCanvas.mountFlow(containerEl, { stage, ns, revealFrom = stage });
 ```
 
 - Renders every node/edge with `stageIn <= stage` and (`stageOut` absent or `> stage`). Fixed
@@ -62,27 +63,42 @@ LoopCanvas.mount(containerEl, { stage, ns, silhouette = false, token = false, re
   `revealFrom` defaults to `stage`; **L6 passes `revealFrom: 1` at `stage: 2`** so the very first
   canvas mount marks both stage 1's and stage 2's pieces `new` at once (the loop "appears" from
   nothing). Every included node/edge renders directly (no step-wrapping) — `deck.js`'s
-  `playReveal` animates the containing slide's `.reveal` elements in on activation, and every
-  included edge additionally renders a continuously-looping flow dot (`<circle class="flowdot">`
-  riding an `<animateMotion>` along the edge's own path, `dur` = `clamp(dist/140, 1.6, 3.2)`s) —
-  skipped for `token`/`silhouette` mounts (L17 has its own single narrative token via `DeckFlow`;
-  the L1 silhouette must stay inert/gray).
-- `silhouette: true` renders everything at stage 8 with class `.sil` (gray fill, labels hidden,
-  no flow dots) — the L1 teaser.
-- All ids are namespaced `${ns}-n-<name>` / `${ns}-e-<a>-<b>` (the canvas mounts on ~9 slides;
-  namespacing avoids duplicate-id collisions). `token: true` adds `#${ns}-token` and pre-computes
-  the stroke-dash "draw" hack on every edge (only meaningful for the flow-play canvas — regular
-  per-lesson mounts render edges fully visible immediately).
-- `LoopCanvas.SEQ` is the canonical stage-8 autoplay sequence consumed by `DeckFlow.play`.
+  `playReveal` animates the containing slide's `.reveal` elements in on activation.
+- `mountFlow` is the wrapper every per-lesson canvas actually calls: `mount(..., {token:true})`
+  (edges fully visible immediately) plus a `deck:activate` listener that fires
+  `DeckFlow.reset(ns)` + `DeckFlow.play({ns, seq: LoopCanvas.seqForStage(stage), speed:1})` every
+  time that slide becomes active — one narrative dot retracing that stage's path, replayed on
+  every visit, never one ambient dot per edge. `L17` (`p5l17`) is the one exception: it calls
+  `mount` directly with `token:true, drawIn:true` so its own Play/Pause/Reset/speed controls (not
+  a `deck:activate` autoplay of `mountFlow`'s making — `part5.js` wires its own listener) drive
+  the shared `DeckFlow` instance with the reveal-from-nothing effect below.
+- `silhouette: true` renders everything at stage 8 with class `.sil` (gray fill, labels hidden)
+  — the L1 teaser; never combined with `token`.
+- `drawIn: true` (only ever paired with `token: true`) additionally hides every edge behind a
+  stroke-dash "draw" hack until `DeckFlow` lights it — L17's reveal-from-nothing effect. Leave it
+  off (the `mountFlow` default) anywhere edges must render fully visible immediately: a
+  per-lesson `seqForStage(stage)` never lights every edge in its diagram (e.g. the `review-engineer`
+  "read the diff" annotation edge is never part of any sequence), so `drawIn` there would leave
+  those edges permanently invisible.
+- All ids are namespaced `${ns}-n-<name>` / `${ns}-e-<a>-<b>` (the canvas mounts on ~11 slides;
+  namespacing avoids duplicate-id collisions and lets every mount run its own independent
+  `DeckFlow` run keyed by `ns`). `token: true` adds `#${ns}-token`.
+- `LoopCanvas.seqForStage(stage)` returns that stage's autoplay path: the correct "how does the
+  token reach the agent" entry prefix for the stage — it changes as the entry edge retires
+  (`engineer-agent` at s2, `story-agent` at s3, `g1-agent` at s4, `queue-agent` at s5+) — followed
+  by the shared verify-loop-back tail, extended with `review-g2` at s6+, then release/`g3`/deploy
+  at s7+, then monitor/card/back-to-board at s8. `LoopCanvas.SEQ` is `seqForStage(8)` — the
+  canonical stage-8 sequence L17 replays.
 - `LoopCanvas.pos('engineer')` returns `{x,y}` — used to re-home the token on reset.
 - Callout convenience: add class `hl` to a mounted node/edge `<g>` (e.g.
   `document.getElementById(ns+'-n-agent').classList.add('hl')`) for "this box"/"this wire"
-  thumbnail highlights (L7/L8).
+  thumbnail highlights (L7/L8) — coexists fine with `mountFlow`'s autoplay `.lit`/`.active`.
 
 `DeckFlow` (in `deck.js`): `DeckFlow.play({ns, seq, speed})` lights each edge (`.lit`), animates
 `#${ns}-token` along it via `requestAnimationFrame` + `path.getPointAtLength`, then marks the
 target node `.active`. `DeckFlow.pause(ns)` cancels the run. `DeckFlow.reset(ns)` strips
-`lit`/`active`/`done` and re-homes the token at `engineer`.
+`lit`/`active`/`done` and re-homes the token at `engineer`. `mountFlow` drives all three
+automatically per-`ns`; L17's own Play/Pause/Reset buttons call them directly.
 
 ## Narration style guide (binding for all writers)
 
@@ -91,7 +107,8 @@ target node `.active`. `DeckFlow.pause(ns)` cancels the run. `DeckFlow.reset(ns)
 - Each lesson has exactly one reframing **punchline** rendered as `.punch` (verbatim strings —
   see the lesson table; do not paraphrase).
 - Diagrams build progressively via `LoopCanvas` stage growth; each newly-added stage animates in
-  automatically via `.reveal`/flow dots; never show the finished diagram before its stage.
+  automatically via `.reveal` (a pulse glow on `new` pieces) and a single autoplay token retraces
+  that stage's path via `mountFlow`; never show the finished diagram before its stage.
 - Real numbers from this repo's live runs are cited as evidence, not decoration (see fact sheet).
 - `data-notes` = 3–6 sentence speaker script per slide expanding the beats in this same voice.
 
@@ -99,7 +116,7 @@ target node `.active`. `DeckFlow.pause(ns)` cancels the run. `DeckFlow.reset(ns)
 
 The deck's spine: **L6 starts `LoopCanvas` at stage 1→2; every Part-4 lesson (L11–L16) adds
 exactly one stage to the SAME canvas; L17 runs the finished stage-8 machine end-to-end.**
-`Canvas s<k>` = `LoopCanvas.mount(el, {stage:k, ns:'p<part>l<lesson>'})`.
+`Canvas s<k>` = `LoopCanvas.mountFlow(el, {stage:k, ns:'p<part>l<lesson>'})`.
 
 | Slide idx | # | Part | `data-lesson` | `data-min` | Punchline (`.punch`, verbatim) | Canvas ns |
 |---|---|---|---|---|---|---|
@@ -110,18 +127,18 @@ exactly one stage to the SAME canvas; L17 runs the finished stage-8 machine end-
 | 4 | L3 | 1 | Who writes the prompt | 4 | "What changed is who writes the prompt." | — |
 | 5 | L4 | 2 | The three actors | 5 | "Use code where determinism is enough. Use agents where reasoning is required. Keep engineers where judgment matters." | — |
 | 6 | L5 | 2 | SDD — the spec is the prompt | 4 | "A story card is an opinion. A spec delta is a contract." | — |
-| 7 | L6 | 2 | The simplest loop — stages 1 & 2 | 5 | "Agents plus code beat agents alone." | `p2l6` (stage 1→2, `revealFrom:1`) |
-| 8 | L7 | 3 | omp + Orca — the coding agent | 4 | "The coding agent is a session you can drive — by hand from a terminal, or by protocol from a machine." | `p3l7` (thumbnail, stage 2, agent `hl`) |
-| 9 | L8 | 3 | ACP — the wire between them | 4 | "ACP is for driving a session-based agent. If there's no session, it's the wrong wire." | `p3l8` (thumbnail, stage 2, engineer-agent edge `hl`) |
+| 7 | L6 | 2 | The simplest loop — stages 1 & 2 | 5 | "Agents plus code beat agents alone." | `p2l6` (stage 1→2, `revealFrom:1`, autoplay) |
+| 8 | L7 | 3 | omp + Orca — the coding agent | 4 | "The coding agent is a session you can drive — by hand from a terminal, or by protocol from a machine." | `p3l7` (thumbnail, stage 2, agent `hl`, autoplay) |
+| 9 | L8 | 3 | ACP — the wire between them | 4 | "ACP is for driving a session-based agent. If there's no session, it's the wrong wire." | `p3l8` (thumbnail, stage 2, engineer-agent edge `hl`, autoplay) |
 | 10 | L9 | 3 | Embabel — typed reasoning | 4 | "Free-text output is a prototype. A typed contract is a system." | — |
 | 11 | L10 | 3 | Temporal — the durable outer loop | 3 | "Waiting for humans across days, exactly-once progression, auditability — the engine's native features, not code you maintain." | — |
-| 12 | L11 | 4 | Stage 3 — put a spec in front | 5 | "Nothing becomes a story until every question is answered or parked." | `p4l11` (stage 3) |
-| 13 | L12 | 4 | Stage 4 — add the human gate | 5 | "Maker-checker: the agent makes; named humans check — per version, with blocking comments." | `p4l12` (stage 4) |
-| 14 | L13 | 4 | Stage 5 — split, isolate, parallelize | 5 | "An inner loop never touches board state. It returns a typed result and the outer loop decides." | `p4l13` (stage 5) |
-| 15 | L14 | 4 | Stage 6 — review, and the second gate | 4 | "Every agent has a human who owns its output — and any reviewer can summon an agent with an @." | `p4l14` (stage 6) |
-| 16 | L15 | 4 | Stage 7 — release, the third gate, deploy | 4 | "Agents draft every document. Named humans sign each one." | `p4l15` (stage 7) |
-| 17 | L16 | 4 | Stage 8 — monitor closes the wheel | 4 | "Deploy is not done. The monitor files evidence back to the board, and the wheel closes." | `p4l16` (stage 8) |
-| 18 | L17 | 5 | THE FLOW — run the machine | 8 | "The loop is only one mechanism inside the machine." | `p5l17` (stage 8, `token:true`, autoplays on activate) |
+| 12 | L11 | 4 | Stage 3 — put a spec in front | 5 | "Nothing becomes a story until every question is answered or parked." | `p4l11` (stage 3, autoplay) |
+| 13 | L12 | 4 | Stage 4 — add the human gate | 5 | "Maker-checker: the agent makes; named humans check — per version, with blocking comments." | `p4l12` (stage 4, autoplay) |
+| 14 | L13 | 4 | Stage 5 — split, isolate, parallelize | 5 | "An inner loop never touches board state. It returns a typed result and the outer loop decides." | `p4l13` (stage 5, autoplay) |
+| 15 | L14 | 4 | Stage 6 — review, and the second gate | 4 | "Every agent has a human who owns its output — and any reviewer can summon an agent with an @." | `p4l14` (stage 6, autoplay) |
+| 16 | L15 | 4 | Stage 7 — release, the third gate, deploy | 4 | "Agents draft every document. Named humans sign each one." | `p4l15` (stage 7, autoplay) |
+| 17 | L16 | 4 | Stage 8 — monitor closes the wheel | 4 | "Deploy is not done. The monitor files evidence back to the board, and the wheel closes." | `p4l16` (stage 8, autoplay) |
+| 18 | L17 | 5 | THE FLOW — run the machine | 8 | "The loop is only one mechanism inside the machine." | `p5l17` (stage 8, `token:true, drawIn:true`, reveal-from-nothing, autoplays on activate) |
 | 19 | L18 | 5 | The kanban view — work as state | 3 | "Stop asking what your agent is doing. Ask what state each piece of work is in." | — |
 | 20 | L19 | 6 | What a live run taught us | 3 | "Agents plus code beat agents alone — and code plus retries demands idempotency." | — |
 | 21 | L20 | 6 | Eight design rules | 3 | "Don't build the factory before you know which workflow you're automating." | — |
@@ -136,39 +153,44 @@ Part → slide-count contract: part1 = 5 (Title, Map, L1–L3) · part2 = 3 (L4�
 
 ViewBox `0 0 1280 680`. Rects 150×56, diamonds for gates, agent boxes amber.
 
-**Nodes** `name (cx,cy) shape stageIn[→stageOut]`: `engineer` (80,300) circle s1 · `agent`
-(560,300) rect s1 · `review` (950,300) rect "review · PR" s1 · `verify` (770,300) rect
+**Nodes** `name (cx,cy) shape stageIn[→stageOut]`: `engineer` (340,300) circle s1 · `agent`
+(560,300) rect s1 · `review` (1000,300) rect "review · PR" s1 · `verify` (800,300) rect
 "verify · npm test" s2 · `board` (140,80) rect "board · new card" s3 · `grill` (330,80) rect s3 ·
 `story` (520,80) rect "story + spec" s3 · `g1` (700,80) diamond "G1 · PO + Squad Lead" s4 ·
 `quality` (520,150) chip s4 · `plan` (860,80) rect s5 · `queue` (560,215) strip
-"task queue · claimed over REST" s5 · `agent2`/`verify2` (560/770,390) lane 2 s5 ·
-`agent3`/`verify3` (560/770,460) lane 3 s5 · `shield2`/`shield3` (495,390)/(495,460) s5 · `g2`
-(1090,300) diamond "G2 · FSDev + QA" s6 · `mention` (950,210) chip s6 · `release` (1090,440) rect
-"release pack · 4 docs" s7 · `g3` (950,530) diamond "G3 · signatures" s7 · `deploy` (770,530) rect
+"task queue · claimed over REST" s5 · `agent2`/`verify2` (560/800,390) lane 2 s5 ·
+`agent3`/`verify3` (560/800,460) lane 3 s5 · `shield2`/`shield3` (495,390)/(495,460) s5 · `g2`
+(1140,300) diamond "G2 · FSDev + QA" s6 · `mention` (1000,210) chip s6 · `release` (1140,440) rect
+"release pack · 4 docs" s7 · `g3` (1000,530) diamond "G3 · signatures" s7 · `deploy` (800,530) rect
 s7 · `monitor` (560,530) rect s8 · `card` (330,530) rect "trip card" s8.
 
 **Edges** `e-<a>-<b> [stageIn→stageOut]`: `engineer-agent` ("prompt") s1→out3 ·
-`agent-review` s1→out2 · `review-engineer` ("read the diff", curved via `[810,210]` to clear
+`agent-review` s1→out2 · `review-engineer` ("read the diff", curved via `[860,210]` to clear
 `agent`/`verify`) s1→out6 · `agent-verify` s2 · `verify-review` (PASS) s2 · `verify-agent` (FAIL,
 dashed) s2 · `engineer-board` ("files a card") s3 · `board-grill` s3 · `grill-story` s3 ·
 `story-agent` (bends down) s3→out4 · `story-g1` s4 · `g1-agent` (bends down) s4→out5 ·
 `g1-plan` s5 · `plan-queue` s5 · `queue-agent` s5 · `queue-agent2` (curved via `[750,280]` to
 clear `agent`) s5 · `queue-agent3` (curved via `[50,280]` to clear `agent`/`agent2`) s5 ·
 `agent2-verify2`/`agent3-verify3` s5 · `verify2-review` (PASS) s5 · `verify3-review` (PASS,
-curved via `[860,460]` to clear `verify2`) s5 · `verify2-agent2`/`verify3-agent3` (FAIL,
+curved via `[890,460]` to clear `verify2`) s5 · `verify2-agent2`/`verify3-agent3` (FAIL,
 dashed) s5 · `review-g2` s6 · `g2-release` s7 · `release-g3` s7 · `g3-deploy` s7 ·
 `deploy-monitor` s8 · `monitor-card` s8 · `card-board` (curved via `[60,300]`, closes the
 wheel) s8.
 
-**Flow dots**: every rendered edge (except `token`/`silhouette` mounts) carries a
-continuously-looping `<circle class="flowdot">` riding an `<animateMotion>` along that edge's own
-`<path>` via `<mpath>`, `dur = clamp(dist/140, 1.6, 3.2)`s where `dist` is the straight-line
-distance between the edge's two node centers — ambient motion, not exact arc length.
+**One token, not one dot per edge**: edges render as static paths with no per-edge motion. Every
+`mountFlow` canvas — every lesson slide with a diagram — adds exactly one `#${ns}-token` circle
+and replays `LoopCanvas.seqForStage(stage)` via `DeckFlow.play` on every `deck:activate` for that
+slide; only the edges on that stage's path get `.lit`, everything else (e.g. `review-engineer`,
+the lane 2/3 branches before their own stage's sequence reaches them) stays in its normal static
+style. L17 additionally sets `drawIn:true` so its edges start hidden and draw in as its token
+(which walks the full `seqForStage(8)`) reaches them.
 
-**`LoopCanvas.SEQ`** (stage-8 autoplay, dwell 700ms/node, 350ms at 2×): engineer→board→grill→
-story→g1→plan→queue→agent→verify → **FAIL loop-back** (verify-agent, agent, agent-verify,
-verify) → PASS→review→g2→release→g3→deploy→monitor→card→board. On completion `board` gets
-`.done` (the wheel turned once).
+**`LoopCanvas.SEQ`** = `seqForStage(8)` (stage-8 autoplay, dwell 700ms/node, 350ms at 2×):
+engineer→board→grill→story→g1→plan→queue→agent→verify → **FAIL loop-back** (verify-agent, agent,
+agent-verify, verify) → PASS→review→g2→release→g3→deploy→monitor→card→board. On completion
+`board` gets `.done` (the wheel turned once). Earlier stages get their own shorter sequence from
+`seqForStage(stage)` — e.g. `seqForStage(2)` (L6–L8) is just engineer→agent→verify→FAIL
+loop-back→PASS→review.
 
 ## Grounded fact sheet (writers may not invent beyond it)
 
@@ -294,10 +316,10 @@ navigation; L17 now autoplays on first (and every) activation via a `deck:activa
    22 (one press now always equals one slide — the old dual-mode step/slide advance is gone);
    `End` from slide 5 lands on index 22 `.active`; `N` opens `#notes` with non-empty text; rail
    segment count is 23.
-6. **Flow-dot presence** — on `#14` (L13, stage 5, the most edges) every `.fedge` in
-   `#p4l13-canvas` has a matching `.flowdot` with a child `animateMotion` (19 `.fedge` / 19
-   `.flowdot`, all with motion); `#18` (L17, `token:true`) and `#2` (L1, `silhouette:true`) both
-   render zero `.flowdot` elements.
+6. **One token per canvas, not one dot per edge** — every `mountFlow` canvas (`#7`..`#17`) renders
+   exactly one `.token` circle and zero `.flowdot` elements; `document.querySelectorAll('.flowdot').length === 0`
+   deck-wide (the old per-edge `animateMotion` flow dots stay removed as visually distracting).
+   `#18` (L17, `token:true, drawIn:true`) also renders exactly one `#p5l17-token` circle.
 7. **L17 autoplay** — a fresh load at hash `#18` reached `#p5l17-n-monitor.active` and
    `#p5l17-n-board.done` within 14s with no click; `#p5-reset` cleared both classes; `#p5-play`
    replayed the full circuit to completion again (manual replay still works after autoplay).

@@ -67,7 +67,7 @@ window.PARTS[5] = `
 window.PARTS_INIT[5] = function () {
   var canvas = document.getElementById('p5l17-canvas');
   if (canvas && window.LoopCanvas) {
-    LoopCanvas.mount(canvas, { stage: 8, ns: 'p5l17', token: true });
+    LoopCanvas.mount(canvas, { stage: 8, ns: 'p5l17', token: true, drawIn: true });
   }
   var speed = 1;
   var speedSel = document.getElementById('p5-speed');

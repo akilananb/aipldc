@@ -8,10 +8,10 @@
 
   // ---- Master node geometry (fixed positions, never re-laid-out) --------------------------
   var NODES = [
-    { name: 'engineer', cx: 80, cy: 300, shape: 'circle', r: 30, label: 'engineer', stageIn: 1 },
+    { name: 'engineer', cx: 340, cy: 300, shape: 'circle', r: 30, label: 'engineer', stageIn: 1 },
     { name: 'agent', cx: 560, cy: 300, shape: 'rect', w: 150, h: 56, label: 'agent', stageIn: 1, cls: 'amber' },
-    { name: 'review', cx: 950, cy: 300, shape: 'rect', w: 150, h: 56, label: 'review · PR', stageIn: 1 },
-    { name: 'verify', cx: 770, cy: 300, shape: 'rect', w: 150, h: 56, label: 'verify · npm test', stageIn: 2, cls: 'verify' },
+    { name: 'review', cx: 1000, cy: 300, shape: 'rect', w: 150, h: 56, label: 'review · PR', stageIn: 1 },
+    { name: 'verify', cx: 800, cy: 300, shape: 'rect', w: 150, h: 56, label: 'verify · npm test', stageIn: 2, cls: 'verify' },
     { name: 'board', cx: 140, cy: 80, shape: 'rect', w: 150, h: 56, label: 'board · new card', stageIn: 3, cls: 'card' },
     { name: 'grill', cx: 330, cy: 80, shape: 'rect', w: 150, h: 56, label: 'grill', stageIn: 3 },
     { name: 'story', cx: 520, cy: 80, shape: 'rect', w: 150, h: 56, label: 'story + spec', stageIn: 3 },
@@ -20,16 +20,16 @@
     { name: 'plan', cx: 860, cy: 80, shape: 'rect', w: 150, h: 56, label: 'plan', stageIn: 5 },
     { name: 'queue', cx: 560, cy: 215, shape: 'strip', w: 270, h: 34, label: 'task queue · claimed over REST', stageIn: 5 },
     { name: 'agent2', cx: 560, cy: 390, shape: 'rect', w: 150, h: 56, label: 'agent · lane 2', stageIn: 5, cls: 'amber' },
-    { name: 'verify2', cx: 770, cy: 390, shape: 'rect', w: 150, h: 56, label: 'verify · lane 2', stageIn: 5, cls: 'verify' },
+    { name: 'verify2', cx: 800, cy: 390, shape: 'rect', w: 150, h: 56, label: 'verify · lane 2', stageIn: 5, cls: 'verify' },
     { name: 'agent3', cx: 560, cy: 460, shape: 'rect', w: 150, h: 56, label: 'agent · lane 3', stageIn: 5, cls: 'amber' },
-    { name: 'verify3', cx: 770, cy: 460, shape: 'rect', w: 150, h: 56, label: 'verify · lane 3', stageIn: 5, cls: 'verify' },
+    { name: 'verify3', cx: 800, cy: 460, shape: 'rect', w: 150, h: 56, label: 'verify · lane 3', stageIn: 5, cls: 'verify' },
     { name: 'shield2', cx: 495, cy: 390, shape: 'small', w: 36, h: 28, label: 'guard', stageIn: 5, cls: 'shield' },
     { name: 'shield3', cx: 495, cy: 460, shape: 'small', w: 36, h: 28, label: 'guard', stageIn: 5, cls: 'shield' },
-    { name: 'g2', cx: 1090, cy: 300, shape: 'diamond', w: 140, h: 92, label: 'G2 · FSDev + QA', stageIn: 6, cls: 'gate' },
-    { name: 'mention', cx: 950, cy: 210, shape: 'chip', w: 110, h: 30, label: '@mention', stageIn: 6, cls: 'chip' },
-    { name: 'release', cx: 1090, cy: 440, shape: 'rect', w: 150, h: 56, label: 'release pack · 4 docs', stageIn: 7 },
-    { name: 'g3', cx: 950, cy: 530, shape: 'diamond', w: 140, h: 92, label: 'G3 · signatures', stageIn: 7, cls: 'gate' },
-    { name: 'deploy', cx: 770, cy: 530, shape: 'rect', w: 150, h: 56, label: 'deploy', stageIn: 7 },
+    { name: 'g2', cx: 1140, cy: 300, shape: 'diamond', w: 140, h: 92, label: 'G2 · FSDev + QA', stageIn: 6, cls: 'gate' },
+    { name: 'mention', cx: 1000, cy: 210, shape: 'chip', w: 110, h: 30, label: '@mention', stageIn: 6, cls: 'chip' },
+    { name: 'release', cx: 1140, cy: 440, shape: 'rect', w: 150, h: 56, label: 'release pack · 4 docs', stageIn: 7 },
+    { name: 'g3', cx: 1000, cy: 530, shape: 'diamond', w: 140, h: 92, label: 'G3 · signatures', stageIn: 7, cls: 'gate' },
+    { name: 'deploy', cx: 800, cy: 530, shape: 'rect', w: 150, h: 56, label: 'deploy', stageIn: 7 },
     { name: 'monitor', cx: 560, cy: 530, shape: 'rect', w: 150, h: 56, label: 'monitor', stageIn: 8 },
     { name: 'card', cx: 330, cy: 530, shape: 'small', w: 120, h: 44, label: 'trip card', stageIn: 8, cls: 'card' }
   ];
@@ -38,7 +38,7 @@
   var EDGES = [
     { name: 'engineer-agent', a: 'engineer', b: 'agent', label: 'prompt', stageIn: 1, stageOut: 3 },
     { name: 'agent-review', a: 'agent', b: 'review', label: '', stageIn: 1, stageOut: 2 },
-    { name: 'review-engineer', a: 'review', b: 'engineer', label: 'read the diff', stageIn: 1, stageOut: 6, thin: true, curve: [810, 210] },
+    { name: 'review-engineer', a: 'review', b: 'engineer', label: 'read the diff', stageIn: 1, stageOut: 6, thin: true, curve: [860, 210] },
     { name: 'agent-verify', a: 'agent', b: 'verify', label: '', stageIn: 2 },
     { name: 'verify-review', a: 'verify', b: 'review', label: 'PASS', stageIn: 2, pass: true },
     { name: 'verify-agent', a: 'verify', b: 'agent', label: 'FAIL', stageIn: 2, stop: true, dashed: true },
@@ -57,7 +57,7 @@
     { name: 'verify2-review', a: 'verify2', b: 'review', label: 'PASS', stageIn: 5, pass: true },
     { name: 'verify2-agent2', a: 'verify2', b: 'agent2', label: 'FAIL', stageIn: 5, stop: true, dashed: true },
     { name: 'agent3-verify3', a: 'agent3', b: 'verify3', label: '', stageIn: 5 },
-    { name: 'verify3-review', a: 'verify3', b: 'review', label: 'PASS', stageIn: 5, pass: true, curve: [860, 460] },
+    { name: 'verify3-review', a: 'verify3', b: 'review', label: 'PASS', stageIn: 5, pass: true, curve: [890, 460] },
     { name: 'verify3-agent3', a: 'verify3', b: 'agent3', label: 'FAIL', stageIn: 5, stop: true, dashed: true },
     { name: 'review-g2', a: 'review', b: 'g2', label: '', stageIn: 6 },
     { name: 'g2-release', a: 'g2', b: 'release', label: '', stageIn: 7 },
@@ -68,27 +68,62 @@
     { name: 'card-board', a: 'card', b: 'board', label: '', stageIn: 8, pass: true, curve: [60, 300] }
   ];
 
-  // ---- Canonical stage-8 autoplay sequence (L17) ---------------------------------------------
-  var SEQ = [
-    { edge: 'engineer-board', node: 'board', dwell: 700 },
-    { edge: 'board-grill', node: 'grill', dwell: 700 },
-    { edge: 'grill-story', node: 'story', dwell: 700 },
-    { edge: 'story-g1', node: 'g1', dwell: 700 },
-    { edge: 'g1-plan', node: 'plan', dwell: 700 },
-    { edge: 'plan-queue', node: 'queue', dwell: 700 },
-    { edge: 'queue-agent', node: 'agent', dwell: 700 },
+  // ---- Per-stage autoplay sequences: each entry list is the correct "how does the token reach
+  // the agent at this stage" prefix (it changes as stages retire/replace the entry edge), shared
+  // tails cover the verify loop-back plus everything downstream. `seqForStage(8)` reproduces the
+  // original hand-written L17 sequence exactly (18 steps). ------------------------------------
+  var LOOP_TAIL = [
     { edge: 'agent-verify', node: 'verify', dwell: 700 },
     { edge: 'verify-agent', node: 'agent', dwell: 700 },
     { edge: 'agent-verify', node: 'verify', dwell: 700 },
-    { edge: 'verify-review', node: 'review', dwell: 700 },
-    { edge: 'review-g2', node: 'g2', dwell: 700 },
-    { edge: 'g2-release', node: 'release', dwell: 700 },
-    { edge: 'release-g3', node: 'g3', dwell: 700 },
-    { edge: 'g3-deploy', node: 'deploy', dwell: 700 },
-    { edge: 'deploy-monitor', node: 'monitor', dwell: 700 },
-    { edge: 'monitor-card', node: 'card', dwell: 700 },
-    { edge: 'card-board', node: 'board', dwell: 700, closesWheel: true }
+    { edge: 'verify-review', node: 'review', dwell: 700 }
   ];
+  var ENTRY_BY_STAGE = {
+    2: [
+      { edge: 'engineer-agent', node: 'agent', dwell: 700 }
+    ],
+    3: [
+      { edge: 'engineer-board', node: 'board', dwell: 700 },
+      { edge: 'board-grill', node: 'grill', dwell: 700 },
+      { edge: 'grill-story', node: 'story', dwell: 700 },
+      { edge: 'story-agent', node: 'agent', dwell: 700 }
+    ],
+    4: [
+      { edge: 'engineer-board', node: 'board', dwell: 700 },
+      { edge: 'board-grill', node: 'grill', dwell: 700 },
+      { edge: 'grill-story', node: 'story', dwell: 700 },
+      { edge: 'story-g1', node: 'g1', dwell: 700 },
+      { edge: 'g1-agent', node: 'agent', dwell: 700 }
+    ],
+    5: [
+      { edge: 'engineer-board', node: 'board', dwell: 700 },
+      { edge: 'board-grill', node: 'grill', dwell: 700 },
+      { edge: 'grill-story', node: 'story', dwell: 700 },
+      { edge: 'story-g1', node: 'g1', dwell: 700 },
+      { edge: 'g1-plan', node: 'plan', dwell: 700 },
+      { edge: 'plan-queue', node: 'queue', dwell: 700 },
+      { edge: 'queue-agent', node: 'agent', dwell: 700 }
+    ]
+  };
+
+  function seqForStage(stage) {
+    var entry = ENTRY_BY_STAGE[stage] || ENTRY_BY_STAGE[5];
+    var tail = LOOP_TAIL.slice();
+    if (stage >= 6) tail.push({ edge: 'review-g2', node: 'g2', dwell: 700 });
+    if (stage >= 7) {
+      tail.push({ edge: 'g2-release', node: 'release', dwell: 700 });
+      tail.push({ edge: 'release-g3', node: 'g3', dwell: 700 });
+      tail.push({ edge: 'g3-deploy', node: 'deploy', dwell: 700 });
+    }
+    if (stage >= 8) {
+      tail.push({ edge: 'deploy-monitor', node: 'monitor', dwell: 700 });
+      tail.push({ edge: 'monitor-card', node: 'card', dwell: 700 });
+      tail.push({ edge: 'card-board', node: 'board', dwell: 700, closesWheel: true });
+    }
+    return entry.concat(tail);
+  }
+
+  var SEQ = seqForStage(8);
 
   var NODE_MAP = {};
   NODES.forEach(function (n) { NODE_MAP[n.name] = n; });
@@ -194,7 +229,7 @@
     return 'M ' + p1.x + ' ' + p1.y + ' L ' + p2.x + ' ' + p2.y;
   }
 
-  function edgeSvg(e, id, extraCls, noFlow) {
+  function edgeSvg(e, id, extraCls) {
     var cls = 'fedge' + (e.dashed ? ' dashed' : '') + (e.pass ? ' pass' : '') + (e.stop ? ' stop' : '') +
       (e.thin ? ' thin' : '') + (extraCls ? ' ' + extraCls : '');
     var mid = midpoint(e);
@@ -209,16 +244,7 @@
       labelSvg = '<rect class="' + bgCls + '" x="' + (mid.x - w / 2) + '" y="' + (mid.y - 15) + '" width="' + w + '" height="' + h + '" rx="10"/>' +
         '<text class="' + txtCls + '" x="' + mid.x + '" y="' + (mid.y - 1) + '">' + esc(e.label) + '</text>';
     }
-    var flowSvg = '';
-    if (!noFlow) {
-      var a = NODE_MAP[e.a], b = NODE_MAP[e.b];
-      var dist = Math.hypot(b.cx - a.cx, b.cy - a.cy);
-      var dur = Math.max(1.6, Math.min(3.2, dist / 140));
-      var dotCls = 'flowdot' + (e.pass ? ' pass' : (e.stop ? ' stop' : ''));
-      var r = e.thin ? 2.5 : 3.5;
-      flowSvg = '<circle class="' + dotCls + '" r="' + r + '"><animateMotion dur="' + dur + 's" repeatCount="indefinite"><mpath href="#' + id + '"/></animateMotion></circle>';
-    }
-    return pathSvg + labelSvg + flowSvg;
+    return pathSvg + labelSvg;
   }
 
   function midpoint(e) {
@@ -230,7 +256,7 @@
   function refKind(ref) { return ref.slice(0, 2) === 'n:' ? 'node' : 'edge'; }
   function refName(ref) { return ref.slice(2); }
 
-  function renderRef(ref, extraCls, noFlow) {
+  function renderRef(ref, extraCls) {
     var kind = refKind(ref), name = refName(ref);
     if (kind === 'node') {
       var n = NODE_MAP[name];
@@ -239,14 +265,17 @@
     // Edges: the id + extra classes (new/sil/hl) go directly on the <path>, not a wrapping <g> —
     // DeckFlow needs an SVGGeometryElement (getTotalLength/getPointAtLength), which a <g> is not.
     var e = EDGES_MAP[name];
-    return edgeSvg(e, '__ID_e_' + name, extraCls, noFlow);
+    return edgeSvg(e, '__ID_e_' + name, extraCls);
   }
 
   var EDGES_MAP = {};
   EDGES.forEach(function (e) { EDGES_MAP[e.name] = e; });
 
   /**
-   * LoopCanvas.mount(containerEl, { stage, ns, silhouette = false, token = false, revealFrom = stage })
+   * LoopCanvas.mount(containerEl, { stage, ns, silhouette = false, token = false, drawIn = false,
+   * revealFrom = stage }). `drawIn` additionally hides every edge until DeckFlow lights it
+   * (the L17 flow-play reveal-from-nothing effect) — leave it off for edges that must render
+   * fully visible immediately, even when `token` adds a traveling dot on top.
    */
   function mount(containerEl, opts) {
     opts = opts || {};
@@ -254,11 +283,11 @@
     var ns = opts.ns;
     var silhouette = !!opts.silhouette;
     var token = !!opts.token;
+    var drawIn = !!opts.drawIn;
     var revealFrom = opts.revealFrom || stage;
     if (!ns) throw new Error('LoopCanvas.mount requires opts.ns');
 
     var effStage = silhouette ? 8 : stage;
-    var noFlow = token || silhouette;
 
     var included = {};
 
@@ -287,7 +316,7 @@
     EDGES.forEach(function (e) {
       var ref = 'e:' + e.name;
       if (!included[ref]) return;
-      bodyParts.push(renderPiece(ref, ns, isNewly(e.stageIn), silhouette, noFlow));
+      bodyParts.push(renderPiece(ref, ns, isNewly(e.stageIn), silhouette));
     });
 
     var tokenSvg = '';
@@ -318,7 +347,7 @@
 
     containerEl.innerHTML = svg;
 
-    if (token) {
+    if (token && drawIn) {
       // Draw-on-lit hack: only meaningful on the flow-play canvas, where DeckFlow lights edges
       // one at a time; everywhere else edges must render fully visible immediately.
       var svgEl = containerEl.querySelector('svg');
@@ -330,11 +359,11 @@
     }
   }
 
-  function renderPiece(ref, ns, isNew, silhouette, noFlow) {
+  function renderPiece(ref, ns, isNew, silhouette) {
     var extra = [];
     if (isNew) extra.push('new');
     if (silhouette) extra.push('sil');
-    return renderRef(ref, extra.join(' '), noFlow);
+    return renderRef(ref, extra.join(' '));
   }
 
   function pos(name) {
@@ -342,5 +371,30 @@
     return n ? { x: n.cx, y: n.cy } : null;
   }
 
-  window.LoopCanvas = { mount: mount, SEQ: SEQ, pos: pos, NODES: NODES, EDGES: EDGES };
+  /**
+   * LoopCanvas.mountFlow(containerEl, { stage, ns, revealFrom }) — the per-lesson equivalent of
+   * the L17 centerpiece: mounts the diagram fully visible (no drawIn hiding) with a single
+   * traveling token, then replays `seqForStage(stage)` every time the containing `.slide`
+   * becomes active via `deck:activate`. One narrative dot, not one ambient dot per edge.
+   */
+  function mountFlow(containerEl, opts) {
+    opts = opts || {};
+    var ns = opts.ns, stage = opts.stage;
+    mount(containerEl, { stage: stage, ns: ns, revealFrom: opts.revealFrom, token: true });
+    var seq = seqForStage(stage);
+    document.addEventListener('deck:activate', function (e) {
+      if (!e.detail || !e.detail.slide || !window.DeckFlow) return;
+      if (e.detail.slide.contains(containerEl)) {
+        window.DeckFlow.reset(ns);
+        window.DeckFlow.play({ ns: ns, seq: seq, speed: 1 });
+      } else {
+        // Stop this canvas's rAF loop the moment its own slide is no longer active — otherwise
+        // a token mid-flight keeps animating in the background (invisible, but still ticking
+        // getElementById/getPointAtLength every frame) until its sequence runs out on its own.
+        window.DeckFlow.pause(ns);
+      }
+    });
+  }
+
+  window.LoopCanvas = { mount: mount, mountFlow: mountFlow, SEQ: SEQ, seqForStage: seqForStage, pos: pos, NODES: NODES, EDGES: EDGES };
 })();

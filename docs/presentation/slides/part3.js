@@ -153,13 +153,13 @@ window.PARTS[3] = `
 window.PARTS_INIT[3] = function () {
   var l7 = document.getElementById('p3l7-canvas');
   if (l7) {
-    LoopCanvas.mount(l7, { stage: 2, ns: 'p3l7' });
+    LoopCanvas.mountFlow(l7, { stage: 2, ns: 'p3l7' });
     var agent = document.getElementById('p3l7-n-agent');
     if (agent) agent.classList.add('hl');
   }
   var l8 = document.getElementById('p3l8-canvas');
   if (l8) {
-    LoopCanvas.mount(l8, { stage: 2, ns: 'p3l8' });
+    LoopCanvas.mountFlow(l8, { stage: 2, ns: 'p3l8' });
     var wire = document.getElementById('p3l8-e-engineer-agent');
     if (wire) wire.classList.add('hl');
   }

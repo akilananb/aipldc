@@ -253,15 +253,15 @@ window.PARTS[4] = `
 
 window.PARTS_INIT[4] = function () {
   var l11 = document.getElementById('p4l11-canvas');
-  if (l11) LoopCanvas.mount(l11, { stage: 3, ns: 'p4l11' });
+  if (l11) LoopCanvas.mountFlow(l11, { stage: 3, ns: 'p4l11' });
   var l12 = document.getElementById('p4l12-canvas');
-  if (l12) LoopCanvas.mount(l12, { stage: 4, ns: 'p4l12' });
+  if (l12) LoopCanvas.mountFlow(l12, { stage: 4, ns: 'p4l12' });
   var l13 = document.getElementById('p4l13-canvas');
-  if (l13) LoopCanvas.mount(l13, { stage: 5, ns: 'p4l13' });
+  if (l13) LoopCanvas.mountFlow(l13, { stage: 5, ns: 'p4l13' });
   var l14 = document.getElementById('p4l14-canvas');
-  if (l14) LoopCanvas.mount(l14, { stage: 6, ns: 'p4l14' });
+  if (l14) LoopCanvas.mountFlow(l14, { stage: 6, ns: 'p4l14' });
   var l15 = document.getElementById('p4l15-canvas');
-  if (l15) LoopCanvas.mount(l15, { stage: 7, ns: 'p4l15' });
+  if (l15) LoopCanvas.mountFlow(l15, { stage: 7, ns: 'p4l15' });
   var l16 = document.getElementById('p4l16-canvas');
-  if (l16) LoopCanvas.mount(l16, { stage: 8, ns: 'p4l16' });
+  if (l16) LoopCanvas.mountFlow(l16, { stage: 8, ns: 'p4l16' });
 };

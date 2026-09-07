@@ -89,5 +89,5 @@ window.PARTS[2] = `
 `;
 
 window.PARTS_INIT[2] = function () {
-  LoopCanvas.mount(document.getElementById('p2l6-canvas'), { stage: 2, ns: 'p2l6', revealFrom: 1 });
+  LoopCanvas.mountFlow(document.getElementById('p2l6-canvas'), { stage: 2, ns: 'p2l6', revealFrom: 1 });
 };
