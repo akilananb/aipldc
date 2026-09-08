@@ -245,7 +245,7 @@ export default function ItemListPage() {
           <StatusBadge state={item.canonicalState} />
         </Table.Cell>
         <Table.Cell>
-          <QualityIcon verdict={item.qualityVerdict} />
+          {item.kind === 'story' && <QualityIcon verdict={item.qualityVerdict} />}
         </Table.Cell>
         <Table.Cell>{needsAttention(item.canonicalState) && <Badge color="amber">needs your review</Badge>}</Table.Cell>
         <Table.Cell>
