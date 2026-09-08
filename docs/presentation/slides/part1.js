@@ -16,11 +16,11 @@ window.PARTS[1] = `
   .p1-legend .card-chip b { color:var(--ink); }
 </style>
 
-<section class="slide" data-lesson="Title" data-min="0" data-notes="We have about forty-five minutes. We are going to build one restaurant kitchen on screen, station by station, and by the end you will see a real request go all the way from a guest's order to a plate on the table, with the AI doing the cooking and people doing the tasting. Every kitchen term maps to a real engineering step, and we will name both as we go. You do not need to know how software is written. You need to know how a good kitchen — and a good delivery pipeline — is run.">
+<section class="slide" data-lesson="Title" data-min="0" data-notes="Sixty minutes and one lens. Working with agents has moved outward four times: from the words you type, to the context the model sees, to the harness one run lives in, to the loop that repeats, checks, retries and stops that run without you on every turn. We start with one customer placing one customized order and never leave it. First the order becomes context: a spec. Then the smallest loop builds from it. Then every stage of a real delivery lifecycle is added, and at each one we name which of the four loop decisions it enforces and what the human signs. By the end the whole SDLC is one engineered loop on screen.">
   <div class="title-grid">
     <div>
-      <h1>The AI Kitchen</h1>
-      <p class="small">How AI-native engineering builds and ships software — told through one working kitchen.</p>
+      <h1>AI-Native Engineering</h1>
+      <p class="small">One customized order — from prompt, to context, to harness, to loop — through a whole delivery lifecycle run by agents and checked by people.</p>
     </div>
     <svg class="loop-hero" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="A loop drawing itself on load">
       <defs>
@@ -42,55 +42,77 @@ window.PARTS[1] = `
   </div>
 </section>
 
-<section class="slide" data-lesson="Monday, 9:04 a.m." data-min="3" data-notes="Start with Priya, not with technology. Her request is tiny and completely reasonable, and in most organisations it still takes six weeks, most of which is waiting and misunderstanding, not building. Everyone here has already tried an AI that writes code, and it did not make that six weeks disappear, because the cook was never the bottleneck. The kitchen was. This deck is about the kitchen. We will follow Priya's spreadsheet button the whole way through, and it is a real request from a real run of this system.">
+<section class="slide" data-lesson="A customized order" data-min="3" data-notes="A customized order is a perfect small example of a feature request: five constraints, all reasonable, none written down in a form anyone can check. Our real request for the next hour is Priya's: export the filtered orders view to CSV. It comes from a live run of this pipeline against a real repository. Everyone in this room has an AI that writes code. The order is still the bottleneck, and that is what we fix first.">
   <style>.p1-hook .panel{padding:12px 16px}.p1-hook h3{margin:8px 0 6px}.p1-hook .stack{gap:8px}</style>
   <div class="p1-hook">
   <div class="lesson-tag">Hook</div>
-  <h2>Monday, 9:04 a.m.</h2>
+  <h2>A customized order</h2>
   <div class="two">
     <div class="panel">
-      <h3>The request</h3>
-      <div class="reveal callout">Priya runs sales operations. She filters the orders screen every morning and needs one small thing: a button that downloads exactly what she is looking at as a spreadsheet.</div>
+      <h3>What the customer says</h3>
+      <div class="reveal callout warn">'Chicken burger, no onions, extra spicy, gluten-free bun, and it has to be at my door by seven.'</div>
     </div>
     <div class="panel">
-      <h3>Where it usually goes</h3>
+      <h3>What actually reaches the kitchen</h3>
       <div class="stack">
-        <div class="reveal callout">Week 1 — it is logged and prioritised.</div>
-        <div class="reveal callout">Week 3 — a developer picks it up and comes back with six questions.</div>
-        <div class="reveal callout">Week 5 — it is built. It exports the wrong columns.</div>
-        <div class="reveal callout">Week 6 — it ships. Priya has been using a workaround for a month and a half.</div>
+        <div class="reveal callout">A shouted summary. Two of the five customizations survive.</div>
+        <div class="reveal callout">The cook improvises the rest.</div>
+        <div class="reveal callout">It arrives at 7:40 with onions.</div>
       </div>
     </div>
   </div>
-  <div class="reveal callout warn">Everyone in this room has an AI that can write code now. So why is the spreadsheet button still six weeks away?</div>
-  <div class="punch">Everyone has an AI that can cook. Almost nobody has a kitchen.</div>
+  <div class="reveal callout">Priya, in sales operations, asks for a button that downloads exactly the orders she has filtered as a spreadsheet. Same problem: a wish with five customizations in it, and only the loud ones survive the hand-off.</div>
+  <div class="punch">Everyone can cook now. The hard part is getting the order right.</div>
   </div>
 </section>
 
-<section class="slide" data-lesson="Menu" data-min="2" data-notes="This is the shape of the next forty-five minutes. Twelve short courses, one picture that grows. Each course is one idea and one line worth remembering. If we run short we drop Course 4, the under-the-hood one, never Course 7 or Course 10, the parallel stations and the full run.">
+<section class="slide" data-lesson="Menu" data-min="2" data-notes="Four acts. First the lens: the four-layer map from prompt to loop. Second context: spec-driven development, the real files, and the one place a team customizes the schema. Third harness: the smallest loop that works, the equipment under it, and the loop contract that names what every later stage enforces. Fourth the loop at lifecycle scale: every stage tagged with the decisions it enforces, one order all the way round, and the question to take home. Course 16 and Course 17 are the ones we drop if we are short.">
+  <style>#p1-agenda{grid-template-columns:repeat(5,1fr);gap:5px}#p1-agenda .card{padding:5px 7px}#p1-agenda .card b{font-size:12px;line-height:1.15}#p1-agenda .card .t{font-size:10px;line-height:1.15}</style>
   <div class="lesson-tag">Menu</div>
-  <h2>Twelve courses through an AI-native delivery pipeline.</h2>
+  <h2>Eighteen courses, one order, one growing picture</h2>
   <div id="p1-agenda" class="agenda"></div>
-  <p class="small" style="margin-top:10px;">Total: <span id="p1-agenda-total"></span></p>
-  <p style="margin-top:18px;">One diagram is built on screen a station at a time. If we run short we skip Course 4 — never Course 7 or Course 10.</p>
+  <p style="margin-top:10px;">Total <span id="p1-agenda-total"></span>. Four acts: the lens (Course 1), context — the order as a spec (2–5), harness and the loop contract (6–8), the loop at SDLC scale and the close (9–18). If we run short we skip Course 16 and Course 17 — never Course 11 or Course 15.</p>
 </section>
 
-<section class="slide" data-lesson="Who works in the kitchen" data-min="3" data-notes="Three kinds of workers build everything you are about to see. Equipment is deterministic: a thermometer gives the same reading every time, and in software that is the automated tests. Line cooks are the AI agents: fast, skilled, good in the fuzzy middle where a ticket needs interpreting. And the chef at the pass carries judgment, the decisions a person has to put their name to. The entire machine is just these three arranged well. The gray silhouette on the right is the finished kitchen. Do not try to read it yet.">
+<section class="slide" data-lesson="From prompt to loop" data-min="3" data-notes="Four layers, each wrapping the one before. Prompt engineering is the words you send; its ceiling is that a perfect sentence cannot supply facts the model never saw. Context engineering is everything the model sees at inference: history, documents, tool output, state. That is where our spec will live. Harness engineering is the environment one run lives in: tools, sandbox, constraints, a protocol. It makes one run reliable. Loop engineering is the cycle that repeats, checks, retries and stops that run without a human on every turn. By hand the human is the loop: prompt, inspect, correct, prompt again. Engineered, a system runs trigger, act, check, retry, continue or stop, and the human designs the loop and signs at the gates. That is the whole talk in one slide.">
   <div class="lesson-tag">Course 1</div>
-  <h2>Who works in the kitchen</h2>
+  <h2>From prompt to loop</h2>
+  <div class="two">
+    <div>
+      <h3>Four layers, each wrapping the last</h3>
+      <div class="ladder">
+        <div class="reveal rung"><b>Prompt engineering</b> — the words you send. A perfect sentence cannot supply facts the model never saw.</div>
+        <div class="reveal rung"><b>Context engineering</b> — everything the model sees: history, documents, tool output, state. The spec lives here.</div>
+        <div class="reveal rung"><b>Harness engineering</b> — the environment one run lives in: tools, sandbox, constraints, a protocol. Makes one run reliable.</div>
+        <div class="reveal rung"><b>Loop engineering</b> — the cycle that repeats, checks, retries and stops that run without a human on every turn.</div>
+      </div>
+    </div>
+    <div class="panel">
+      <h3>Who is the loop?</h3>
+      <div class="reveal callout warn">By hand: prompt → inspect → correct → prompt again. The human is the loop.</div>
+      <div class="reveal callout">Engineered: trigger → act → check → retry → continue or stop. A system runs the loop; the human designs it and signs at the gates.</div>
+      <p class="small">After Addy Osmani, 'Loop Engineering' (2026); tosea.ai; The AI Runtime.</p>
+    </div>
+  </div>
+  <div class="punch">Stop writing the perfect prompt. Design the loop that writes it.</div>
+</section>
+
+<section class="slide" data-lesson="Three kinds of workers" data-min="2" data-notes="Now the three kinds of workers behind everything you'll see today. Code is deterministic: the tests, the scope guard, the monitor threshold, the parser that reads the spec. Agents take the fuzzy middle: reading a request, drafting a story, planning tasks, building, reviewing. People own judgment: three gates, each with named roles. The gray picture is the finished pipeline. Do not read it yet.">
+  <div class="lesson-tag">Course 2</div>
+  <h2>Three kinds of workers</h2>
   <div class="two">
     <table class="tbl">
-      <tr><th>Who</th><th>What they are good at</th><th>In this kitchen</th></tr>
-      <tr><td>Equipment</td><td>The same result every single time — timers, thermometers, scales</td><td>Runs the tests, checks the numbers, sets up a clean workspace</td></tr>
-      <tr><td>Line cooks</td><td>Skill and speed in the fuzzy middle — reading a ticket, improvising, fixing a dish</td><td>The AI agents: interpreting, building, debugging, planning</td></tr>
-      <tr><td>The chef and the pass</td><td>Judgment. The calls that need a person's name on them</td><td>What we should make, what matters, is it right, what we trade off</td></tr>
+      <tr><th>Who</th><th>Good at</th><th>In this pipeline</th></tr>
+      <tr><td>Code</td><td>The same result every time</td><td>Tests, the scope guard, the threshold monitor, the schema parser</td></tr>
+      <tr><td>Agents</td><td>The fuzzy middle: reading, drafting, planning, fixing</td><td>grill, PO, plan, build, review, release — every output verified by code</td></tr>
+      <tr><td>People</td><td>Judgment with a name on it</td><td>The three gates: G1, G2, G3, each with named roles</td></tr>
     </table>
     <div>
       <div id="p1l1-canvas" class="loopcanvas"></div>
-      <p class="small">the whole kitchen — we build it one station at a time</p>
+      <p class="small">the finished pipeline — built one stage at a time from Course 6</p>
     </div>
   </div>
-  <div class="punch">Let equipment do what equipment does. Let cooks cook. Keep a chef on the pass.</div>
+  <div class="punch">Use code where determinism is enough. Use agents where reasoning is required. Keep people where judgment matters.</div>
 </section>
 `;
 
