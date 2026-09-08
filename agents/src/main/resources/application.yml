@@ -33,8 +33,36 @@ embabel:
             api-key: ${OPENAI_CUSTOM_API_KEY:stub}
             models: ${OPENAI_CUSTOM_MODELS:stub/grill,stub/po}
 
+# Langfuse (self-hosted, OTLP/HTTP). Tracing is OFF unless AgentsApplication.applyLangfuseFromEnv()
+# sees LANGFUSE_PUBLIC_KEY + LANGFUSE_SECRET_KEY, in which case it sets the two
+# LANGFUSE_TRACING_ENABLED / LANGFUSE_OTLP_BASIC_AUTH system properties read below.
+langfuse:
+  public-url: ${LANGFUSE_PUBLIC_URL:http://localhost:3000}
+  project-id: ${LANGFUSE_PROJECT_ID:}
+
 management:
   endpoints:
     web:
       exposure:
         include: health,info
+  tracing:
+    export:
+      enabled: ${LANGFUSE_TRACING_ENABLED:false}
+    sampling:
+      probability: 1.0
+  observations:
+    enable:
+      "http.server.requests": false   # no REST-noise spans in Langfuse
+      "http.client.requests": false   # RemoteBoardPort calls to control-plane
+  otlp:
+    metrics:
+      export:
+        enabled: false                  # Langfuse accepts traces only
+  opentelemetry:
+    tracing:
+      export:
+        otlp:
+          endpoint: ${LANGFUSE_OTLP_ENDPOINT:http://localhost:3000/api/public/otel/v1/traces}
+          headers:
+            Authorization: Basic ${LANGFUSE_OTLP_BASIC_AUTH:}
+            x-langfuse-ingestion-version: "4"

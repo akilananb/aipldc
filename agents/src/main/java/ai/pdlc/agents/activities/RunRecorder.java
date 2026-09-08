@@ -30,14 +30,14 @@ public class RunRecorder {
         this.activeProfile = activeProfile;
     }
 
-    public void record(WorkItemRef item, String agent, String workflowRunId, String outcome,
+    public void record(WorkItemRef item, String agent, String workflowRunId, String traceUrl, String outcome,
                        Long tokens, Integer iterations) {
         try {
             UUID workItemId = findOrCreateWorkItem(item);
             jdbc.update("""
                     INSERT INTO runs (work_item_id, agent, workflow_run_id, trace_url, tokens, iterations, outcome)
                     VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """, workItemId, agent, workflowRunId, null, tokens, iterations, outcome);
+                    """, workItemId, agent, workflowRunId, traceUrl, tokens, iterations, outcome);
         } catch (RuntimeException e) {
             log.warn("[runs] could not record {} run for {}: {}", agent, item, e.toString());
         }
@@ -47,13 +47,13 @@ public class RunRecorder {
      * work_items.id} (no board_id lookup/placeholder-creation needed) — used by the mention flow,
      * whose {@link ai.pdlc.core.domain.AgentMentionRequest} carries the internal work item id, not
      * a board-native id. */
-    public void recordById(UUID workItemId, String agent, String workflowRunId, String outcome,
+    public void recordById(UUID workItemId, String agent, String workflowRunId, String traceUrl, String outcome,
                             Long tokens, Integer iterations) {
         try {
             jdbc.update("""
                     INSERT INTO runs (work_item_id, agent, workflow_run_id, trace_url, tokens, iterations, outcome)
                     VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """, workItemId, agent, workflowRunId, null, tokens, iterations, outcome);
+                    """, workItemId, agent, workflowRunId, traceUrl, tokens, iterations, outcome);
         } catch (RuntimeException e) {
             log.warn("[runs] could not record {} run for work item {}: {}", agent, workItemId, e.toString());
         }

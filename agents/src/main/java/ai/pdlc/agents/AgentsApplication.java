@@ -5,8 +5,10 @@ import ai.pdlc.core.config.Profile;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Base64;
 import java.util.LinkedHashSet;
 import java.util.Set;
 
@@ -17,7 +19,9 @@ import java.util.Set;
  * {@code agents.roles.<role>.model} are translated into the Embabel custom OpenAI-compatible provider
  * properties as system properties (Spring's Environment ranks system properties above {@code
  * application.yml} and OS env vars), so the per-role model names are registered with the gateway for
- * {@code Ai.withLlm(LlmOptions.withModel(roleModel))} to resolve at runtime.
+ * {@code Ai.withLlm(LlmOptions.withModel(roleModel))} to resolve at runtime. A second hook,
+ * {@link #applyLangfuseFromEnv()}, turns {@code LANGFUSE_PUBLIC_KEY}/{@code LANGFUSE_SECRET_KEY}
+ * into the OTLP Basic-auth header and tracing-enabled flag consumed by {@code application.yml}.
  */
 @SpringBootApplication
 public class AgentsApplication {
@@ -26,6 +30,7 @@ public class AgentsApplication {
 
     public static void main(String[] args) {
         applyLlmRoutingFromConfig();
+        applyLangfuseFromEnv();
         SpringApplication.run(AgentsApplication.class, args);
     }
 
@@ -70,6 +75,25 @@ public class AgentsApplication {
             // fail loudly on first LLM use if the provider is genuinely misconfigured.
             System.err.println("[agents] could not derive LLM routing from " + configPath + ": " + e.getMessage());
         }
+    }
+
+    /** Turns LANGFUSE_PUBLIC_KEY/LANGFUSE_SECRET_KEY into the Basic-auth header application.yml
+     * expects and switches tracing export on; both absent = tracing stays off silently, exactly one
+     * absent = off with a warning. System properties, so they outrank the yml placeholders. */
+    static void applyLangfuseFromEnv() {
+        String publicKey = envOr("LANGFUSE_PUBLIC_KEY", null);
+        String secretKey = envOr("LANGFUSE_SECRET_KEY", null);
+        if (publicKey == null && secretKey == null) {
+            return;
+        }
+        if (publicKey == null || secretKey == null) {
+            System.err.println("[agents] LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY must both be set; tracing stays off");
+            return;
+        }
+        String basic = Base64.getEncoder().encodeToString((publicKey + ":" + secretKey).getBytes(StandardCharsets.UTF_8));
+        System.setProperty("LANGFUSE_OTLP_BASIC_AUTH", basic);
+        System.setProperty("LANGFUSE_TRACING_ENABLED", "true");
+        System.out.println("[agents] Langfuse tracing enabled -> " + envOr("LANGFUSE_OTLP_ENDPOINT", "http://localhost:3000/api/public/otel/v1/traces"));
     }
 
     private static String envOr(String name, String fallback) {

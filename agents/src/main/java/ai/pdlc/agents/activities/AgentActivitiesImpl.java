@@ -8,6 +8,7 @@ import ai.pdlc.agents.po.PoAgent;
 import ai.pdlc.agents.quality.QualityAgent;
 import ai.pdlc.agents.release.ReleaseAgent;
 import ai.pdlc.agents.review.ReviewAgent;
+import ai.pdlc.agents.tracing.AgentRunTracer;
 import ai.pdlc.core.domain.AgentMentionRequest;
 import ai.pdlc.core.domain.Comment;
 import ai.pdlc.core.domain.GrillHandoff;
@@ -31,12 +32,14 @@ import org.springframework.stereotype.Component;
 
 import java.util.List;
 import java.util.UUID;
+import java.util.function.Supplier;
 
 /**
  * Hosts {@link AgentActivities} on the {@code reasoning} queue. Pure reasoning: gathers context
- * best-effort, invokes the grill/PO agents, and records one {@code runs} row per invocation
- * (plan step 6). No board/DB writes other than the {@code runs} insert — board/repo side effects stay
- * in control-plane's {@code BoardSideEffects}.
+ * best-effort, invokes the grill/PO agents, and records one {@code runs} row per invocation,
+ * wrapped in one Langfuse trace ({@link AgentRunTracer}) (plan step 6). No board/DB writes other
+ * than the {@code runs} insert — board/repo side effects stay in control-plane's {@code
+ * BoardSideEffects}.
  */
 @Component
 public class AgentActivitiesImpl implements AgentActivities {
@@ -51,10 +54,12 @@ public class AgentActivitiesImpl implements AgentActivities {
     private final QualityAgent qualityAgent;
     private final MetricsPort metrics;
     private final RunRecorder runs;
+    private final AgentRunTracer tracer;
 
     public AgentActivitiesImpl(GrillAgent grillAgent, PoAgent poAgent, PlanAgent planAgent,
                                 ReviewAgent reviewAgent, ReleaseAgent releaseAgent, MonitorAgent monitorAgent,
-                                MentionAgent mentionAgent, QualityAgent qualityAgent, MetricsPort metrics, RunRecorder runs) {
+                                MentionAgent mentionAgent, QualityAgent qualityAgent, MetricsPort metrics, RunRecorder runs,
+                                AgentRunTracer tracer) {
         this.grillAgent = grillAgent;
         this.poAgent = poAgent;
         this.planAgent = planAgent;
@@ -65,115 +70,79 @@ public class AgentActivitiesImpl implements AgentActivities {
         this.qualityAgent = qualityAgent;
         this.metrics = metrics;
         this.runs = runs;
+        this.tracer = tracer;
     }
 
     @Override
     public GrillHandoff grillEvaluate(WorkItemRef item, GrillHandoff previous, List<BoardCommentEvent> newComments) {
-        try {
-            GrillHandoff result = grillAgent.evaluate(item, previous, newComments);
-            runs.record(item, "grill", workflowId(), "ok", null, null);
-            return result;
-        } catch (RuntimeException e) {
-            runs.record(item, "grill", workflowId(), "error", null, null);
-            throw e;
-        }
+        return traced("grill", item, () -> grillAgent.evaluate(item, previous, newComments));
     }
 
     @Override
     public PoDraftResult poDraft(WorkItemRef item, GrillHandoff grill, boolean allowFollowUps) {
-        try {
-            PoDraftResult result = poAgent.draft(item, grill, allowFollowUps);
-            runs.record(item, "po", workflowId(), "ok", null, null);
-            return result;
-        } catch (RuntimeException e) {
-            runs.record(item, "po", workflowId(), "error", null, null);
-            throw e;
-        }
+        return traced("po", item, () -> poAgent.draft(item, grill, allowFollowUps));
     }
 
     @Override
     public StoryDraft poRevise(WorkItemRef item, PoHandoff previous, List<Comment> openComments) {
-        try {
-            StoryDraft result = poAgent.revise(item, previous, openComments);
-            runs.record(item, "po", workflowId(), "ok", null, null);
-            return result;
-        } catch (RuntimeException e) {
-            runs.record(item, "po", workflowId(), "error", null, null);
-            throw e;
-        }
+        return traced("po", item, () -> poAgent.revise(item, previous, openComments));
     }
 
     @Override
     public QualityReport evaluateQuality(WorkItemRef item, String subjectKind, String contentMd) {
-        try {
-            QualityReport result = qualityAgent.evaluate(subjectKind, contentMd);
-            runs.record(item, "quality", workflowId(), "ok", null, null);
-            return result;
-        } catch (RuntimeException e) {
-            runs.record(item, "quality", workflowId(), "error", null, null);
-            throw e;
-        }
+        return traced("quality", item, () -> qualityAgent.evaluate(subjectKind, contentMd));
     }
 
     @Override
     public PlanHandoff planTasks(WorkItemRef story, PoHandoff po) {
-        try {
-            PlanHandoff result = planAgent.plan(story, po);
-            runs.record(story, "plan", workflowId(), "ok", null, null);
-            return result;
-        } catch (RuntimeException e) {
-            runs.record(story, "plan", workflowId(), "error", null, null);
-            throw e;
-        }
+        return traced("plan", story, () -> planAgent.plan(story, po));
     }
 
     @Override
     public ReviewHandoff reviewStory(WorkItemRef story, PoHandoff po, List<Task> tasks, List<BuildResult> results) {
-        try {
-            ReviewHandoff result = reviewAgent.review(story, po, tasks, results);
-            runs.record(story, "review", workflowId(), "ok", null, null);
-            return result;
-        } catch (RuntimeException e) {
-            runs.record(story, "review", workflowId(), "error", null, null);
-            throw e;
-        }
+        return traced("review", story, () -> reviewAgent.review(story, po, tasks, results));
     }
 
     @Override
     public ReleaseHandoff draftReleasePack(WorkItemRef story, PoHandoff po, List<Task> tasks, List<BuildResult> results, ReviewHandoff review) {
-        try {
-            ReleaseHandoff result = releaseAgent.draft(story, po, tasks, results, review);
-            runs.record(story, "release", workflowId(), "ok", null, null);
-            return result;
-        } catch (RuntimeException e) {
-            runs.record(story, "release", workflowId(), "error", null, null);
-            throw e;
-        }
+        return traced("release", story, () -> releaseAgent.draft(story, po, tasks, results, review));
     }
 
     @Override
     public MonitorHandoff evaluateMonitorRules(WorkItemRef story, List<MonitorRule> rules) {
-        try {
-            MonitorHandoff result = monitorAgent.evaluate(story, rules, metrics);
-            runs.record(story, "monitor", workflowId(), "ok", null, null);
-            return result;
-        } catch (RuntimeException e) {
-            runs.record(story, "monitor", workflowId(), "error", null, null);
-            throw e;
-        }
+        return traced("monitor", story, () -> monitorAgent.evaluate(story, rules, metrics));
     }
 
     @Override
     public String mentionAnalyze(AgentMentionRequest request) {
         UUID workItemId = UUID.fromString(request.workItemId());
-        try {
-            String result = mentionAgent.analyze(request);
-            runs.recordById(workItemId, "mention", workflowId(), "ok", null, null);
-            return result;
-        } catch (RuntimeException e) {
-            runs.recordById(workItemId, "mention", workflowId(), "error", null, null);
-            throw e;
-        }
+        String workflowId = workflowId();
+        return tracer.trace("mention", null, workItemId, workflowId, run -> {
+            try {
+                String result = mentionAgent.analyze(request);
+                runs.recordById(workItemId, "mention", workflowId, run.traceUrl(), "ok", null, null);
+                return result;
+            } catch (RuntimeException e) {
+                runs.recordById(workItemId, "mention", workflowId, run.traceUrl(), "error", null, null);
+                throw e;
+            }
+        });
+    }
+
+    /** Wraps one agent invocation in a Langfuse trace and records the {@code runs} row with the
+     * resulting trace URL. */
+    private <T> T traced(String agent, WorkItemRef item, Supplier<T> body) {
+        String workflowId = workflowId();
+        return tracer.trace(agent, item, null, workflowId, run -> {
+            try {
+                T result = body.get();
+                runs.record(item, agent, workflowId, run.traceUrl(), "ok", null, null);
+                return result;
+            } catch (RuntimeException e) {
+                runs.record(item, agent, workflowId, run.traceUrl(), "error", null, null);
+                throw e;
+            }
+        });
     }
 
     private static String workflowId() {
