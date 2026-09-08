@@ -21,6 +21,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Matcher;
@@ -32,10 +33,10 @@ import java.util.regex.Pattern;
  * stub-llm matches on; everything else — the six fixed categories, the mandatory risk question, and
  * answer evaluation — is deterministic Java (the pre-decided plain-guard fallback for {@code @Condition}).
  *
- * <p>It never answers its own questions: on re-run it only marks each question {@code answered}
- * (from a human {@link BoardCommentEvent} that references it) or {@code parked} (unreferenced in this
- * batch — becomes an "Out of scope" line), never {@code open} → so a single human response batch
- * resolves the handoff.
+ * <p>It never answers its own questions: on re-run it marks each question {@code answered} (from a
+ * human {@link BoardCommentEvent} that references it with {@code <id>: <text>}) or {@code parked}
+ * (referenced with {@code <id>: park}); a question not referenced in a batch stays {@code open} —
+ * only an explicit park closes it, so nothing is silently dropped.
  */
 @Component
 public class GrillAgent {
@@ -45,7 +46,9 @@ public class GrillAgent {
     /** pii / auth / payment keywords that force a mandatory RISK question (playbook §1 "Validates"). */
     private static final List<String> RISK_KEYWORDS = List.of("pii", "payment", "auth", "password", "credit card", "token");
 
-    private static final Pattern QUESTION_ID = Pattern.compile("\\bq\\d+\\b");
+    private static final Pattern ANSWER_MARKER = Pattern.compile("(?i)\\b((?:q|po)\\d+)\\s*:");
+
+    private static final String PARK_KEYWORD = "park";
 
     private static final ObjectMapper JSON = new ObjectMapper()
             .setPropertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE)
@@ -109,32 +112,71 @@ public class GrillAgent {
         return out;
     }
 
-    private GrillHandoff evaluateAnswers(GrillHandoff previous, List<BoardCommentEvent> newComments) {
+    /** Maps each {@code <id>: <body>} marker in one comment's text to its (trimmed) body — lower-
+     * cased id, in the order the markers appear; a body empty after trimming is skipped (the
+     * question stays open); a repeated id within the same comment: the last occurrence wins. */
+    static Map<String, String> parseAnswers(String text) {
+        Map<String, String> out = new LinkedHashMap<>();
+        if (text == null || text.isBlank()) {
+            return out;
+        }
+        Matcher m = ANSWER_MARKER.matcher(text);
+        List<Integer> matchStarts = new ArrayList<>();
+        List<Integer> bodyStarts = new ArrayList<>();
+        List<String> ids = new ArrayList<>();
+        while (m.find()) {
+            matchStarts.add(m.start());
+            bodyStarts.add(m.end());
+            ids.add(m.group(1).toLowerCase());
+        }
+        for (int i = 0; i < ids.size(); i++) {
+            int bodyEnd = i + 1 < matchStarts.size() ? matchStarts.get(i + 1) : text.length();
+            String body = text.substring(bodyStarts.get(i), bodyEnd).strip();
+            if (!body.isEmpty()) {
+                out.put(ids.get(i), body);
+            }
+        }
+        return out;
+    }
+
+    /** Folds every {@code <id>: text|park} marker across {@code newComments} (later comment wins per
+     * id, remembering that comment's author); a question referenced with body {@code park}/{@code
+     * parked} (case-insensitive) is explicitly parked, referenced with any other body is answered,
+     * unreferenced stays {@code open} — no auto-park (playbook §1, revised: humans control park). */
+    static GrillHandoff evaluateAnswers(GrillHandoff previous, List<BoardCommentEvent> newComments) {
+        Map<String, String> bodies = new LinkedHashMap<>();
+        Map<String, String> authors = new LinkedHashMap<>();
+        for (BoardCommentEvent c : newComments) {
+            for (Map.Entry<String, String> e : parseAnswers(c.text()).entrySet()) {
+                bodies.put(e.getKey(), e.getValue());
+                authors.put(e.getKey(), c.author());
+            }
+        }
         List<GrillQuestion> updated = new ArrayList<>();
-        List<String> parked = new ArrayList<>();
+        List<String> newlyParked = new ArrayList<>();
         for (GrillQuestion q : previous.questions()) {
-            BoardCommentEvent answer = findAnswer(q, newComments);
-            if (answer != null) {
-                updated.add(q.withAnswer(answer.text(), answer.author()));
-            } else {
+            if (q.status() != GrillQuestion.Status.OPEN) {
+                updated.add(q);
+                continue;
+            }
+            String body = bodies.get(q.id().toLowerCase());
+            if (body == null) {
+                updated.add(q);
+            } else if (body.equalsIgnoreCase(PARK_KEYWORD) || body.equalsIgnoreCase("parked")) {
                 updated.add(q.parked());
-                parked.add(q.id());
+                newlyParked.add(q.id());
+            } else {
+                updated.add(q.withAnswer(body, authors.get(q.id().toLowerCase())));
+            }
+        }
+        List<String> parked = new ArrayList<>(previous.parked());
+        for (String id : newlyParked) {
+            if (!parked.contains(id)) {
+                parked.add(id);
             }
         }
         List<String> constraints = previous.constraintsHit() == null ? List.of() : previous.constraintsHit();
         return new GrillHandoff(previous.envelope(), previous.typeDecision(), updated, parked, constraints);
-    }
-
-    private static BoardCommentEvent findAnswer(GrillQuestion q, List<BoardCommentEvent> comments) {
-        for (BoardCommentEvent c : comments) {
-            Matcher m = QUESTION_ID.matcher(c.text());
-            while (m.find()) {
-                if (m.group().equalsIgnoreCase(q.id())) {
-                    return c;
-                }
-            }
-        }
-        return null;
     }
 
     // -- LLM (real Embabel Ai API) ---------------------------------------------------------------

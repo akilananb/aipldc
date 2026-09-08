@@ -1,5 +1,6 @@
 package ai.pdlc.core.domain;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -33,5 +34,12 @@ public record GrillHandoff(
 
     public List<GrillQuestion> openQuestions() {
         return questions.stream().filter(q -> q.status() == GrillQuestion.Status.OPEN).toList();
+    }
+
+    /** Appends the PO agent's follow-up questions (ids {@code po1, po2, …}) to the list. */
+    public GrillHandoff withFollowUps(List<GrillQuestion> followUps) {
+        List<GrillQuestion> merged = new ArrayList<>(questions);
+        merged.addAll(followUps);
+        return new GrillHandoff(envelope, typeDecision, merged, parked, constraintsHit);
     }
 }

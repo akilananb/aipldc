@@ -9,6 +9,7 @@ import PageHeader from '../components/PageHeader';
 import StatusBadge from '../components/StatusBadge';
 import EmptyState from '../components/EmptyState';
 import Panel from '../components/Panel';
+import ClarificationPanel from '../components/ClarificationPanel';
 
 interface Props {
   item: ItemDetail;
@@ -33,13 +34,15 @@ export default function FeaturePage({ item }: Props) {
     <Box>
       <PageHeader backTo={{ to: '/', label: 'Items' }} title={item.title} badges={<StatusBadge state={item.canonicalState} />} />
 
+      <ClarificationPanel item={item} />
+
       <Box mb="4">
         <Panel title="Stories">
           {stories.length === 0 ? (
             <EmptyState
               icon={<FileQuestion size={28} />}
               title="No story yet"
-              hint="The PO agent drafts a story once grill questions are answered."
+              hint="The PO agent drafts a story once every clarification question is answered or parked."
             />
           ) : (
             <Flex direction="column" gap="2">

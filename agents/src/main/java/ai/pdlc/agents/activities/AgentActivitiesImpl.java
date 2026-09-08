@@ -24,6 +24,7 @@ import ai.pdlc.core.port.MetricsPort;
 import ai.pdlc.core.workflow.AgentActivities;
 import ai.pdlc.core.workflow.BoardCommentEvent;
 import ai.pdlc.core.workflow.BuildResult;
+import ai.pdlc.core.workflow.PoDraftResult;
 import ai.pdlc.core.workflow.StoryDraft;
 import io.temporal.activity.Activity;
 import org.springframework.stereotype.Component;
@@ -79,9 +80,9 @@ public class AgentActivitiesImpl implements AgentActivities {
     }
 
     @Override
-    public List<StoryDraft> poDraft(WorkItemRef item, GrillHandoff grill) {
+    public PoDraftResult poDraft(WorkItemRef item, GrillHandoff grill, boolean allowFollowUps) {
         try {
-            List<StoryDraft> result = poAgent.draft(item, grill);
+            PoDraftResult result = poAgent.draft(item, grill, allowFollowUps);
             runs.record(item, "po", workflowId(), "ok", null, null);
             return result;
         } catch (RuntimeException e) {

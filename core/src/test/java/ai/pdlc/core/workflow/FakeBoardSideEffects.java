@@ -22,6 +22,7 @@ class FakeBoardSideEffects implements BoardSideEffects {
 
     final List<WorkItemRef> readyForStoryCalls = new CopyOnWriteArrayList<>();
     final List<WorkItemRef> grillQuestionsPosted = new CopyOnWriteArrayList<>();
+    final AtomicInteger followUpPosts = new AtomicInteger();
     final List<StoryDraft> published = new CopyOnWriteArrayList<>();
     final List<Boolean> queuedFlags = new CopyOnWriteArrayList<>();
     final List<StoryDraft> revisions = new CopyOnWriteArrayList<>();
@@ -46,6 +47,11 @@ class FakeBoardSideEffects implements BoardSideEffects {
     @Override
     public void transitionReadyForStory(WorkItemRef item, GrillHandoff grill) {
         readyForStoryCalls.add(item);
+    }
+
+    @Override
+    public void postFollowUpQuestions(WorkItemRef item, GrillHandoff grill) {
+        followUpPosts.incrementAndGet();
     }
 
     @Override

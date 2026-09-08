@@ -123,3 +123,19 @@ export interface BoardComment {
   version: number;
 }
 
+export interface GrillQuestion {
+  id: string;
+  askedBy: 'grill-agent' | 'po-agent';
+  category: string;
+  question: string;
+  evidence: string;
+  status: 'open' | 'answered' | 'parked';
+  answer: string | null;
+  answeredBy: string | null;
+}
+
+export interface GrillQuestions {
+  resolved: boolean;
+  questions: GrillQuestion[];
+}
+

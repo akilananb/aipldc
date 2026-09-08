@@ -1,5 +1,5 @@
 import { getIdentity } from './identity';
-import type { ArtifactVersion, BoardComment, Comment, CommentIntent, ItemDetail, ItemSummary, QualityReport, ReleaseDocument, SpecDocs } from './types';
+import type { ArtifactVersion, BoardComment, Comment, CommentIntent, GrillQuestions, ItemDetail, ItemSummary, QualityReport, ReleaseDocument, SpecDocs } from './types';
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8081';
 
@@ -140,5 +140,22 @@ export const api = {
 
   getBoardComments(id: string): Promise<BoardComment[]> {
     return request<BoardComment[]>(`/api/items/${encodeURIComponent(id)}/board-comments`);
+  },
+
+  getGrill(id: string): Promise<GrillQuestions> {
+    return request<GrillQuestions>(`/api/items/${encodeURIComponent(id)}/grill`);
+  },
+
+  answerGrillQuestion(id: string, questionId: string, text: string): Promise<void> {
+    return request<void>(`/api/items/${encodeURIComponent(id)}/grill/${encodeURIComponent(questionId)}/answer`, {
+      method: 'POST',
+      body: JSON.stringify({ text }),
+    });
+  },
+
+  parkGrillQuestion(id: string, questionId: string): Promise<void> {
+    return request<void>(`/api/items/${encodeURIComponent(id)}/grill/${encodeURIComponent(questionId)}/park`, {
+      method: 'POST',
+    });
   },
 };

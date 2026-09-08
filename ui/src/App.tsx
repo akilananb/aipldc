@@ -37,7 +37,7 @@ export default function App() {
         <Flex justify="between" align="center" gap="4">
           <Link to="/" style={{ textDecoration: 'none', color: 'inherit' }}>
             <Flex align="baseline" gap="3">
-              <Heading size="5">EngLoop.ai</Heading>
+              <Heading size="5">eLoop.AI</Heading>
               <Text size="2" color="gray">
                 Product Development Lifecycle
               </Text>

@@ -38,6 +38,12 @@ public interface BoardSideEffects {
     @ActivityMethod
     void transitionReadyForStory(WorkItemRef item, GrillHandoff grill);
 
+    /** PO agent asked follow-ups: posts the open {@code po*} questions as one comment by the PO bot,
+     * sets {@code needs-clarification}, re-attaches {@code grill.md}, appends
+     * {@code review_events: po-follow-up}. */
+    @ActivityMethod
+    void postFollowUpQuestions(WorkItemRef item, GrillHandoff grill);
+
     /** Creates the child User Story, writes the spec delta + story files, inserts {@code artifacts} v1,
      * appends the {@code review.md} v1 block. {@code storyIndex} is this story's position among a
      * multi-story split (0 = first/active); {@code queued} sets state {@code queued} instead of

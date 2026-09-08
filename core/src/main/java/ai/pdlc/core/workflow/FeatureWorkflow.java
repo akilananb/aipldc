@@ -2,6 +2,7 @@ package ai.pdlc.core.workflow;
 
 import ai.pdlc.core.domain.Approval;
 import ai.pdlc.core.domain.Comment;
+import ai.pdlc.core.domain.GrillHandoff;
 import ai.pdlc.core.domain.WorkItemRef;
 import io.temporal.workflow.QueryMethod;
 import io.temporal.workflow.SignalMethod;
@@ -33,4 +34,9 @@ public interface FeatureWorkflow {
 
     @QueryMethod
     ReviewState state();
+
+    /** Current grill handoff, including any PO agent follow-ups; {@code null} before the first
+     * grill evaluation. */
+    @QueryMethod
+    GrillHandoff grill();
 }

@@ -53,6 +53,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -110,8 +111,24 @@ public class BoardSideEffectsImpl implements BoardSideEffects {
 
     @Override
     public void postGrillQuestions(WorkItemRef item, GrillHandoff grill) {
-        ensureWorkItem(item, "feature", null);
-        board.addComment(item, formatGrillQuestions(grill), GRILL_BOT_IDENTITY);
+        WorkItemEntity feature = ensureWorkItem(item, "feature", null);
+        board.addComment(item, formatGrillQuestions(grill, false), GRILL_BOT_IDENTITY);
+        board.transition(item, CanonicalState.NEEDS_CLARIFICATION);
+        workItems.save(feature.withCanonicalState(CanonicalState.NEEDS_CLARIFICATION.wireValue()));
+    }
+
+    @Override
+    public void postFollowUpQuestions(WorkItemRef item, GrillHandoff grill) {
+        WorkItemEntity feature = ensureWorkItem(item, "feature", null);
+        board.addComment(item, formatGrillQuestions(grill, true), MAKER_BOT_IDENTITY);
+        board.transition(item, CanonicalState.NEEDS_CLARIFICATION);
+        board.attach(item, "grill.md", GrillMdSerializer.render(grill));
+        workItems.save(feature.withCanonicalState(CanonicalState.NEEDS_CLARIFICATION.wireValue()));
+        String openPoIds = grill.questions().stream()
+                .filter(q -> q.askedByPoAgent() && q.status() == GrillQuestion.Status.OPEN)
+                .map(GrillQuestion::id)
+                .collect(java.util.stream.Collectors.joining(","));
+        reviewTrail.appendReviewEvent(feature.id(), "po-follow-up", Map.of("boardId", item.boardId(), "questions", openPoIds));
     }
 
     @Override
@@ -127,7 +144,7 @@ public class BoardSideEffectsImpl implements BoardSideEffects {
         ensureWorkItem(feature, "feature", null);
 
         String idempotencyKey = feature.workflowId() + ":publishStory:" + storyIndex;
-        String title = firstHeadingOrDefault(draft.storyMarkdown(), "Untitled story");
+        String title = firstHeadingOrDefault(draft.storyMarkdown(), featureTitleOrDefault(feature, storyIndex));
         var created = board.createItem(feature.profile(), "story", Map.of(
                 "title", title,
                 "description", draft.storyMarkdown(),
@@ -223,7 +240,7 @@ public class BoardSideEffectsImpl implements BoardSideEffects {
         Map<String, String> taskBoardIds = new LinkedHashMap<>();
         for (Task task : plan.tasks()) {
             var created = board.createItem(story.profile(), "task", Map.of(
-                    "title", task.title(),
+                    "title", taskTitleOrDefault(task),
                     "description", taskDescription(task),
                     "_idempotencyKey", story.workflowId() + ":task:" + task.id()), story.boardId());
             ensureWorkItem(new WorkItemRef(story.profile(), created.id()), "task", story.boardId());
@@ -439,13 +456,17 @@ public class BoardSideEffectsImpl implements BoardSideEffects {
         return files;
     }
 
-    /** One numbered question per line, category prefixed - playbook §1 "Does" step 3. */
-    private static String formatGrillQuestions(GrillHandoff grill) {
+    /** Instruction line, then one line per question, id-prefixed so a human can reference it by
+     * typing {@code <id>: <answer>} or {@code <id>: park} — playbook §1 "Does" step 3. {@code poOnly}
+     * restricts the listing to the PO agent's open follow-ups ({@link GrillQuestion#askedByPoAgent()}). */
+    private static String formatGrillQuestions(GrillHandoff grill, boolean poOnly) {
         StringBuilder sb = new StringBuilder();
-        List<GrillQuestion> questions = grill.questions();
-        for (int i = 0; i < questions.size(); i++) {
-            GrillQuestion q = questions.get(i);
-            sb.append(i + 1).append(". [").append(q.category().wireValue()).append("] ").append(q.question());
+        sb.append("Reply with \"<id>: <answer>\" or \"<id>: park\" (one per line, several per comment is fine).\n");
+        for (GrillQuestion q : grill.questions()) {
+            if (poOnly && !(q.askedByPoAgent() && q.status() == GrillQuestion.Status.OPEN)) {
+                continue;
+            }
+            sb.append(q.id()).append(" [").append(q.category().wireValue()).append("] ").append(q.question());
             if (q.evidence() != null && !q.evidence().isBlank()) {
                 sb.append(" (evidence: ").append(q.evidence()).append(')');
             }
@@ -456,14 +477,60 @@ public class BoardSideEffectsImpl implements BoardSideEffects {
 
     private static final Pattern HEADING = Pattern.compile("^#{1,6}\\s+(.*\\S)\\s*$");
 
-    private static String firstHeadingOrDefault(String markdown, String fallback) {
+    /** Structural section headings the story/task format uses (playbook lines 120-149) that are
+     * never a real title - {@code firstHeadingOrDefault} must skip these or a story whose first
+     * (and possibly only) heading is {@code ## Acceptance criteria} gets stored with that as its
+     * board title instead of something a human can recognize. */
+    private static final Set<String> NON_TITLE_HEADINGS = Set.of(
+            "story", "user story", "acceptance criteria", "out of scope", "nfr", "dependencies");
+
+    /** Validates the extracted title isn't blank and isn't a structural section heading; falls
+     * back to {@code fallback} and logs a warning otherwise so a mis-titled board item is visible
+     * to operators instead of silently stored. */
+    static String firstHeadingOrDefault(String markdown, String fallback) {
         for (String line : markdown.lines().toList()) {
             Matcher m = HEADING.matcher(line);
             if (m.matches()) {
-                return m.group(1);
+                String heading = m.group(1).trim();
+                if (!NON_TITLE_HEADINGS.contains(heading.toLowerCase())) {
+                    return heading;
+                }
             }
         }
+        log.warn("[publishStory] no usable title heading found (only structural section headings, or none); using fallback '{}'", fallback);
         return fallback;
+    }
+
+    /** Feature title as the fallback when the story markdown has no real title heading (common:
+     * the LLM wraps the narrative under a bare {@code ## Story} container, not a descriptive
+     * heading) - far more useful than a generic literal, and disambiguated per split index for a
+     * multi-story feature. Best-effort: an unreadable feature item falls back to the literal. */
+    private String featureTitleOrDefault(WorkItemRef feature, int storyIndex) {
+        String featureTitle;
+        try {
+            featureTitle = board.getItem(feature).title();
+        } catch (RuntimeException unreadable) {
+            featureTitle = null;
+        }
+        if (featureTitle == null || featureTitle.isBlank()) {
+            return "Untitled story";
+        }
+        return storyIndex > 0 ? featureTitle + " (" + (storyIndex + 1) + ")" : featureTitle;
+    }
+
+    /** The plan agent builds every task title deterministically from its scenario name
+     * ({@code Implement "<scenario>"}) - the {@code "Implement "} prefix means {@code task.title()}
+     * itself is never blank, so the failure mode to guard is a blank {@code scenario} (parser
+     * accepts a whitespace-only {@code Scenario:} capture), which yields the uninformative literal
+     * {@code Implement ""}; detect via the scenario, not the title, and fall back to a task-id-based
+     * title, warning so it's visible. */
+    static String taskTitleOrDefault(Task task) {
+        if (task.scenario() == null || task.scenario().isBlank()) {
+            log.warn("[publishTasks] blank scenario for task {}; using fallback title", task.id());
+            return "Task " + task.id();
+        }
+        String title = task.title();
+        return title == null || title.isBlank() ? "Task " + task.id() : title;
     }
 
     private static String taskDescription(Task task) {

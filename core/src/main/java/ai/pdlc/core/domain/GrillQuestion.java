@@ -16,6 +16,9 @@ public record GrillQuestion(
 
     public static final String ASSUMPTION_CHECK = "assumption-check";
 
+    /** Id prefix for follow-up questions the PO agent asks — e.g. {@code po1}, {@code po2}. */
+    public static final String PO_ID_PREFIX = "po";
+
     public enum Category {
         SCOPE, USERS, ACCEPTANCE, RISK, DEPENDENCY, NFR;
 
@@ -38,5 +41,10 @@ public record GrillQuestion(
 
     public GrillQuestion parked() {
         return new GrillQuestion(id, category, question, evidence, Status.PARKED, answer, answeredBy);
+    }
+
+    /** True when this question was raised by the PO agent as a drafting follow-up (id {@code po*}). */
+    public boolean askedByPoAgent() {
+        return id.startsWith(PO_ID_PREFIX);
     }
 }

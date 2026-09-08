@@ -46,6 +46,13 @@ class PromptTemplatesTest {
             whitespace before the keyword).
             """;
 
+    /** Verbatim from {@code po-draft.mustache} line 4 - the title-heading instruction. */
+    private static final String TITLE_INSTRUCTION =
+            "When your reply is a story (not a \"===QUESTIONS===\" follow-up below), its first line "
+            + "must be a single \"# <short descriptive title for this story>\" heading (a concise "
+            + "title for this specific story, not necessarily the literal feature title), followed "
+            + "by a blank line, before any other content.\n";
+
     /** Verbatim from {@code po-draft.mustache} lines 18-20 — the multi-story actor/factor split
      * instruction appended after {@link #SCENARIO_FORMAT_SPEC}. */
     private static final String MULTI_STORY_SPEC = """
@@ -77,6 +84,7 @@ class PromptTemplatesTest {
         String expected = "[agent:po]" + "\n"
                 + "Write the story for feature: Export orders CSV\n"
                 + "Feature description: Let SquadLead export orders as PII-safe CSV.\n"
+                + TITLE_INSTRUCTION
                 + SCENARIO_FORMAT_SPEC
                 + MULTI_STORY_SPEC;
 
@@ -94,6 +102,7 @@ class PromptTemplatesTest {
         StringBuilder expected = new StringBuilder("[agent:po]").append('\n')
                 .append("Write the story for feature: Export orders CSV\n")
                 .append("Feature description: Let SquadLead export orders as PII-safe CSV.\n")
+                .append(TITLE_INSTRUCTION)
                 .append(SCENARIO_FORMAT_SPEC)
                 .append(MULTI_STORY_SPEC)
                 .append("Answer q1 (scope): CSV export only\n")

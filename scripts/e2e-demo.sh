@@ -54,7 +54,9 @@ poll "grill questions posted" 60 bash -c \
   "curl -sf '$BASE/api/items/$FEATURE_ID/board-comments' | jq -e 'length > 0'" >/dev/null
 api "$BASE/api/items/$FEATURE_ID/board-comments" | jq .
 
-# 3. PO answers in comments (fixture answers from the playbook example q1/q4).
+# 3. PO answers in comments (fixture answers from the playbook example q1/q4); the rest are
+# parked explicitly — no auto-park anymore, so q2/q3/q5/q6 must be answered or parked or the
+# feature stays needs-clarification.
 log "3/9 POST answer comments"
 api -X POST "$BASE/webhooks/local" -H 'Content-Type: application/json' -d '{
   "kind": "comment.added", "boardId": "'"$FEATURE_BOARD_ID"'", "rev": 2,
@@ -63,6 +65,10 @@ api -X POST "$BASE/webhooks/local" -H 'Content-Type: application/json' -d '{
 api -X POST "$BASE/webhooks/local" -H 'Content-Type: application/json' -d '{
   "kind": "comment.added", "boardId": "'"$FEATURE_BOARD_ID"'", "rev": 3,
   "author": "'"$PO_USER"'", "text": "q4: Audit every export; 10 per user per hour."
+}' >/dev/null
+api -X POST "$BASE/webhooks/local" -H 'Content-Type: application/json' -d '{
+  "kind": "comment.added", "boardId": "'"$FEATURE_BOARD_ID"'", "rev": 4,
+  "author": "'"$PO_USER"'", "text": "q2: park q3: park q5: park q6: park"
 }' >/dev/null
 
 # 4. Poll for `ready-for-story`, then the child story in `awaiting-G1`.

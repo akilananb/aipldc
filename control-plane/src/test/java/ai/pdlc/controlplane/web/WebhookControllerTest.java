@@ -70,6 +70,11 @@ class WebhookControllerTest {
         public ReviewState state() {
             return new ReviewState(1, Map.of(), List.of(), ai.pdlc.core.domain.CanonicalState.NEW, null);
         }
+
+        @Override
+        public ai.pdlc.core.domain.GrillHandoff grill() {
+            return null;
+        }
     }
 
     private WebhookController newController(WorkflowClient client, InMemoryBoardAdapter board) {

@@ -28,17 +28,21 @@ public interface AgentActivities {
 
     /**
      * First call: {@code previous} is {@code null} and {@code newComments} is empty — generates the
-     * six-category questions. Re-run: marks each question {@code answered}/{@code parked}/{@code open}
-     * from the human comments in {@code newComments}; never answers its own questions.
+     * six-category questions. Re-run: marks each question {@code answered} (referenced with
+     * {@code <id>: text}) or {@code parked} (referenced with {@code <id>: park}) from the human
+     * comments in {@code newComments}; a question not referenced by id stays {@code open}; never
+     * answers its own questions.
      */
     @ActivityMethod
     GrillHandoff grillEvaluate(WorkItemRef item, GrillHandoff previous, List<BoardCommentEvent> newComments);
 
     /** Drafts the story + spec delta from the resolved grill handoff. Returns one {@link StoryDraft}
      * per distinct actor/factor when the PO agent splits the feature into multiple stories
-     * (single-actor features return a singleton list). */
+     * (single-actor features return a singleton list). When {@code allowFollowUps}, the agent may
+     * instead return follow-up questions ({@link PoDraftResult#needsClarification()}) it needs
+     * answered before it can draft; when {@code false} it must draft. */
     @ActivityMethod
-    List<StoryDraft> poDraft(WorkItemRef item, GrillHandoff grill);
+    PoDraftResult poDraft(WorkItemRef item, GrillHandoff grill, boolean allowFollowUps);
 
     /** Revises only the lines the open comments target; re-runs INVEST/DoR; replies to every comment. */
     @ActivityMethod

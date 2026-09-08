@@ -13,6 +13,7 @@ import ai.pdlc.core.domain.WorkItem;
 import ai.pdlc.core.domain.WorkItemRef;
 import ai.pdlc.core.port.BoardPort;
 import ai.pdlc.core.port.RepoPort;
+import ai.pdlc.core.workflow.PoDraftResult;
 import ai.pdlc.core.workflow.StoryDraft;
 import com.embabel.agent.api.common.Ai;
 import com.embabel.common.ai.model.LlmOptions;
@@ -46,6 +47,16 @@ public class PoAgent {
     private static final Pattern NFR_BULLET = Pattern.compile("^\\s*-\\s*([^:]+):\\s*(.*)$");
     private static final Pattern STORY_SEPARATOR = Pattern.compile("(?m)^===STORY===\\s*$");
 
+    /** First line of a PO agent follow-up reply — see {@code po-draft.mustache}'s {@code allowFollowUps} block. */
+    static final String QUESTIONS_SENTINEL = "===QUESTIONS===";
+
+    private static final com.fasterxml.jackson.databind.ObjectMapper FOLLOW_UP_JSON = new com.fasterxml.jackson.databind.ObjectMapper()
+            .configure(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+
+    /** Wire shape of one follow-up question in the PO agent's {@code ===QUESTIONS===} JSON array. */
+    record FollowUpDto(String category, String question, String evidence) {
+    }
+
     private final Ai ai;
     private final BoardPort board;
     private final RepoPort repo;
@@ -61,7 +72,7 @@ public class PoAgent {
         this.poModel = role != null ? role.model() : null;
     }
 
-    public List<StoryDraft> draft(WorkItemRef item, GrillHandoff grill) {
+    public PoDraftResult draft(WorkItemRef item, GrillHandoff grill, boolean allowFollowUps) {
         WorkItem workItem = AgentContext.readWorkItem(board, item);
         String title = workItem == null ? item.boardId() : safe(workItem.title());
         String description = workItem == null ? "" : safe(workItem.description());
@@ -70,12 +81,19 @@ public class PoAgent {
         Map<String, Object> view = new HashMap<>();
         view.put("title", title);
         view.put("description", description);
+        view.put("allowFollowUps", allowFollowUps);
         if (grill != null) {
             view.put("grill", grillView(grill));
         }
         String prompt = templates.render("po-draft", view);
 
         String output = promptRunner().generateText(prompt);
+        if (allowFollowUps) {
+            List<GrillQuestion> followUps = parseFollowUps(output, nextPoIndex(grill));
+            if (followUps != null && !followUps.isEmpty()) {
+                return new PoDraftResult(List.of(), followUps);
+            }
+        }
         List<String> parts = new ArrayList<>();
         for (String part : STORY_SEPARATOR.split(output)) {
             String trimmed = part.strip();
@@ -89,15 +107,20 @@ public class PoAgent {
 
         List<StoryDraft> drafts = new ArrayList<>();
         Set<String> seenChanges = new HashSet<>();
-        for (String part : parts) {
-            StoryDraft draft = assemble(part, item, null, item.boardId(), grill, areaPath);
+        for (int i = 0; i < parts.size(); i++) {
+            String part = parts.get(i);
+            // Only used as a per-part fallback when that part's own text has no title heading of
+            // its own (see assemble); disambiguated so a multi-story split where every part lacks
+            // one doesn't inject the identical title/slug into every story.
+            String partTitle = i == 0 ? title : title + " (" + (i + 1) + ")";
+            StoryDraft draft = assemble(part, item, null, item.boardId(), grill, areaPath, partTitle);
             if (!seenChanges.add(draft.handoff().change())) {
-                draft = assemble(part, item, draft.handoff().change() + "-s" + (drafts.size() + 1), item.boardId(), grill, areaPath);
+                draft = assemble(part, item, draft.handoff().change() + "-s" + (drafts.size() + 1), item.boardId(), grill, areaPath, partTitle);
                 seenChanges.add(draft.handoff().change());
             }
             drafts.add(draft);
         }
-        return drafts;
+        return new PoDraftResult(drafts, List.of());
     }
 
     public StoryDraft revise(WorkItemRef item, PoHandoff previous, List<Comment> comments) {
@@ -119,13 +142,30 @@ public class PoAgent {
 
         String revised = promptRunner().generateText(prompt);
         String areaPath = previous.areas().isEmpty() ? null : previous.areas().get(0);
-        return assemble(revised, item, previous.change(), previous.parent(), null, areaPath);
+        // Title fallback: prefer the real title parsed from previousStory when the repo read above
+        // succeeded (most accurate - it's this exact story's actual prior H1); when it didn't
+        // (the common case in the local in-memory profile - see the comment above), the LLM never
+        // saw the previous title and writes from the comments alone, typically emitting no H1 of
+        // its own, so fall back to the story's current board title.
+        String featureTitle = previousStory == null ? null : StoryParser.title(previousStory);
+        if (featureTitle == null) {
+            WorkItem storyItem = AgentContext.readWorkItem(board, item);
+            featureTitle = storyItem == null ? null : storyItem.title();
+        }
+        return assemble(revised, item, previous.change(), previous.parent(), null, areaPath, featureTitle);
     }
 
     // -- deterministic ---------------------------------------------------------------------------
 
-    private StoryDraft assemble(String storyMarkdown, WorkItemRef item, String knownChange, String parent, GrillHandoff grill, String areaPath) {
+    private StoryDraft assemble(String storyMarkdown, WorkItemRef item, String knownChange, String parent, GrillHandoff grill, String areaPath, String featureTitle) {
         String story = appendOutOfScope(storyMarkdown, grill);
+        if (StoryParser.title(story) == null && featureTitle != null && !featureTitle.isBlank()) {
+            // draft/revise's prompt asks for a "# <title>" first line but LLM compliance varies;
+            // inject the caller-computed fallback title deterministically so the review UI always
+            // has a real H1 and extractChange (below) never falls back to its generic "change"
+            // slug - mirrors the areaPath injection a few lines down.
+            story = injectTitle(story, featureTitle);
+        }
         String change = knownChange != null ? knownChange : extractChange(story);
         String area = StoryParser.area(story);
         if (area == null && areaPath != null && !areaPath.isBlank()) {
@@ -149,6 +189,12 @@ public class PoAgent {
                 List.of("board:" + item.profile() + ":" + item.boardId(), "repo:" + slug), 0.8, List.of(), List.of());
         PoHandoff handoff = new PoHandoff(envelope, parent, change, scenarios, nfr, areas, invest, dorUnmet, Map.of());
         return new StoryDraft(handoff, story, specDeltaFiles);
+    }
+
+    /** Prepends a {@code # <title>} heading, matching {@link StoryParser#title}'s single-{@code #}
+     * prefix, when the LLM output has none of its own. */
+    static String injectTitle(String storyMarkdown, String title) {
+        return "# " + title + "\n\n" + storyMarkdown;
     }
 
     /** Inserts a plain {@code Area: <areaPath>} line right after the first {@code ## } heading (or
@@ -271,6 +317,80 @@ public class PoAgent {
             }
         }
         return Map.of("answers", answers, "parked", String.join(", ", grill.parked()));
+    }
+
+    /** Parses a PO agent follow-up reply: {@code null} when {@code output} doesn't start with
+     * {@link #QUESTIONS_SENTINEL} (falls back to the story path) or on JSON parse failure; ids are
+     * assigned sequentially from {@code firstIndex} and any {@code id} the LLM emits is ignored.
+     * Unknown categories are skipped (mirrors {@code GrillAgent.mapQuestions}). */
+    static List<GrillQuestion> parseFollowUps(String output, int firstIndex) {
+        String s = output == null ? "" : output.strip();
+        if (!s.startsWith(QUESTIONS_SENTINEL)) {
+            return null;
+        }
+        String json = stripCodeFence(s.substring(QUESTIONS_SENTINEL.length()).strip());
+        List<FollowUpDto> dtos;
+        try {
+            dtos = FOLLOW_UP_JSON.readValue(json, new com.fasterxml.jackson.core.type.TypeReference<List<FollowUpDto>>() {
+            });
+        } catch (Exception e) {
+            log.warn("[po] follow-up JSON parse failed; falling back to the story path: {}", e.toString());
+            return null;
+        }
+        List<GrillQuestion> out = new ArrayList<>();
+        for (int i = 0; i < dtos.size(); i++) {
+            FollowUpDto dto = dtos.get(i);
+            if (dto.question() == null || dto.question().isBlank()) {
+                log.warn("[po] ignoring follow-up dto with a blank question");
+                continue;
+            }
+            GrillQuestion.Category category;
+            try {
+                category = GrillQuestion.Category.valueOf(dto.category().trim().toUpperCase());
+            } catch (IllegalArgumentException | NullPointerException e) {
+                log.warn("[po] ignoring follow-up question with unknown category {}", dto.category());
+                continue;
+            }
+            String evidence = dto.evidence() == null || dto.evidence().isBlank() ? GrillQuestion.ASSUMPTION_CHECK : dto.evidence();
+            out.add(new GrillQuestion(GrillQuestion.PO_ID_PREFIX + (firstIndex + i), category, dto.question(), evidence,
+                    GrillQuestion.Status.OPEN, null, null));
+        }
+        return out;
+    }
+
+    /** Strips a leading/trailing ``` or ```json Markdown code fence some LLMs wrap the JSON array
+     * in despite the prompt asking for raw JSON; a no-op when no fence is present. */
+    private static String stripCodeFence(String s) {
+        String out = s;
+        if (out.startsWith("```")) {
+            int firstNewline = out.indexOf('\n');
+            out = firstNewline >= 0 ? out.substring(firstNewline + 1) : out.substring(3);
+        }
+        if (out.endsWith("```")) {
+            out = out.substring(0, out.length() - 3);
+        }
+        return out.strip();
+    }
+
+    /** Next {@code po*} id to assign — one past the highest {@code po*} number already asked, not a
+     * count: a round may skip an unknown-category dto (leaving a gap — see {@link #parseFollowUps}),
+     * so counting instead of taking the max would re-assign an id a later round already used. */
+    static int nextPoIndex(GrillHandoff grill) {
+        if (grill == null) {
+            return 1;
+        }
+        int max = 0;
+        for (GrillQuestion q : grill.questions()) {
+            if (!q.askedByPoAgent()) {
+                continue;
+            }
+            try {
+                max = Math.max(max, Integer.parseInt(q.id().substring(GrillQuestion.PO_ID_PREFIX.length())));
+            } catch (NumberFormatException nonNumeric) {
+                // Unexpected non-numeric po-prefixed id; ignore it rather than fail id assignment.
+            }
+        }
+        return max + 1;
     }
 
     private com.embabel.agent.api.common.PromptRunner promptRunner() {

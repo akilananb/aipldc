@@ -75,6 +75,17 @@ class FeatureWorkflowImplTest {
         throw new AssertionError("condition not met before deadline; last state=" + wf.state());
     }
 
+    private void awaitGrill(FeatureWorkflow wf, java.util.function.Predicate<ai.pdlc.core.domain.GrillHandoff> condition) throws InterruptedException {
+        long deadline = System.currentTimeMillis() + 5000;
+        while (System.currentTimeMillis() < deadline) {
+            if (condition.test(wf.grill())) {
+                return;
+            }
+            Thread.sleep(20);
+        }
+        throw new AssertionError("condition not met before deadline; last grill=" + wf.grill());
+    }
+
     @Test
     void fullGate1SequenceDraftCommentRevisionTwoDistinctApprovalsCompletes() throws Exception {
         FeatureWorkflow wf = start("4412");
@@ -372,6 +383,14 @@ class FeatureWorkflowImplTest {
         WorkflowClient.start(wf::run, new WorkItemRef("local", "4412-quality-fail"));
 
         awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G1 && s.version() == 2);
+        // version()/stage() flip mid-loop (version++ precedes the poRevise/saveQualityReport calls
+        // that follow it in workflow code - see FeatureWorkflowImpl's auto-revise loop), so the
+        // state query above can observe version==2 before the second saveQualityReport activity
+        // has actually completed; poll for that terminal side effect instead of asserting immediately.
+        long qualityDeadline = System.currentTimeMillis() + 5000;
+        while (boardSideEffects.qualityReportsSaved.size() < 2 && System.currentTimeMillis() < qualityDeadline) {
+            Thread.sleep(20);
+        }
         assertThat(agentActivities.reviseCalls).hasSize(1);
         assertThat(boardSideEffects.qualityReportsSaved).hasSize(2);
         assertThat(boardSideEffects.qualityReportsSaved.get(0)).endsWith(":1:failed");
@@ -438,5 +457,71 @@ class FeatureWorkflowImplTest {
         wf.approve(new Approval("po@acme", "PO", "story", 1, "hash-v1", Instant.now()));
         wf.approve(new Approval("lead@acme", "SquadLead", "story", 1, "hash-v1", Instant.now()));
         awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G2);
+    }
+
+    @Test
+    void poFollowUpReturnsToClarificationAndDraftsAfterAnswer() throws Exception {
+        testEnv = TestWorkflowEnvironment.newInstance();
+        Worker worker = testEnv.newWorker(TaskQueues.REASONING);
+        worker.registerWorkflowImplementationTypes(FeatureWorkflowImpl.class);
+        agentActivities = new FakeAgentActivities();
+        agentActivities.poFollowUpRounds = 1;
+        worker.registerActivitiesImplementations(agentActivities);
+
+        Worker boardWorker = testEnv.newWorker(TaskQueues.BOARD);
+        boardSideEffects = new FakeBoardSideEffects();
+        boardWorker.registerActivitiesImplementations(boardSideEffects);
+        testEnv.start();
+
+        WorkflowClient client = testEnv.getWorkflowClient();
+        WorkflowOptions options = WorkflowOptions.newBuilder()
+                .setTaskQueue(TaskQueues.REASONING)
+                .setWorkflowId("feature-local-4412-po-follow-up")
+                .build();
+        FeatureWorkflow wf = client.newWorkflowStub(FeatureWorkflow.class, options);
+        WorkflowClient.start(wf::run, new WorkItemRef("local", "4412-po-follow-up"));
+
+        awaitGrill(wf, g -> g != null && g.openQuestions().stream().anyMatch(q -> q.id().equals("po1")));
+        assertThat(wf.state().stage()).isEqualTo(CanonicalState.NEEDS_CLARIFICATION);
+        assertThat(boardSideEffects.followUpPosts.get()).isEqualTo(1);
+
+        wf.commentAdded(new BoardCommentEvent("c-po1", "PO", "po1: sales and admin only"));
+        awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G1);
+        assertThat(agentActivities.poDraftCalls).containsExactly(true, true);
+        assertThat(wf.grill().questions()).filteredOn(q -> q.id().equals("po1"))
+                .extracting(ai.pdlc.core.domain.GrillQuestion::status, ai.pdlc.core.domain.GrillQuestion::answer)
+                .containsExactly(org.assertj.core.groups.Tuple.tuple(ai.pdlc.core.domain.GrillQuestion.Status.ANSWERED, "po1: sales and admin only"));
+    }
+
+    @Test
+    void poFollowUpsAreCappedAtTwoRoundsThenItMustDraft() throws Exception {
+        testEnv = TestWorkflowEnvironment.newInstance();
+        Worker worker = testEnv.newWorker(TaskQueues.REASONING);
+        worker.registerWorkflowImplementationTypes(FeatureWorkflowImpl.class);
+        agentActivities = new FakeAgentActivities();
+        agentActivities.poFollowUpRounds = 99;
+        worker.registerActivitiesImplementations(agentActivities);
+
+        Worker boardWorker = testEnv.newWorker(TaskQueues.BOARD);
+        boardSideEffects = new FakeBoardSideEffects();
+        boardWorker.registerActivitiesImplementations(boardSideEffects);
+        testEnv.start();
+
+        WorkflowClient client = testEnv.getWorkflowClient();
+        WorkflowOptions options = WorkflowOptions.newBuilder()
+                .setTaskQueue(TaskQueues.REASONING)
+                .setWorkflowId("feature-local-4412-po-follow-up-cap")
+                .build();
+        FeatureWorkflow wf = client.newWorkflowStub(FeatureWorkflow.class, options);
+        WorkflowClient.start(wf::run, new WorkItemRef("local", "4412-po-follow-up-cap"));
+
+        for (int round = 1; round <= 2; round++) {
+            int expected = round;
+            awaitGrill(wf, g -> g != null && g.openQuestions().stream().anyMatch(q -> q.id().equals("po" + expected)));
+            wf.commentAdded(new BoardCommentEvent("c-po" + round, "PO", "po" + round + ": sales and admin only"));
+        }
+        awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G1);
+        assertThat(agentActivities.poDraftCalls).containsExactly(true, true, false);
+        assertThat(boardSideEffects.followUpPosts.get()).isEqualTo(2);
     }
 }

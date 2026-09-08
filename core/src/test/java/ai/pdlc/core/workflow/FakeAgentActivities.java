@@ -42,6 +42,10 @@ class FakeAgentActivities implements AgentActivities {
     boolean returnMonitorTrip = false;
     int storyCount = 1;
     boolean failStoryQualityOnce = false;
+    /** When {@code > 0}, the first this-many {@code allowFollowUps} {@code poDraft} calls return a
+     * follow-up question ({@code po1}, {@code po2}, …) instead of drafting. */
+    int poFollowUpRounds = 0;
+    final List<Boolean> poDraftCalls = new CopyOnWriteArrayList<>();
     private boolean storyQualityFailedOnce = false;
 
     @Override
@@ -50,18 +54,19 @@ class FakeAgentActivities implements AgentActivities {
         Handoff envelope = new Handoff("grill-agent", "po-agent", item.boardId(),
                 ai.pdlc.core.domain.CanonicalState.NEEDS_CLARIFICATION, List.of("ado:" + item.boardId()), 0.8, List.of(), List.of());
 
-        if (!startWithOpenQuestion) {
-            return new GrillHandoff(envelope, "story", List.of(
-                    new GrillQuestion("q1", GrillQuestion.Category.SCOPE, "Which orders?", "evidence", GrillQuestion.Status.ANSWERED, "current filtered view", "PO")
-            ), List.of(), List.of());
-        }
-
         if (previous == null) {
+            if (!startWithOpenQuestion) {
+                return new GrillHandoff(envelope, "story", List.of(
+                        new GrillQuestion("q1", GrillQuestion.Category.SCOPE, "Which orders?", "evidence", GrillQuestion.Status.ANSWERED, "current filtered view", "PO")
+                ), List.of(), List.of());
+            }
             GrillQuestion open = new GrillQuestion("q1", GrillQuestion.Category.SCOPE, "Which orders?", "evidence", GrillQuestion.Status.OPEN, null, null);
             return new GrillHandoff(envelope, "story", List.of(open), List.of(), List.of());
         }
 
-        // Re-run: resolve q1 if any new comment arrived.
+        // Re-run: resolve every OPEN question (grill or PO follow-up) if any new comment arrived -
+        // mirrors GrillAgent.evaluateAnswers closely enough for FeatureWorkflowImplTest's purposes
+        // without parsing per-id markers.
         List<GrillQuestion> updated = new ArrayList<>();
         for (GrillQuestion q : previous.questions()) {
             if (q.status() == GrillQuestion.Status.OPEN && !newComments.isEmpty()) {
@@ -74,7 +79,13 @@ class FakeAgentActivities implements AgentActivities {
     }
 
     @Override
-    public List<StoryDraft> poDraft(WorkItemRef item, GrillHandoff grill) {
+    public PoDraftResult poDraft(WorkItemRef item, GrillHandoff grill, boolean allowFollowUps) {
+        poDraftCalls.add(allowFollowUps);
+        if (allowFollowUps && poDraftCalls.size() <= poFollowUpRounds) {
+            return new PoDraftResult(List.of(), List.of(new GrillQuestion("po" + poDraftCalls.size(),
+                    GrillQuestion.Category.USERS, "Which roles may export?", GrillQuestion.ASSUMPTION_CHECK,
+                    GrillQuestion.Status.OPEN, null, null)));
+        }
         List<StoryDraft> drafts = new ArrayList<>();
         for (int i = 0; i < storyCount; i++) {
             String suffix = i == 0 ? "" : "-b";
@@ -88,7 +99,7 @@ class FakeAgentActivities implements AgentActivities {
                     + "\n\n## Acceptance criteria\nScenario: rate limit\n  GIVEN 10 exports in the last hour\n  WHEN the 11th export happens\n  THEN the next returns 429\n";
             drafts.add(new StoryDraft(handoff, story, java.util.Map.of("specs/orders/spec.md", "ADDED rate-limit requirement")));
         }
-        return drafts;
+        return new PoDraftResult(drafts, List.of());
     }
 
     @Override

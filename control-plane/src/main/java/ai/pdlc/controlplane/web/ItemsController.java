@@ -13,6 +13,8 @@ import ai.pdlc.controlplane.persistence.QualityReportRepository;
 import ai.pdlc.controlplane.review.ReviewTrailService;
 import ai.pdlc.controlplane.temporal.WorkflowStubs;
 import ai.pdlc.controlplane.web.dto.ApproveRequest;
+import ai.pdlc.controlplane.web.dto.GrillAnswerRequest;
+import ai.pdlc.controlplane.web.dto.GrillQuestionsDto;
 import ai.pdlc.controlplane.web.dto.ItemDetailDto;
 import ai.pdlc.controlplane.web.dto.ItemSummaryDto;
 import ai.pdlc.controlplane.web.dto.ReviewStateDto;
@@ -20,11 +22,15 @@ import ai.pdlc.controlplane.web.dto.QualityReportDto;
 import ai.pdlc.controlplane.web.dto.SpecDocsDto;
 import ai.pdlc.core.config.PdlcConfig;
 import ai.pdlc.core.domain.Approval;
+import ai.pdlc.core.domain.CommentRef;
+import ai.pdlc.core.domain.GrillHandoff;
+import ai.pdlc.core.domain.GrillQuestion;
 import ai.pdlc.core.domain.WorkItem;
 import ai.pdlc.core.domain.WorkItemRef;
 import ai.pdlc.core.port.BoardPort;
 import ai.pdlc.core.port.RepoPort;
 import ai.pdlc.core.review.ReviewMdWriter;
+import ai.pdlc.core.workflow.BoardCommentEvent;
 import ai.pdlc.core.workflow.FeatureWorkflow;
 import ai.pdlc.core.workflow.ReviewState;
 import jakarta.servlet.http.HttpServletRequest;
@@ -208,6 +214,76 @@ public class ItemsController {
 
         stub.requestChanges(identity.user());
         return ResponseEntity.ok(ReviewStateDto.from(stub.state()));
+    }
+
+    @GetMapping("/{id}/grill")
+    public GrillQuestionsDto grill(@PathVariable UUID id) {
+        WorkItemEntity row = requireItem(id);
+        if (!"feature".equals(row.kind())) {
+            throw new NotFoundException("No clarification questions for kind " + row.kind());
+        }
+        GrillHandoff grill;
+        try {
+            grill = workflowStubs.featureWorkflow(new WorkItemRef(row.profile(), row.boardId())).grill();
+        } catch (RuntimeException notRunning) {
+            throw new NotFoundException("No running workflow for item " + id);
+        }
+        return GrillQuestionsDto.from(grill);
+    }
+
+    @PostMapping("/{id}/grill/{questionId}/answer")
+    public ResponseEntity<Void> answerGrillQuestion(@PathVariable UUID id, @PathVariable String questionId,
+                                                      @RequestBody GrillAnswerRequest request, HttpServletRequest httpRequest) {
+        if (request.text() == null || request.text().isBlank()) {
+            throw new IllegalArgumentException("Answer text is required");
+        }
+        submitGrillReply(id, questionId, request.text().strip(), httpRequest);
+        return ResponseEntity.noContent().build();
+    }
+
+    @PostMapping("/{id}/grill/{questionId}/park")
+    public ResponseEntity<Void> parkGrillQuestion(@PathVariable UUID id, @PathVariable String questionId, HttpServletRequest httpRequest) {
+        submitGrillReply(id, questionId, "park", httpRequest);
+        return ResponseEntity.noContent().build();
+    }
+
+    /** Answers or parks one grill/PO-follow-up question: {@code PO}/{@code SquadLead} only (the G1
+     * roles - playbook §1 "Human owner"); posts {@code <id>: <body>} as a board comment and signals
+     * the workflow directly rather than relying on a webhook echo (harmless if one also arrives -
+     * step 4 below ignores a non-{@code OPEN} question). */
+    private void submitGrillReply(UUID id, String questionId, String body, HttpServletRequest httpRequest) {
+        Identity identity = identityResolver.resolve(httpRequest);
+        WorkItemEntity row = requireItem(id);
+        if (!"feature".equals(row.kind())) {
+            throw new NotFoundException("No clarification questions for kind " + row.kind());
+        }
+        var gate1 = pdlcConfig.profile(row.profile()).gate("G1");
+        if (!gate1.roles().contains(identity.role())) {
+            throw new ForbiddenException("Role " + identity.role() + " cannot answer clarification questions");
+        }
+
+        WorkItemRef itemRef = new WorkItemRef(row.profile(), row.boardId());
+        FeatureWorkflow stub = workflowStubs.featureWorkflow(itemRef);
+        GrillHandoff grill;
+        try {
+            grill = stub.grill();
+        } catch (RuntimeException notRunning) {
+            throw new NotFoundException("No running workflow for item " + id);
+        }
+        if (grill == null) {
+            throw new ConflictException("Questions not posted yet");
+        }
+        GrillQuestion question = grill.questions().stream()
+                .filter(q -> q.id().equalsIgnoreCase(questionId))
+                .findFirst()
+                .orElseThrow(() -> new NotFoundException("No question " + questionId));
+        if (question.status() != GrillQuestion.Status.OPEN) {
+            throw new ConflictException("Question " + questionId + " is already " + question.status().wireValue());
+        }
+
+        String line = question.id() + ": " + body;
+        CommentRef ref = board.addComment(itemRef, line, identity.user());
+        stub.commentAdded(new BoardCommentEvent(ref.id(), identity.user(), line));
     }
 
 

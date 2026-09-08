@@ -1,6 +1,7 @@
 [agent:po]
 Write the story for feature: {{{title}}}
 Feature description: {{{description}}}
+When your reply is a story (not a "===QUESTIONS===" follow-up below), its first line must be a single "# <short descriptive title for this story>" heading (a concise title for this specific story, not necessarily the literal feature title), followed by a blank line, before any other content.
 Use this EXACT format for acceptance criteria (required for machine parsing - do not use bullets or bold text for the Given/When/Then lines):
 
 ## Acceptance criteria
@@ -18,6 +19,11 @@ One scenario per acceptance-criteria bullet in the request; every "Scenario:" li
 If the feature involves MULTIPLE distinct actors/user types (e.g. admin vs customer) or clearly separable factors, write one complete story PER actor/factor, each following the full format above, separated by a line containing exactly:
 ===STORY===
 Write a single story (no separator) when one actor covers the whole feature.
+{{#allowFollowUps}}
+If a requirement needed for an acceptance scenario, role, limit or format is missing, ambiguous, or contradicted by the answers below, do NOT write a story. Instead reply with exactly this on the first line:
+===QUESTIONS===
+followed by a JSON array of at most 3 objects, each {"category": "<scope|users|acceptance|risk|dependency|nfr>", "question": "<one specific question>", "evidence": "<the answer id or spec line that raised it, or assumption-check>"}. Never ask what the description or an existing answer already states.
+{{/allowFollowUps}}
 {{#grill}}
 {{#answers}}
 Answer {{{id}}} ({{{category}}}): {{{answer}}}

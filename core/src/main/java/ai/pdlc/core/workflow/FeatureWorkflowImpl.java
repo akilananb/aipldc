@@ -62,6 +62,9 @@ public class FeatureWorkflowImpl implements FeatureWorkflow {
      * literal ({@code release-pack:<doc-id>}). */
     static final String RELEASE_STAGE_PREFIX = "release-pack:";
 
+    /** playbook §2: at most 2 PO agent follow-up rounds before it must draft regardless. */
+    static final int MAX_PO_FOLLOW_UP_ROUNDS = 2;
+
     private static final ActivityOptions AGENT_ACTIVITY_OPTIONS = ActivityOptions.newBuilder()
             .setTaskQueue(TaskQueues.REASONING)
             .setStartToCloseTimeout(Duration.ofMinutes(10))
@@ -93,6 +96,8 @@ public class FeatureWorkflowImpl implements FeatureWorkflow {
     private final List<Comment> comments = new ArrayList<>();
     private final List<BoardCommentEvent> pendingBoardComments = new ArrayList<>();
     private CanonicalState stage = CanonicalState.NEW;
+    /** Current grill handoff, including any PO agent follow-ups — exposed via {@link #grill()}. */
+    private GrillHandoff grill;
 
     private WorkItemRef storyRef;
     private PoHandoff currentPoHandoff;
@@ -117,29 +122,28 @@ public class FeatureWorkflowImpl implements FeatureWorkflow {
         activeGate = gate1;
 
         // 1. Grill: loop until every question is answered/parked, escalating stale at the 5-day timer.
-        GrillHandoff grill = agents.grillEvaluate(item, null, List.of());
+        grill = agents.grillEvaluate(item, null, List.of());
         board.postGrillQuestions(item, grill);
-        stage = CanonicalState.NEEDS_CLARIFICATION;
-        while (!grill.allQuestionsResolved()) {
-            boolean gotComments = Workflow.await(STALE_ESCALATION_TIMER, () -> !pendingBoardComments.isEmpty());
-            if (!gotComments) {
-                board.escalateStale(item);
-                stage = CanonicalState.STALE;
-                Workflow.await(() -> !pendingBoardComments.isEmpty());
+        awaitClarification(item);
+
+        // 2-3. Draft the story (or one story per actor/factor - PO agent split); the PO agent may
+        // instead ask follow-up questions (id po1, po2, ...) up to MAX_PO_FOLLOW_UP_ROUNDS times,
+        // each round re-entering the clarification loop, before it must draft regardless.
+        int followUpRounds = 0;
+        PoDraftResult drafted;
+        while (true) {
+            board.transitionReadyForStory(item, grill); // re-attaches grill.md with the new answers each round
+            stage = CanonicalState.READY_FOR_STORY;
+            drafted = agents.poDraft(item, grill, followUpRounds < MAX_PO_FOLLOW_UP_ROUNDS);
+            if (!drafted.needsClarification()) {
+                break;
             }
-            List<BoardCommentEvent> newComments = List.copyOf(pendingBoardComments);
-            pendingBoardComments.clear();
-            grill = agents.grillEvaluate(item, grill, newComments);
+            followUpRounds++;
+            grill = grill.withFollowUps(drafted.followUps());
+            board.postFollowUpQuestions(item, grill);
+            awaitClarification(item);
         }
-
-        // 2. All answered/parked -> ready-for-story, attach grill.md.
-        board.transitionReadyForStory(item, grill);
-        stage = CanonicalState.READY_FOR_STORY;
-
-        // 3. Draft the story (or one story per actor/factor - PO agent split); publish every draft
-        // upfront so the UI can show every queued story immediately. Only index 0 starts active
-        // (awaiting-G1); the rest are queued until the pipeline reaches them below.
-        List<StoryDraft> drafts = agents.poDraft(item, grill);
+        List<StoryDraft> drafts = drafted.drafts();
         List<PublishResult> published = new ArrayList<>();
         for (int i = 0; i < drafts.size(); i++) {
             published.add(board.publishStory(item, drafts.get(i), i, i > 0));
@@ -299,6 +303,24 @@ public class FeatureWorkflowImpl implements FeatureWorkflow {
         }
     }
 
+    /** Sets {@code needs-clarification} and blocks until every grill question is answered/parked,
+     * escalating to {@code stale} at the 5-day timer (playbook §1 "Stops"); re-entrant so the PO
+     * agent's follow-up rounds can drive it again. */
+    private void awaitClarification(WorkItemRef item) {
+        stage = CanonicalState.NEEDS_CLARIFICATION;
+        while (!grill.allQuestionsResolved()) {
+            boolean gotComments = Workflow.await(STALE_ESCALATION_TIMER, () -> !pendingBoardComments.isEmpty());
+            if (!gotComments) {
+                board.escalateStale(item);
+                stage = CanonicalState.STALE;
+                Workflow.await(() -> !pendingBoardComments.isEmpty());
+            }
+            List<BoardCommentEvent> newComments = List.copyOf(pendingBoardComments);
+            pendingBoardComments.clear();
+            grill = agents.grillEvaluate(item, grill, newComments);
+        }
+    }
+
     private boolean gateSatisfied() {
         if (stage == CanonicalState.AWAITING_G1 && !qualityPassed) {
             return false;
@@ -411,6 +433,11 @@ public class FeatureWorkflowImpl implements FeatureWorkflow {
         Map<String, Approval> currentApprovals = stage == CanonicalState.AWAITING_G3 ? documentSignatures : approvals;
         return new ReviewState(version, Map.copyOf(currentApprovals), openBlockingComments(), stage,
                 storyRef == null ? null : storyRef.boardId());
+    }
+
+    @Override
+    public GrillHandoff grill() {
+        return grill;
     }
 
     private boolean sodAllows(Approval a) {
