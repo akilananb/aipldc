@@ -151,6 +151,7 @@ code,kbd,.mono{font-family:var(--mono)}
 
 /* ---------- generic layout helpers ---------- */
 .stack{display:flex;flex-direction:column;gap:10px}
+.stack > .callout{margin:0}
 .row{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
 .cols-2{display:grid;grid-template-columns:1fr 1fr;gap:20px}
 .cols-3{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}

@@ -16,10 +16,11 @@ window.PARTS[1] = `
   .p1-legend .card-chip b { color:var(--ink); }
 </style>
 
-<section class="slide" data-lesson="Title" data-min="0" data-notes="We have ninety minutes. One diagram grows from two boxes into a full factory. Do not try to hold the whole machine in your head now. We build it piece by piece, and every piece answers the same question: where does the human decision sit?">
+<section class="slide" data-lesson="Title" data-min="0" data-notes="We have about forty-five minutes. We are going to build one restaurant kitchen on screen, station by station, and by the end you will see a real request go all the way from a guest's order to a plate on the table, with the AI doing the cooking and people doing the tasting. Every kitchen term maps to a real engineering step, and we will name both as we go. You do not need to know how software is written. You need to know how a good kitchen — and a good delivery pipeline — is run.">
   <div class="title-grid">
     <div>
-      <h1>AI PDLC — Loops, Workflows, and the Software Factory</h1>
+      <h1>The AI Kitchen</h1>
+      <p class="small">How AI-native engineering builds and ships software — told through one working kitchen.</p>
     </div>
     <svg class="loop-hero" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="A loop drawing itself on load">
       <defs>
@@ -41,61 +42,55 @@ window.PARTS[1] = `
   </div>
 </section>
 
-<section class="slide" data-lesson="Map" data-min="3" data-notes="This is the shape of the next ninety minutes. Twenty-one atomic lessons, one diagram that grows. Each lesson is one idea and one punchline. If we run long we cut L3 or L10, never L13, L17, or L19. Those are the load-bearing lessons: parallelization, the full flow, and what a live run taught us.">
-  <div class="lesson-tag">Map</div>
-  <h2>Twenty-one lessons. One growing diagram.</h2>
-  <div id="p1-agenda" class="agenda"></div>
-  <p class="small" style="margin-top:10px;">Total: <span id="p1-agenda-total"></span></p>
-  <p style="margin-top:18px;">21 atomic lessons. One diagram that grows. If we run long we cut L3 or L10 — never L13, L17, or L19.</p>
-</section>
-
-<section class="slide" data-lesson="The opening provocation" data-min="4" data-notes="Start with the provocation. The loop is not the product. The old mental model was a chain: prompt, then agent, then loop. But the loop was never the deliverable. The workflow around it was. In ninety minutes we build a machine two boxes at a time, and the finished thing is already here as a silhouette.">
-  <div class="lesson-tag">Lesson 1</div>
-  <h2>The opening provocation</h2>
+<section class="slide" data-lesson="Monday, 9:04 a.m." data-min="3" data-notes="Start with Priya, not with technology. Her request is tiny and completely reasonable, and in most organisations it still takes six weeks, most of which is waiting and misunderstanding, not building. Everyone here has already tried an AI that writes code, and it did not make that six weeks disappear, because the cook was never the bottleneck. The kitchen was. This deck is about the kitchen. We will follow Priya's spreadsheet button the whole way through, and it is a real request from a real run of this system.">
+  <style>.p1-hook .panel{padding:12px 16px}.p1-hook h3{margin:8px 0 6px}.p1-hook .stack{gap:8px}</style>
+  <div class="p1-hook">
+  <div class="lesson-tag">Hook</div>
+  <h2>Monday, 9:04 a.m.</h2>
   <div class="two">
     <div class="panel">
-      <h3>The old model</h3>
-      <div class="stack">
-        <div class="reveal callout">1 · Prompt — you type a request.</div>
-        <div class="reveal callout">2 · Agent — the model does the work.</div>
-        <div class="reveal callout">3 · Loop — it iterates until something passes.</div>
-      </div>
-      <div class="callout warn">The loop runs. But the loop is not the product.</div>
+      <h3>The request</h3>
+      <div class="reveal callout">Priya runs sales operations. She filters the orders screen every morning and needs one small thing: a button that downloads exactly what she is looking at as a spreadsheet.</div>
     </div>
+    <div class="panel">
+      <h3>Where it usually goes</h3>
+      <div class="stack">
+        <div class="reveal callout">Week 1 — it is logged and prioritised.</div>
+        <div class="reveal callout">Week 3 — a developer picks it up and comes back with six questions.</div>
+        <div class="reveal callout">Week 5 — it is built. It exports the wrong columns.</div>
+        <div class="reveal callout">Week 6 — it ships. Priya has been using a workaround for a month and a half.</div>
+      </div>
+    </div>
+  </div>
+  <div class="reveal callout warn">Everyone in this room has an AI that can write code now. So why is the spreadsheet button still six weeks away?</div>
+  <div class="punch">Everyone has an AI that can cook. Almost nobody has a kitchen.</div>
+  </div>
+</section>
+
+<section class="slide" data-lesson="Menu" data-min="2" data-notes="This is the shape of the next forty-five minutes. Twelve short courses, one picture that grows. Each course is one idea and one line worth remembering. If we run short we drop Course 4, the under-the-hood one, never Course 7 or Course 10, the parallel stations and the full run.">
+  <div class="lesson-tag">Menu</div>
+  <h2>Twelve courses through an AI-native delivery pipeline.</h2>
+  <div id="p1-agenda" class="agenda"></div>
+  <p class="small" style="margin-top:10px;">Total: <span id="p1-agenda-total"></span></p>
+  <p style="margin-top:18px;">One diagram is built on screen a station at a time. If we run short we skip Course 4 — never Course 7 or Course 10.</p>
+</section>
+
+<section class="slide" data-lesson="Who works in the kitchen" data-min="3" data-notes="Three kinds of workers build everything you are about to see. Equipment is deterministic: a thermometer gives the same reading every time, and in software that is the automated tests. Line cooks are the AI agents: fast, skilled, good in the fuzzy middle where a ticket needs interpreting. And the chef at the pass carries judgment, the decisions a person has to put their name to. The entire machine is just these three arranged well. The gray silhouette on the right is the finished kitchen. Do not try to read it yet.">
+  <div class="lesson-tag">Course 1</div>
+  <h2>Who works in the kitchen</h2>
+  <div class="two">
+    <table class="tbl">
+      <tr><th>Who</th><th>What they are good at</th><th>In this kitchen</th></tr>
+      <tr><td>Equipment</td><td>The same result every single time — timers, thermometers, scales</td><td>Runs the tests, checks the numbers, sets up a clean workspace</td></tr>
+      <tr><td>Line cooks</td><td>Skill and speed in the fuzzy middle — reading a ticket, improvising, fixing a dish</td><td>The AI agents: interpreting, building, debugging, planning</td></tr>
+      <tr><td>The chef and the pass</td><td>Judgment. The calls that need a person's name on them</td><td>What we should make, what matters, is it right, what we trade off</td></tr>
+    </table>
     <div>
       <div id="p1l1-canvas" class="loopcanvas"></div>
-      <p class="small" style="margin-top:8px;">in 90 minutes, this machine exists — we build it two boxes at a time</p>
+      <p class="small">the whole kitchen — we build it one station at a time</p>
     </div>
   </div>
-  <div class="punch">The loop is not the product. The product is the workflow.</div>
-</section>
-
-<section class="slide" data-lesson="Where we started" data-min="4" data-notes="Before the loop, walk the eras. Each one shortened the distance between intent and running code. Waterfall closed intent to a plan. Agile closed plan to a shippable slice. CI/CD closed change to production. Cloud closed hardware to configuration. AI-assisted closes words to a first draft. Every era removed friction, and none of them removed the human decision.">
-  <div class="lesson-tag">Lesson 2</div>
-  <h2>Where we started</h2>
-  <div class="timeline">
-    <div class="era reveal"><b>Waterfall</b><span class="small">intent → a signed plan</span></div>
-    <div class="era reveal"><b>Agile</b><span class="small">plan → a shippable slice</span></div>
-    <div class="era reveal"><b>CI/CD</b><span class="small">change → production</span></div>
-    <div class="era reveal"><b>Cloud/DevOps</b><span class="small">hardware → configuration</span></div>
-    <div class="era reveal"><b>AI-assisted</b><span class="small">words → a first draft</span></div>
-  </div>
-  <div class="punch">Every era shortened the distance between intent and running code. None removed the human decision.</div>
-</section>
-
-<section class="slide" data-lesson="Who writes the prompt" data-min="4" data-notes="The question used to be: can it code. The real question is: who writes the prompt. Walk the ladder. First the human wrote freely. Then the human wrote structured prompts. Then the human handed over context. Then the spec wrote the prompt, then the harness, then the loop. At the top of the ladder the whole machine writes the prompt, and the human writes the workflow.">
-  <div class="lesson-tag">Lesson 3</div>
-  <h2>Who writes the prompt</h2>
-  <div class="ladder">
-    <div class="rung reveal"><b>vibe coding</b> — the human types whatever comes to mind.</div>
-    <div class="rung reveal"><b>prompt engineering</b> — the human writes a structured prompt with examples.</div>
-    <div class="rung reveal"><b>context engineering</b> — the human hands the model the files it needs.</div>
-    <div class="rung reveal"><b>spec-driven development</b> — the spec is the prompt.</div>
-    <div class="rung reveal"><b>harness-driven</b> — the harness drives the agent and verifies the result.</div>
-    <div class="rung reveal"><b>loop-driven</b> — the loop feeds results back in and decides.</div>
-    <div class="rung reveal"><b>AI PDLC</b> — the whole machine writes the prompt; the human writes the workflow.</div>
-  </div>
-  <div class="punch">What changed is who writes the prompt.</div>
+  <div class="punch">Let equipment do what equipment does. Let cooks cook. Keep a chef on the pass.</div>
 </section>
 `;
 

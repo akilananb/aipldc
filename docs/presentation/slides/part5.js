@@ -1,9 +1,9 @@
-/* part5.js — Writer-Flow: L17 (THE FLOW — run the machine), L18 (kanban view — work as state). */
+/* part5.js — Course 10: THE FLOW — watch one order go all the way through the finished kitchen. */
 window.PARTS = window.PARTS || {};
 window.PARTS_INIT = window.PARTS_INIT || {};
 
 window.PARTS[5] = `
-<section class="slide" id="p5l17" data-lesson="THE FLOW — run the machine" data-min="8" data-notes="This is the centerpiece: the finished stage-8 machine running end to end, one token. Watch the wheel turn once. The card starts at the board, gets grilled into a story plus spec, and clears G1 into the plan and queue. The token enters an agent lane, fails the verifier once, loops back, then passes and flows review, G2, release, G3, deploy, monitor, and a trip card that closes the wheel back at the board. Press play; pause and reset are there so you can freeze and re-walk any leg. At 2x the dwell per node drops from 700ms to 350ms. The loop is only one mechanism inside the machine.">
+<section class="slide" id="p5l17" data-lesson="Watch one order go all the way through" data-min="6" data-notes="This is the centrepiece: the whole kitchen, one order, end to end. Watch the ticket go from the board to the waiter, get written as a recipe, clear the first pass into the prep list and the rail, land at a station, fail the taste test once and go straight back to the same cook, then pass, go through the plating check, the second pass, the send-out pack, the third pass, out to the table, and on to the critic, whose complaint lands back on the board where we started. Pause and reset are there so you can freeze any leg. The cook's loop everyone talks about is one gear in this. The kitchen is the product.">
   <style>
     #p5l17.active{padding:24px 24px 0;display:flex;flex-direction:column;gap:14px}
     #p5l17 .p5l17-head{padding:0 8px}
@@ -17,9 +17,9 @@ window.PARTS[5] = `
     #p5l17 .punch{margin-top:0}
   </style>
   <div class="p5l17-head">
-    <span class="lesson-tag">Lesson 17 · 8 min</span>
-    <h2>THE FLOW — run the machine</h2>
-    <div class="p5l17-cap">press play — the token runs the whole circuit once, including one scripted failure and retry</div>
+    <div class="lesson-tag">Course 10</div>
+    <h2>Watch one order go all the way through</h2>
+    <div class="p5l17-cap">Press play. One order — Priya's spreadsheet button — goes from the board to the table through the finished stage-8 pipeline, fails a taste test once on the way, and comes back around.</div>
   </div>
   <div id="p5l17-canvas" class="loopcanvas"></div>
   <div class="p5l17-bar">
@@ -32,35 +32,7 @@ window.PARTS[5] = `
       <option value="2">2x</option>
     </select>
   </div>
-  <div class="punch">The loop is only one mechanism inside the machine.</div>
-</section>
-
-<section class="slide" data-lesson="The kanban view — work as state" data-min="3" data-notes="Every piece of work in this pipeline is a card, and every card sits in exactly one canonical state. Those states are wire values, observed live on the board API, not a presentation metaphor. Light them in order and watch work move from new to done through two approval gates. Two states live off the main line: queued, parked awaiting a worker, and stale, parked awaiting clarification for five days. When the verifier goes red, the card loops back to in-progress and the lane tries again. Stop asking what your agent is doing; ask what state the work is in.">
-  <span class="lesson-tag">Lesson 18 · 3 min</span>
-  <h2>The kanban view — work as state</h2>
-  <p class="small">The board is the source of truth. Each card sits in exactly one canonical state — these are the live wire values.</p>
-  <div class="stack">
-    <div class="kanban-track">
-      <div class="reveal kanban-chip lit">new</div>
-      <div class="reveal kanban-chip lit">needs-clarification</div>
-      <div class="reveal kanban-chip lit">ready-for-story</div>
-      <div class="reveal kanban-chip lit">awaiting-G1</div>
-      <div class="reveal kanban-chip lit">approved</div>
-      <div class="reveal kanban-chip lit">planned</div>
-      <div class="reveal kanban-chip lit">in-progress</div>
-      <div class="reveal kanban-chip lit">awaiting-G2</div>
-      <div class="reveal kanban-chip lit">approved</div>
-      <div class="reveal kanban-chip lit">awaiting-G3</div>
-      <div class="reveal kanban-chip lit done">done</div>
-    </div>
-    <div class="row">
-      <span class="pill">parked</span>
-      <div class="reveal kanban-chip lit">queued</div>
-      <div class="reveal kanban-chip lit">stale</div>
-    </div>
-    <div class="reveal callout warn" style="margin:4px 0 0"><span class="mono">&#8629;</span> verifier red loops back to in-progress</div>
-    <div class="punch">Stop asking what your agent is doing. Ask what state each piece of work is in.</div>
-  </div>
+  <div class="punch">The cook's loop is only one gear in the kitchen.</div>
 </section>
 `;
 
