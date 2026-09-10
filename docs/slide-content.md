@@ -628,4 +628,3 @@ can I turn into a reliable system of code, agents, and human judgment?"
 > how do I build an agent loop. The practical question is: what repeatable developer workflow can
 > I turn into a reliable system of code, agents, and human judgment? Start with the workflow you
 > already do by hand, every week. That — not a loop — is the thing to automate.
-</content>
