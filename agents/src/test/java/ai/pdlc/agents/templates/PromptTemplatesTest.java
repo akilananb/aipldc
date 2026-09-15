@@ -194,6 +194,26 @@ class PromptTemplatesTest {
     }
 
     @Test
+    void releaseChangeNotesRendersFeedbackBlockWhenPresent() {
+        String expected = "[agent:release]" + "\n"
+                + "Write user-facing change notes (2-3 sentences) for this change, drawn from the "
+                + "story's \"As a / So that\" and scenarios - never from commit messages.\n"
+                + "Change: openspec/changes/export-orders-csv\n"
+                + "Scenarios: export-orders-csv, rate-limit-abuse\n"
+                + "Reviewer feedback to address in this revision:\n"
+                + "- release-pack:change-notes: mention the rate limit change\n";
+
+        Map<String, Object> view = Map.of(
+                "change", "openspec/changes/export-orders-csv",
+                "scenarios", "export-orders-csv, rate-limit-abuse",
+                "hasFeedback", true,
+                "feedback", List.of(Map.of("target", "release-pack:change-notes", "text", "mention the rate limit change")));
+        String rendered = DEFAULTS.render("release-change-notes", view);
+
+        assertThat(rendered).isEqualTo(expected);
+    }
+
+    @Test
     void releaseChangeNotesFallbackRendersByteExact() {
         String expected = "This release adds: export-orders-csv, rate-limit-abuse.";
 

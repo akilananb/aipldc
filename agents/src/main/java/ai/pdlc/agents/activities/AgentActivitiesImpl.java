@@ -104,8 +104,8 @@ public class AgentActivitiesImpl implements AgentActivities {
     }
 
     @Override
-    public ReleaseHandoff draftReleasePack(WorkItemRef story, PoHandoff po, List<Task> tasks, List<BuildResult> results, ReviewHandoff review) {
-        return traced("release", story, () -> releaseAgent.draft(story, po, tasks, results, review));
+    public ReleaseHandoff draftReleasePack(WorkItemRef story, PoHandoff po, List<Task> tasks, List<BuildResult> results, ReviewHandoff review, List<Comment> feedback) {
+        return traced("release", story, () -> releaseAgent.draft(story, po, tasks, results, review, feedback));
     }
 
     @Override

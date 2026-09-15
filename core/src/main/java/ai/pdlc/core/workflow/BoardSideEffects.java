@@ -131,4 +131,30 @@ public interface BoardSideEffects {
      * dual audit trail (review_events always; review.md too, for stories). */
     @ActivityMethod
     void saveQualityReport(WorkItemRef item, int version, QualityReport report);
+
+    /** A build task stopped and needs a human decision: posts the open {@code h*} questions as one
+     * comment on the story (build bot), sets the story {@code needs-clarification}, appends
+     * {@code review_events: needs-human}. */
+    @ActivityMethod
+    void postHumanInputRequest(WorkItemRef story, GrillHandoff grill);
+
+    /** After a fix round: comments the new findings on the story's existing PR, records one runs
+     * row per re-run task, appends the review.md fix-round block + {@code review_events: fix-round},
+     * sets {@code awaiting-G2}. */
+    @ActivityMethod
+    void postFixRound(WorkItemRef story, String branch, List<Task> tasks, List<BuildResult> rerunResults, ReviewHandoff review, int round);
+
+    /** Gate 3 request-changes: rewrites the release documents under {@code release/<releaseId>/},
+     * inserts one {@code release_documents} row per document at {@code packVersion}, appends
+     * review.md + {@code review_events: release-pack-revised}. No new board item, state stays
+     * {@code awaiting-G3}. */
+    @ActivityMethod
+    void publishReleaseRevision(WorkItemRef story, ReleaseHandoff release, int packVersion);
+
+    /** A human answered "what should change" with skip/park (no fix round follows): flips the
+     * story back from {@code needs-clarification} to {@code awaiting-G2} - the board-side mirror
+     * of what {@link #postFixRound}/{@link #openStoryPr} already do at the end of every other path
+     * through gate 2. */
+    @ActivityMethod
+    void transitionAwaitingG2(WorkItemRef story);
 }

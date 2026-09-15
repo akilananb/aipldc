@@ -45,8 +45,10 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.time.Instant;
 import java.time.OffsetDateTime;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -219,12 +221,10 @@ public class ItemsController {
     @GetMapping("/{id}/grill")
     public GrillQuestionsDto grill(@PathVariable UUID id) {
         WorkItemEntity row = requireItem(id);
-        if (!"feature".equals(row.kind())) {
-            throw new NotFoundException("No clarification questions for kind " + row.kind());
-        }
+        WorkItemEntity feature = clarificationOwner(row);
         GrillHandoff grill;
         try {
-            grill = workflowStubs.featureWorkflow(new WorkItemRef(row.profile(), row.boardId())).grill();
+            grill = workflowStubs.featureWorkflow(new WorkItemRef(feature.profile(), feature.boardId())).grill();
         } catch (RuntimeException notRunning) {
             throw new NotFoundException("No running workflow for item " + id);
         }
@@ -247,23 +247,35 @@ public class ItemsController {
         return ResponseEntity.noContent().build();
     }
 
-    /** Answers or parks one grill/PO-follow-up question: {@code PO}/{@code SquadLead} only (the G1
-     * roles - playbook §1 "Human owner"); posts {@code <id>: <body>} as a board comment and signals
-     * the workflow directly rather than relying on a webhook echo (harmless if one also arrives -
-     * step 4 below ignores a non-{@code OPEN} question). */
+    /** The item whose grill/build-loop clarification questions {@code row} shares: a feature owns
+     * its own; a story defers to its parent feature (the workflow that actually holds the {@link
+     * GrillHandoff}, including any {@code h*} build-loop questions posted while that story is
+     * building). */
+    private WorkItemEntity clarificationOwner(WorkItemEntity row) {
+        if ("feature".equals(row.kind())) {
+            return row;
+        }
+        if ("story".equals(row.kind()) && row.parentId() != null) {
+            return workItems.findByProfileAndBoardId(row.profile(), row.parentId())
+                    .orElseThrow(() -> new NotFoundException("No parent feature for story " + row.id()));
+        }
+        throw new NotFoundException("No clarification questions for kind " + row.kind());
+    }
+
+    /** Answers or parks one grill/PO-follow-up/build-loop question: grill/PO-follow-up questions
+     * are gate 1 roles only (playbook §1 "Human owner"); a build-loop {@code h*} question also
+     * accepts a gate 2 role (the checker actually watching the build, per playbook §4's human-input
+     * path). Posts {@code <id>: <body>} as a board comment on the item the request was made against
+     * (the story, when called with a story id) and signals the feature workflow directly rather
+     * than relying on a webhook echo (harmless if one also arrives - step 4 below ignores a
+     * non-{@code OPEN} question). */
     private void submitGrillReply(UUID id, String questionId, String body, HttpServletRequest httpRequest) {
         Identity identity = identityResolver.resolve(httpRequest);
         WorkItemEntity row = requireItem(id);
-        if (!"feature".equals(row.kind())) {
-            throw new NotFoundException("No clarification questions for kind " + row.kind());
-        }
-        var gate1 = pdlcConfig.profile(row.profile()).gate("G1");
-        if (!gate1.roles().contains(identity.role())) {
-            throw new ForbiddenException("Role " + identity.role() + " cannot answer clarification questions");
-        }
+        WorkItemEntity feature = clarificationOwner(row);
 
-        WorkItemRef itemRef = new WorkItemRef(row.profile(), row.boardId());
-        FeatureWorkflow stub = workflowStubs.featureWorkflow(itemRef);
+        WorkItemRef featureRef = new WorkItemRef(feature.profile(), feature.boardId());
+        FeatureWorkflow stub = workflowStubs.featureWorkflow(featureRef);
         GrillHandoff grill;
         try {
             grill = stub.grill();
@@ -281,11 +293,19 @@ public class ItemsController {
             throw new ConflictException("Question " + questionId + " is already " + question.status().wireValue());
         }
 
+        Set<String> allowed = new LinkedHashSet<>(pdlcConfig.profile(row.profile()).gate("G1").roles());
+        if (question.askedByBuildLoop()) {
+            allowed.addAll(pdlcConfig.profile(row.profile()).gate("G2").roles());
+        }
+        if (!allowed.contains(identity.role())) {
+            throw new ForbiddenException("Role " + identity.role() + " cannot answer clarification questions");
+        }
+
+        WorkItemRef itemRef = new WorkItemRef(row.profile(), row.boardId());
         String line = question.id() + ": " + body;
         CommentRef ref = board.addComment(itemRef, line, identity.user());
         stub.commentAdded(new BoardCommentEvent(ref.id(), identity.user(), line));
     }
-
 
     private WorkItemEntity requireItem(UUID id) {
         return workItems.findById(id).orElseThrow(() -> new NotFoundException("No work item " + id));

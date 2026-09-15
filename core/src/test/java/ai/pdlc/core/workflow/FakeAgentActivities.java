@@ -139,8 +139,11 @@ class FakeAgentActivities implements AgentActivities {
         return new ReviewHandoff(envelope, List.of(), findings);
     }
 
+    final List<List<Comment>> releaseFeedback = new CopyOnWriteArrayList<>();
+
     @Override
-    public ReleaseHandoff draftReleasePack(WorkItemRef story, PoHandoff po, List<Task> tasks, List<BuildResult> results, ReviewHandoff review) {
+    public ReleaseHandoff draftReleasePack(WorkItemRef story, PoHandoff po, List<Task> tasks, List<BuildResult> results, ReviewHandoff review, List<Comment> feedback) {
+        releaseFeedback.add(feedback);
         Handoff envelope = new Handoff("release-agent", "monitor-agent", story.boardId(),
                 ai.pdlc.core.domain.CanonicalState.AWAITING_G3, List.of(), 0.9, List.of(), List.of());
         List<ReleaseDocument> documents = List.of(

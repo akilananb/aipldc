@@ -34,7 +34,7 @@ export default function FeaturePage({ item }: Props) {
     <Box>
       <PageHeader backTo={{ to: '/', label: 'Items' }} title={item.title} badges={<StatusBadge state={item.canonicalState} />} />
 
-      <ClarificationPanel item={item} />
+      <ClarificationPanel item={item} excludePrefix="h" />
 
       <Box mb="4">
         <Panel title="Stories">

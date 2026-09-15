@@ -12,6 +12,7 @@ export interface ReviewActions {
   addComment: UseMutationResult<Comment, Error, AddCommentBody>;
   prApprove: UseMutationResult<unknown, Error, string>;
   prRequestChanges: UseMutationResult<unknown, Error, void>;
+  releaseRequestChanges: UseMutationResult<unknown, Error, void>;
   hasOpenBlocking: boolean;
   g1RoleAllowed: boolean;
   g2RoleAllowed: boolean;
@@ -89,6 +90,16 @@ export function useReviewActions(
     onError: (e) => toast.error(errorMessage(e)),
   });
 
+  const releaseRequestChanges = useMutation({
+    mutationFn: () => api.releaseRequestChanges(storyId!),
+    onSuccess: () => {
+      invalidateStory();
+      void queryClient.invalidateQueries({ queryKey: ['release', storyId] });
+      toast.success('Changes requested');
+    },
+    onError: (e) => toast.error(errorMessage(e)),
+  });
+
   const hasOpenBlocking = comments.some((c) => c.blocking && c.resolvedInVersion == null);
 
   const currentApprovals = gate?.approvals ?? {};
@@ -113,6 +124,7 @@ export function useReviewActions(
     addComment,
     prApprove,
     prRequestChanges,
+    releaseRequestChanges,
     hasOpenBlocking,
     g1RoleAllowed,
     g2RoleAllowed,

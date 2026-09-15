@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "PDLC Pilot Runtime Architecture",
+    "quality_profile": "showcase",
+    "output": "pdlc-architecture.html"
+  },
+  "components": [
+    { "id": "ui", "type": "frontend", "label": "React UI", "sublabel": "Vite, :5173", "pos": [40, 80], "size": [120, 60] },
+    { "id": "controlPlane", "type": "backend", "label": "control-plane", "sublabel": "Spring Boot, :8081", "pos": [280, 80], "size": [120, 60] },
+    { "id": "temporal", "type": "messagebus", "label": "Temporal", "sublabel": "workflow server", "pos": [520, 80], "size": [120, 60] },
+    { "id": "agents", "type": "backend", "label": "agents", "sublabel": "Spring Boot, :8082", "pos": [760, 80], "size": [120, 60] },
+    { "id": "postgres", "type": "database", "label": "Postgres", "sublabel": "shared datastore", "pos": [1000, 80], "size": [120, 60] },
+    { "id": "buildWorker", "type": "backend", "label": "build-worker", "sublabel": "Node/TS, standalone", "pos": [280, 280], "size": [120, 60] },
+    { "id": "boardRepo", "type": "external", "label": "Board + Repo", "sublabel": "Azure DevOps / GitHub", "pos": [520, 460], "size": [120, 60] },
+    { "id": "llmGateway", "type": "external", "label": "LLM Gateway", "sublabel": "OpenRouter / stub-llm", "pos": [760, 280], "size": [120, 60] }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "docker compose (local profile)", "wraps": ["ui", "controlPlane", "temporal", "agents", "postgres"], "pad": 24 }
+  ],
+  "connections": [
+    { "id": "ui-to-cp", "from": "ui", "to": "controlPlane", "label": "REST + poll", "variant": "emphasis" },
+    { "id": "cp-to-temporal", "from": "controlPlane", "to": "temporal", "label": "start workflow", "variant": "emphasis", "labelAt": [424, 76] },
+    { "id": "temporal-to-agents", "from": "temporal", "to": "agents", "label": "REASONING", "variant": "emphasis" },
+    { "id": "temporal-to-cp-board", "from": "temporal", "to": "controlPlane", "label": "BOARD/BUILD", "labelDy": 39 },
+    { "id": "cp-to-postgres", "from": "controlPlane", "to": "postgres", "label": "JDBC", "fromSide": "top", "toSide": "top", "via": [[340, 80], [340, 20], [1060, 20], [1060, 80]] },
+    { "id": "agents-to-postgres", "from": "agents", "to": "postgres", "label": "JDBC (runs)" },
+    { "id": "buildworker-to-cp", "from": "buildWorker", "to": "controlPlane", "label": "claim/heartbeat" },
+    { "id": "buildworker-to-repo", "from": "buildWorker", "to": "boardRepo", "label": "git push/PR" },
+    { "id": "cp-to-boardrepo", "from": "controlPlane", "to": "boardRepo", "label": "adapters / webhooks", "fromSide": "right", "toSide": "top" },
+    { "id": "agents-to-llm", "from": "agents", "to": "llmGateway", "label": "LLM calls", "labelDy": 24 }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "Orchestration", "items": ["Temporal drives FeatureWorkflow / AgentMentionWorkflow", "Queue split (REASONING / BOARD / BUILD) avoids cross-registration retries"] },
+    { "dot": "emerald", "title": "Board + build loop", "items": ["build-worker polls control-plane, not Temporal-connected", "Drives a configurable ACP coding agent (default omp acp) against a real git worktree"] },
+    { "dot": "violet", "title": "Reasoning", "items": ["Per-domain agents (grill/po/plan/review/release/monitor/mention)", "One-shot LLM callers over Mustache-rendered prompts via Embabel"] }
+  ]
+}

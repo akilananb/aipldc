@@ -11,6 +11,7 @@ import StatusBadge from '../components/StatusBadge';
 import ErrorCallout from '../components/ErrorCallout';
 import EmptyState from '../components/EmptyState';
 import QualityIcon from '../components/QualityIcon';
+import ClarificationPanel from '../components/ClarificationPanel';
 import { useReviewActions } from '../review/useReviewActions';
 import GatePanel from '../review/GatePanel';
 import CommentPanel from '../review/CommentPanel';
@@ -139,6 +140,7 @@ export default function ReviewPage() {
       />
 
       <Box mb="4">
+        <ClarificationPanel item={item} idPrefix="h" />
         <GatePanel item={item} actions={actions} />
       </Box>
 

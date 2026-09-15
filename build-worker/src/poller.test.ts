@@ -70,6 +70,7 @@ function claimFixture(id: string): ClaimedTask {
       },
       branch: 'story/4414',
       baseBranch: 'main',
+      feedback: [],
       repo: { provider: 'local-git', url: '/unused-because-repoOverride-wins', defaultBranch: 'main', specDir: 'openspec' },
     },
   };

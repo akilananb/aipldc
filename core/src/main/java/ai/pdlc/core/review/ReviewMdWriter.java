@@ -132,6 +132,32 @@ public final class ReviewMdWriter {
         return sb.toString();
     }
 
+    /** {@code ## Needs human · build loop} listing each open {@code h*} question - build loop
+     * human-input path (playbook §4 "Stop conditions"). */
+    public static String needsHumanBlock(List<String> questionLines) {
+        StringBuilder sb = new StringBuilder("\n## Needs human · build loop\n");
+        for (String line : questionLines) {
+            sb.append("- ").append(line).append('\n');
+        }
+        return sb.toString();
+    }
+
+    /** {@code ## Fix round N} with the re-run task results and the re-review's findings, mirroring
+     * {@link #prOpenedBlock}'s shape - a fix round re-runs a subset of tasks and re-reviews. */
+    public static String fixRoundBlock(int round, List<String> taskLines, List<String> findingLines) {
+        StringBuilder sb = new StringBuilder("\n## Fix round ").append(round).append('\n');
+        for (String line : taskLines) {
+            sb.append("- ").append(line).append('\n');
+        }
+        if (!findingLines.isEmpty()) {
+            sb.append("findings:\n");
+            for (String line : findingLines) {
+                sb.append("- ").append(line).append('\n');
+            }
+        }
+        return sb.toString();
+    }
+
     public static String append(String existing, String block) {
         String base = existing == null || existing.isEmpty()
                 ? ""

@@ -241,9 +241,10 @@ scripts/e2e-demo-phase4.sh   # + release pack -> gate 3 -> deploy -> monitor
 - The `local` profile's `LocalGitRepoAdapter` and the `agents`/`control-plane` containers all
   need the **same absolute host path** to `target-repos/orders-service` mounted — see the
   volume mounts in `infra/docker-compose.yml`.
-- `OPENROUTER_API_KEY` (real LLM calls for the `local` profile against OpenRouter) is expected
-  via `infra/.env` (gitignored, not present in a fresh checkout — create it before running
-  `agents` against real models). `BUILD_AGENT_TOKEN` is similarly optional/blank-default.
+- `infra/.env` (gitignored; copy `infra/.env.example`) may set `PDLC_LLM_BASE_URL` (overrides
+  `agents.gateway`) and `PDLC_LLM_API_KEY` (blank for endpoints without authentication);
+  `agents.gateway` is any OpenAI-compatible base URL used verbatim. `BUILD_AGENT_TOKEN` is
+  similarly optional/blank-default.
 
 ## Testing & QA
 

@@ -125,7 +125,7 @@ export interface BoardComment {
 
 export interface GrillQuestion {
   id: string;
-  askedBy: 'grill-agent' | 'po-agent';
+  askedBy: 'grill-agent' | 'po-agent' | 'build-agent';
   category: string;
   question: string;
   evidence: string;

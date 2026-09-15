@@ -145,9 +145,11 @@ services:
       PDLC_CONTROL_PLANE_URL: http://control-plane:8081
       # AgentsApplication.main() derives embabel.agent.platform.models.openai.custom.* (base-url,
       # models) from pdlc.yaml's agents.gateway/agents.roles.*.model at startup and sets them as
-      # system properties; OPENAI_CUSTOM_API_KEY is the one piece pdlc.yaml doesn't carry.
-      # Real key lives in infra/.env (OPENROUTER_API_KEY), never hardcoded here.
-      OPENAI_CUSTOM_API_KEY: ${OPENROUTER_API_KEY}
+      # system properties. PDLC_LLM_BASE_URL overrides agents.gateway when non-blank; used
+      # verbatim, include /v1 if the target server expects it. PDLC_LLM_API_KEY blank means an
+      # endpoint that doesn't check authentication. Both come from infra/.env, never hardcoded here.
+      PDLC_LLM_BASE_URL: ${PDLC_LLM_BASE_URL:-}
+      PDLC_LLM_API_KEY: ${PDLC_LLM_API_KEY:-}
       # Langfuse tracing (AgentsApplication.applyLangfuseFromEnv derives the OTLP auth header).
       LANGFUSE_OTLP_ENDPOINT: http://langfuse-web:3000/api/public/otel/v1/traces
       LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-pk-lf-pdlc-local}

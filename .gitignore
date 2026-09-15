@@ -11,6 +11,7 @@ node_modules/
 infra/.env
 .env
 .env.*
+!infra/.env.example
 
 # Nested git repo (its own independent history — the pilot's build target, not part of this repo)
 target-repos/

@@ -46,7 +46,7 @@ public class GrillAgent {
     /** pii / auth / payment keywords that force a mandatory RISK question (playbook §1 "Validates"). */
     private static final List<String> RISK_KEYWORDS = List.of("pii", "payment", "auth", "password", "credit card", "token");
 
-    private static final Pattern ANSWER_MARKER = Pattern.compile("(?i)\\b((?:q|po)\\d+)\\s*:");
+    private static final Pattern ANSWER_MARKER = Pattern.compile("(?i)\\b((?:q|po|h)\\d+)\\s*:");
 
     private static final String PARK_KEYWORD = "park";
 

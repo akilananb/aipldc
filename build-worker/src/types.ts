@@ -63,6 +63,7 @@ export interface ClaimedTask {
     task: Task;
     branch: string;
     baseBranch: string;
+    feedback: string[];
     repo: ClaimedRepo;
   };
 }

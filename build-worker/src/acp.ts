@@ -83,7 +83,7 @@ export function runAcpSession(cwd: string, prompt: string, timeoutMs: number, ag
   return promise;
 }
 
-export function buildTaskPrompt(template: string, taskId: string, title: string, scenario: string, touches: string[], testPath: string, testFileExists: boolean, canWriteTestPath: boolean): string {
+export function buildTaskPrompt(template: string, taskId: string, title: string, scenario: string, touches: string[], testPath: string, testFileExists: boolean, canWriteTestPath: boolean, feedback: string[]): string {
   const view = {
     taskId,
     title,
@@ -93,6 +93,8 @@ export function buildTaskPrompt(template: string, taskId: string, title: string,
     forbidTests: !canWriteTestPath,
     createTest: canWriteTestPath && !testFileExists,
     appendTest: canWriteTestPath && testFileExists,
+    hasFeedback: feedback.length > 0,
+    feedback,
   };
   return Mustache.render(template, view);
 }

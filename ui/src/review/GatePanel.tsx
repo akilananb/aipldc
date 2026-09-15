@@ -111,9 +111,24 @@ export default function GatePanel({ item, actions }: Props) {
       )}
 
       {stage === 'awaiting-G3' && (
-        <Text size="2" color="gray">
-          Sign the release documents in the Release tab.
-        </Text>
+        <Flex direction="column" gap="3">
+          <Text size="2" color="gray">
+            Sign the release documents in the Release tab.
+          </Text>
+          <Flex gap="3" align="center" wrap="wrap">
+            <Tooltip content={!GATE_ROLES.G3.includes(identity.role) ? `Role ${identity.role} is not a Gate 3 checker` : ''}>
+              <Button
+                color="amber"
+                variant="soft"
+                disabled={!GATE_ROLES.G3.includes(identity.role)}
+                onClick={() => actions.releaseRequestChanges.mutate()}
+                loading={actions.releaseRequestChanges.isPending}
+              >
+                Request changes
+              </Button>
+            </Tooltip>
+          </Flex>
+        </Flex>
       )}
 
       {stage != null && !['awaiting-G1', 'awaiting-G2', 'awaiting-G3'].includes(stage) && approvals.length > 0 && (

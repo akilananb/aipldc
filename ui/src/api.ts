@@ -138,6 +138,12 @@ export const api = {
     });
   },
 
+  releaseRequestChanges(id: string): Promise<unknown> {
+    return request<unknown>(`/api/items/${encodeURIComponent(id)}/release/request-changes`, {
+      method: 'POST',
+    });
+  },
+
   getBoardComments(id: string): Promise<BoardComment[]> {
     return request<BoardComment[]>(`/api/items/${encodeURIComponent(id)}/board-comments`);
   },

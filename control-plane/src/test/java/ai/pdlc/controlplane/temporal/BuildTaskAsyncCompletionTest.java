@@ -67,7 +67,7 @@ class BuildTaskAsyncCompletionTest {
 
         @Override
         public BuildResult run(WorkItemRef story, Task task, String branch, String baseBranch) {
-            return build.runTask(story, task, branch, baseBranch);
+            return build.runTask(story, task, branch, baseBranch, List.of());
         }
     }
 

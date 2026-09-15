@@ -1,0 +1,126 @@
+name: pdlc-restaurant
+
+services:
+  temporal-postgres:
+    image: postgres:13-alpine
+    environment:
+      POSTGRES_USER: temporal
+      POSTGRES_PASSWORD: temporal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U temporal"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  temporal:
+    image: temporalio/auto-setup:1.27
+    depends_on:
+      temporal-postgres:
+        condition: service_healthy
+    environment:
+      DB: postgres12
+      DB_PORT: 5432
+      POSTGRES_USER: temporal
+      POSTGRES_PWD: temporal
+      POSTGRES_SEEDS: temporal-postgres
+    ports:
+      - "17233:7233"
+
+  temporal-ui:
+    image: temporalio/ui:2.35.0
+    depends_on:
+      - temporal
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_CORS_ORIGINS: "http://localhost:15173"
+    ports:
+      - "18080:8080"
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: pdlc
+      POSTGRES_USER: pdlc
+      POSTGRES_PASSWORD: pdlc
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pdlc -d pdlc"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    ports:
+      - "15432:5432"
+
+  control-plane:
+    build:
+      context: ../..
+      dockerfile: infra/restaurant/control-plane.Dockerfile
+    depends_on:
+      temporal:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/pdlc
+      SPRING_DATASOURCE_USERNAME: pdlc
+      SPRING_DATASOURCE_PASSWORD: pdlc
+      PDLC_CONFIG_PATH: /app/pdlc.yaml
+      PDLC_ACTIVE_PROFILE: restaurant-local
+      TEMPORAL_TARGET: temporal:7233
+      TEMPORAL_NAMESPACE: default
+      BUILD_AGENT_TOKEN: ${BUILD_AGENT_TOKEN:-}
+    volumes:
+      - ./pdlc.yaml:/app/pdlc.yaml:ro
+      # Same absolute path on both sides: LocalGitRepoAdapter's repo.url in pdlc.yaml is a plain
+      # host path, shared 1:1 with the build-worker host process (omp is a native binary, so the
+      # build-worker that shells out to it cannot itself be containerized; it runs on the host
+      # and reaches this same repo directory directly, no path translation).
+      - /Users/work/Documents/restaurant-runtime:/Users/work/Documents/restaurant-runtime
+    ports:
+      - "18081:8081"
+
+  agents:
+    build:
+      context: ../..
+      dockerfile: agents/Dockerfile
+    depends_on:
+      temporal:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/pdlc
+      SPRING_DATASOURCE_USERNAME: pdlc
+      SPRING_DATASOURCE_PASSWORD: pdlc
+      PDLC_CONFIG_PATH: /app/pdlc.yaml
+      PDLC_ACTIVE_PROFILE: restaurant-local
+      TEMPORAL_TARGET: temporal:7233
+      TEMPORAL_NAMESPACE: default
+      # RemoteBoardPort (agents' own read-only BoardPort for the in-memory provider) reads
+      # control-plane's REST API so grill/PO agents see real title/description/comments across
+      # the process boundary instead of an empty in-process board.
+      PDLC_CONTROL_PLANE_URL: http://control-plane:8081
+      # AgentsApplication.main() derives embabel.agent.platform.models.openai.custom.* (base-url,
+      # models) from pdlc.yaml's agents.gateway/agents.roles.*.model at startup and sets them as
+      # system properties. PDLC_LLM_BASE_URL overrides agents.gateway when non-blank; used
+      # verbatim, include /v1 if the target server expects it. PDLC_LLM_API_KEY blank means an
+      # endpoint that doesn't check authentication. Both come from infra/.env, never hardcoded
+      # here. No Langfuse keys are set: AgentsApplication.applyLangfuseFromEnv keeps tracing off
+      # silently when both LANGFUSE_*_KEY are absent.
+      PDLC_LLM_BASE_URL: ${PDLC_LLM_BASE_URL:-}
+      PDLC_LLM_API_KEY: ${PDLC_LLM_API_KEY:-}
+    volumes:
+      - ./pdlc.yaml:/app/pdlc.yaml:ro
+      - /Users/work/Documents/restaurant-runtime:/Users/work/Documents/restaurant-runtime
+    ports:
+      - "18082:8082"
+
+  ui:
+    build:
+      context: ../../ui
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: http://localhost:18081
+    depends_on:
+      - control-plane
+    ports:
+      - "15173:80"

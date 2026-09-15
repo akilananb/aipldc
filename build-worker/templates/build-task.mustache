@@ -1,6 +1,12 @@
 You are implementing task {{{taskId}}} for this story: "{{{title}}}".
 Scenario to prove: {{{scenario}}}
 You may ONLY edit these files: {{{touches}}}
+{{#hasFeedback}}
+This is a fix round: a previous attempt on this task was built and reviewed. Address every point below before anything else, in the allowed files only:
+{{#feedback}}
+- {{{.}}}
+{{/feedback}}
+{{/hasFeedback}}
 {{#forbidTests}}
 Do not edit {{{testPath}}} or any other test file, do not weaken or skip any test.
 Read the test block named "scenario: {{{scenario}}}" in {{{testPath}}} to understand exactly what

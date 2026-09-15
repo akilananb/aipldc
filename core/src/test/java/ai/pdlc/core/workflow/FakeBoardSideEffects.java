@@ -72,9 +72,16 @@ class FakeBoardSideEffects implements BoardSideEffects {
         approvedVersions.add(version);
     }
 
+    final AtomicInteger humanInputRequests = new AtomicInteger();
+
     @Override
     public void escalateStale(WorkItemRef item) {
         staleEscalations.incrementAndGet();
+    }
+
+    @Override
+    public void postHumanInputRequest(WorkItemRef story, GrillHandoff grill) {
+        humanInputRequests.incrementAndGet();
     }
 
     @Override
@@ -122,6 +129,8 @@ class FakeBoardSideEffects implements BoardSideEffects {
     /** boardId of each task {@link #recordTaskResults} transitioned to done, in call order. */
     final List<String> taskResultsRecorded = new CopyOnWriteArrayList<>();
 
+    final List<Integer> fixRoundsPosted = new CopyOnWriteArrayList<>();
+
     @Override
     public void recordTaskResults(WorkItemRef story, Map<String, String> taskBoardIds, List<BuildResult> results) {
         for (BuildResult r : results) {
@@ -130,6 +139,11 @@ class FakeBoardSideEffects implements BoardSideEffects {
                 taskResultsRecorded.add(taskBoardId);
             }
         }
+    }
+
+    @Override
+    public void postFixRound(WorkItemRef story, String branch, List<Task> tasks, List<BuildResult> rerunResults, ReviewHandoff review, int round) {
+        fixRoundsPosted.add(round);
     }
 
     GateConfig gate3 = new GateConfig(List.of("PO", "SquadLead", "QA"), true);
@@ -143,9 +157,23 @@ class FakeBoardSideEffects implements BoardSideEffects {
         return gate3;
     }
 
+    final List<Integer> releaseRevisionsPublished = new CopyOnWriteArrayList<>();
+
     @Override
     public void publishReleasePack(WorkItemRef story, ReleaseHandoff release) {
         releasePacksPublished.add(release);
+    }
+
+    final AtomicInteger awaitingG2Transitions = new AtomicInteger();
+
+    @Override
+    public void publishReleaseRevision(WorkItemRef story, ReleaseHandoff release, int packVersion) {
+        releaseRevisionsPublished.add(packVersion);
+    }
+
+    @Override
+    public void transitionAwaitingG2(WorkItemRef story) {
+        awaitingG2Transitions.incrementAndGet();
     }
 
     @Override

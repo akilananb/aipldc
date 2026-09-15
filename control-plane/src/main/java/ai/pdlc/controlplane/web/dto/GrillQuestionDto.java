@@ -7,7 +7,8 @@ public record GrillQuestionDto(String id, String askedBy, String category, Strin
                                 String status, String answer, String answeredBy) {
 
     public static GrillQuestionDto from(GrillQuestion q) {
-        return new GrillQuestionDto(q.id(), q.askedByPoAgent() ? "po-agent" : "grill-agent",
+        String askedBy = q.askedByBuildLoop() ? "build-agent" : q.askedByPoAgent() ? "po-agent" : "grill-agent";
+        return new GrillQuestionDto(q.id(), askedBy,
                 q.category().wireValue(), q.question(), q.evidence(), q.status().wireValue(),
                 q.answer(), q.answeredBy());
     }

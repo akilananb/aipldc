@@ -9,7 +9,7 @@ import { loadBuildTaskTemplate } from './promptTemplate';
 const TEMPLATE = loadBuildTaskTemplate();
 
 test('buildTaskPrompt forbids touching the test file when this scenario already has coverage', () => {
-  const prompt = buildTaskPrompt(TEMPLATE, 'T1', 'Add todos', 'create-todo', ['src/default.js'], 'test/default.test.js', true, false);
+  const prompt = buildTaskPrompt(TEMPLATE, 'T1', 'Add todos', 'create-todo', ['src/default.js'], 'test/default.test.js', true, false, []);
 
   assert.match(prompt, /Do not edit test\/default\.test\.js or any other test file/);
   assert.doesNotMatch(prompt, /MAY create it/);
@@ -17,7 +17,7 @@ test('buildTaskPrompt forbids touching the test file when this scenario already 
 });
 
 test('buildTaskPrompt allows creating a genuinely new test file when none exists yet', () => {
-  const prompt = buildTaskPrompt(TEMPLATE, 'T1', 'Add todos', 'create-todo', ['src/default.js'], 'test/default.test.js', false, true);
+  const prompt = buildTaskPrompt(TEMPLATE, 'T1', 'Add todos', 'create-todo', ['src/default.js'], 'test/default.test.js', false, true, []);
 
   assert.match(prompt, /test\/default\.test\.js does not exist yet - you MAY create it/);
   assert.match(prompt, /scenario: create-todo/);
@@ -25,7 +25,7 @@ test('buildTaskPrompt allows creating a genuinely new test file when none exists
 });
 
 test('buildTaskPrompt allows appending to a shared test file that lacks this scenario, and demands byte-for-byte preservation of the rest', () => {
-  const prompt = buildTaskPrompt(TEMPLATE, 'T2', 'Add todos', 'mark-done', ['src/default.js'], 'test/default.test.js', true, true);
+  const prompt = buildTaskPrompt(TEMPLATE, 'T2', 'Add todos', 'mark-done', ['src/default.js'], 'test/default.test.js', true, true, []);
 
   assert.match(prompt, /already exists with other tasks' tests in it but has no test yet for this/);
   assert.match(prompt, /you MAY append to it/);
@@ -36,14 +36,14 @@ test('buildTaskPrompt allows appending to a shared test file that lacks this sce
 
 test('buildTaskPrompt always states the touches restriction and stop condition regardless of test-file state', () => {
   for (const [testFileExists, canWriteTestPath] of [[true, false], [false, true], [true, true]] as const) {
-    const prompt = buildTaskPrompt(TEMPLATE, 'T3', 'Story', 'scenario-x', ['src/a.js', 'src/b.js'], 'test/x.test.js', testFileExists, canWriteTestPath);
+    const prompt = buildTaskPrompt(TEMPLATE, 'T3', 'Story', 'scenario-x', ['src/a.js', 'src/b.js'], 'test/x.test.js', testFileExists, canWriteTestPath, []);
     assert.match(prompt, /You may ONLY edit these files: src\/a\.js, src\/b\.js/);
     assert.match(prompt, /Stop once all tests pass; do not touch unrelated code\./);
   }
 });
 
 test('buildTaskPrompt renders the createTest branch byte-exact (golden)', () => {
-  const prompt = buildTaskPrompt(TEMPLATE, 'T1', 'Add todos', 'create-todo', ['src/default.js'], 'test/default.test.js', false, true);
+  const prompt = buildTaskPrompt(TEMPLATE, 'T1', 'Add todos', 'create-todo', ['src/default.js'], 'test/default.test.js', false, true, []);
 
   const expected = [
     'You are implementing task T1 for this story: "Add todos".',
@@ -61,11 +61,23 @@ test('buildTaskPrompt renders the createTest branch byte-exact (golden)', () => 
   assert.equal(prompt, expected);
 });
 
+test('buildTaskPrompt renders fix-round feedback as bullet lines after the touches restriction', () => {
+  const withFeedback = buildTaskPrompt(TEMPLATE, 'T1', 'Add todos', 'create-todo', ['src/default.js'], 'test/default.test.js', true, false,
+    ['[review-agent/verifier] null check missing on line 12', '[human/PO] use the cached client']);
+
+  assert.match(withFeedback, /This is a fix round: a previous attempt on this task was built and reviewed\./);
+  assert.match(withFeedback, /- \[review-agent\/verifier\] null check missing on line 12/);
+  assert.match(withFeedback, /- \[human\/PO\] use the cached client/);
+
+  const withoutFeedback = buildTaskPrompt(TEMPLATE, 'T1', 'Add todos', 'create-todo', ['src/default.js'], 'test/default.test.js', true, false, []);
+  assert.doesNotMatch(withoutFeedback, /fix round/);
+});
+
 test('loadBuildTaskTemplate uses a prompts_dir override when build-task.mustache is present there', async () => {
   const dir = await mkdtemp(path.join(tmpdir(), 'pdlc-prompt-override-'));
   await writeFile(path.join(dir, 'build-task.mustache'), 'CUSTOM {{{taskId}}}');
 
-  const prompt = buildTaskPrompt(loadBuildTaskTemplate(dir), 'T9', 'Story', 'scenario-x', ['src/a.js'], 'test/x.test.js', true, false);
+  const prompt = buildTaskPrompt(loadBuildTaskTemplate(dir), 'T9', 'Story', 'scenario-x', ['src/a.js'], 'test/x.test.js', true, false, []);
 
   assert.equal(prompt, 'CUSTOM T9');
 });

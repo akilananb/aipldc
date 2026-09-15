@@ -3,6 +3,7 @@ package ai.pdlc.agents.release;
 import ai.pdlc.agents.templates.PromptTemplates;
 import ai.pdlc.core.config.Profile;
 import ai.pdlc.core.domain.CanonicalState;
+import ai.pdlc.core.domain.Comment;
 import ai.pdlc.core.domain.Handoff;
 import ai.pdlc.core.domain.MonitorRule;
 import ai.pdlc.core.domain.PoHandoff;
@@ -51,10 +52,10 @@ public class ReleaseAgent {
         this.releaseModel = role != null ? role.model() : null;
     }
 
-    public ReleaseHandoff draft(WorkItemRef story, PoHandoff po, List<Task> tasks, List<BuildResult> results, ReviewHandoff review) {
+    public ReleaseHandoff draft(WorkItemRef story, PoHandoff po, List<Task> tasks, List<BuildResult> results, ReviewHandoff review, List<Comment> feedback) {
         String releaseId = "R-" + LocalDate.now(ZoneOffset.UTC) + "-" + story.boardId();
 
-        ReleaseDocument changeNotes = new ReleaseDocument("change-notes", "Change notes", changeNotes(po), "PO");
+        ReleaseDocument changeNotes = new ReleaseDocument("change-notes", "Change notes", changeNotes(po, feedback), "PO");
         RolloutPlan rollout = rolloutPlan(po);
         ReleaseDocument rolloutDoc = new ReleaseDocument("rollout-plan", "Rollout & rollback plan", rolloutMarkdown(rollout), "SquadLead");
         List<MonitorRule> monitorRules = monitorRules(po);
@@ -70,9 +71,12 @@ public class ReleaseAgent {
 
     // -- change notes: one real LLM call, deterministic fallback ---------------------------------
 
-    private String changeNotes(PoHandoff po) {
+    private String changeNotes(PoHandoff po, List<Comment> feedback) {
+        List<Map<String, String>> feedbackView = feedback.stream()
+                .map(c -> Map.of("target", c.target(), "text", c.text())).toList();
         String prompt = templates.render("release-change-notes",
-                Map.of("change", po.change(), "scenarios", String.join(", ", po.scenarios())));
+                Map.of("change", po.change(), "scenarios", String.join(", ", po.scenarios()),
+                        "hasFeedback", !feedback.isEmpty(), "feedback", feedbackView));
         try {
             String raw = promptRunner().generateText(prompt);
             String text = raw == null ? "" : raw.strip();

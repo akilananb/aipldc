@@ -57,15 +57,18 @@ public class BuildTaskService {
 
     /** Parks a fresh {@code pending} row for {@code runTask}'s Temporal task token; a retry (new
      * {@code attempt}) supersedes whatever non-terminal row this profile/story/task already had -
-     * its token is stale the instant Temporal schedules a new attempt. */
-    public void enqueue(WorkItemRef story, Task task, String branch, String baseBranch, RepoConfig repo, int attempt, byte[] taskToken) {
+     * its token is stale the instant Temporal schedules a new attempt. {@code feedback} is always
+     * present in the payload ({@code []} on a first attempt) - reviewer/human/verifier lines a fix
+     * round must address. */
+    public void enqueue(WorkItemRef story, Task task, String branch, String baseBranch, List<String> feedback, RepoConfig repo, int attempt, byte[] taskToken) {
         jdbcTemplate.update(
                 "UPDATE build_tasks SET state='superseded', updated_at=now() "
                         + "WHERE profile=? AND story_board_id=? AND task_id=? AND state IN ('pending','claimed')",
                 story.profile(), story.boardId(), task.id());
 
         String payloadJson = writeJson(Map.of(
-                "story", story, "task", task, "branch", branch, "baseBranch", baseBranch, "repo", repo));
+                "story", story, "task", task, "branch", branch, "baseBranch", baseBranch,
+                "feedback", feedback == null ? List.of() : feedback, "repo", repo));
         jdbcTemplate.update(
                 "INSERT INTO build_tasks (profile, story_board_id, task_id, attempt, payload_json, task_token, state) "
                         + "VALUES (?, ?, ?, ?, ?, ?, 'pending')",

@@ -5,6 +5,8 @@ import ai.pdlc.core.domain.WorkItemRef;
 import io.temporal.activity.ActivityInterface;
 import io.temporal.activity.ActivityMethod;
 
+import java.util.List;
+
 /**
  * The build loop — {@code docs/agent-playbook.md} §4 "Build agent (the loop)", hosted by the
  * {@code build-worker} Node process on task queue {@link TaskQueues#BUILD}. Drives omp (the coding
@@ -19,7 +21,9 @@ public interface BuildActivities {
     /** Explicit wire name: Temporal's Java SDK default-capitalizes activity type names
      * ({@code runTask} -> {@code RunTask}) but the Node SDK registers activities under their
      * exported function name verbatim ({@code runTask}) - this is the project's first
-     * cross-language activity boundary, so the name must be pinned explicitly on one side. */
+     * cross-language activity boundary, so the name must be pinned explicitly on one side.
+     *
+     * @param feedback reviewer/human/verifier lines a fix round must address; empty on a first attempt */
     @ActivityMethod(name = "runTask")
-    BuildResult runTask(WorkItemRef story, Task task, String branch, String baseBranch);
+    BuildResult runTask(WorkItemRef story, Task task, String branch, String baseBranch, List<String> feedback);
 }

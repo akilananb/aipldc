@@ -1,4 +1,9 @@
 [agent:release]
 Write user-facing change notes (2-3 sentences) for this change, drawn from the story's "As a / So that" and scenarios - never from commit messages.
 Change: {{{change}}}
-Scenarios: {{{scenarios}}}
+Scenarios: {{{scenarios}}}{{#hasFeedback}}
+
+Reviewer feedback to address in this revision:
+{{#feedback}}
+- {{{target}}}: {{{text}}}
+{{/feedback}}{{/hasFeedback}}

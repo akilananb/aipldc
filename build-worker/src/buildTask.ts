@@ -52,12 +52,17 @@ export function wasTestContentPreserved(before: string | null, after: string): b
  * and this throws so the poller discards the task without posting a result.
  */
 export async function runBuildTask(payload: ClaimedTask['payload'], repo: RepoHandle, opts: { acpAgent: string; promptTemplateDir?: string }, signal: AbortSignal): Promise<BuildResult> {
-  const { task, branch, baseBranch } = payload;
+  const { task, branch, baseBranch, feedback = [] } = payload;
   const worktreePath = await mkdtemp(path.join(tmpdir(), `pdlc-task-${task.id}-`));
 
   try {
     await repo.sync(branch, baseBranch);
     await addWorktree(repo.path, worktreePath, branch, baseBranch);
+    // Scope enforcement must diff against THIS session's own starting commit, not baseBranch -
+    // a fix round's worktree already has every earlier round's (and earlier task's, same wave)
+    // commits on `branch`, which would otherwise show up as "touched" and get force-reverted /
+    // escalated as a forbidden action despite this session never touching them.
+    const startSha = await revParse(worktreePath, 'HEAD');
 
     const testAbsPath = path.join(worktreePath, task.testPath);
     const testFileExists = existsSync(testAbsPath);
@@ -67,7 +72,7 @@ export async function runBuildTask(payload: ClaimedTask['payload'], repo: RepoHa
     const effectiveTouches = canWriteTestPath ? [...task.touches, task.testPath] : task.touches;
 
     const template = loadBuildTaskTemplate(opts.promptTemplateDir);
-    const prompt = buildTaskPrompt(template, task.id, task.title, task.scenario, task.touches, task.testPath, testFileExists, canWriteTestPath);
+    const prompt = buildTaskPrompt(template, task.id, task.title, task.scenario, task.touches, task.testPath, testFileExists, canWriteTestPath, feedback);
     const timeoutMs = parseIso8601DurationMs(task.budget.maxWallClock);
     const session = await runAcpSession(worktreePath, prompt, timeoutMs, opts.acpAgent, signal);
     if (session.aborted) {
@@ -78,7 +83,7 @@ export async function runBuildTask(payload: ClaimedTask['payload'], repo: RepoHa
       ? `budget exhausted: no result within ${task.budget.maxWallClock}`
       : null;
 
-    let touched = await changedFiles(worktreePath, baseBranch);
+    let touched = await changedFiles(worktreePath, startSha);
     const outOfScope = touched.filter((file) => !effectiveTouches.includes(file));
     if (beforeTestContent !== null && touched.includes(task.testPath) && !outOfScope.includes(task.testPath)) {
       const afterTestContent = existsSync(testAbsPath) ? await readFile(testAbsPath, 'utf8') : '';

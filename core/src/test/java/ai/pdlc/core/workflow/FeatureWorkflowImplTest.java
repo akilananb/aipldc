@@ -248,8 +248,13 @@ class FeatureWorkflowImplTest {
         wf.approve(new Approval("po@acme", "PO", "story", 1, "hash-v1", Instant.now()));
         wf.approve(new Approval("lead@acme", "SquadLead", "story", 1, "hash-v1", Instant.now()));
         // Playbook §4 "Stop conditions": budget exhausted -> WIP branch + escalation note is a
-        // correct outcome, not a workflow failure - the build loop still hands off to review/PR/G2.
+        // correct outcome, not a workflow failure - the build loop pauses for a human decision,
+        // then still hands off to review/PR/G2 once answered.
         buildActivities.returnRed = true;
+
+        awaitState(wf, s -> s.stage() == CanonicalState.NEEDS_CLARIFICATION);
+        assertThat(boardSideEffects.humanInputRequests.get()).isEqualTo(1);
+        wf.commentAdded(new BoardCommentEvent("c", "dev@acme", "h1: skip"));
 
         awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G2);
         assertThat(buildActivities.taskIdsRun).containsExactly("T1");
@@ -325,7 +330,14 @@ class FeatureWorkflowImplTest {
         wf.requestChanges("squad-lead@acme");
         awaitState(wf, s -> s.version() == 2);
 
-        // playbook §7 "Rules": a changes-requested bumps pack_version and clears every signature.
+        // playbook §7 "Rules": a changes-requested bumps pack_version and clears every signature;
+        // the pack is re-drafted with the (empty, in this test) feedback and republished at v2.
+        long deadline = System.currentTimeMillis() + 5000;
+        while (boardSideEffects.releaseRevisionsPublished.isEmpty() && System.currentTimeMillis() < deadline) {
+            Thread.sleep(20);
+        }
+        assertThat(boardSideEffects.releaseRevisionsPublished).containsExactly(2);
+        assertThat(wf.state().version()).isEqualTo(2);
         assertThat(wf.state().approvals()).isEmpty();
         assertThat(WorkflowStub.fromTyped(wf).describe().getStatus())
                 .isEqualTo(io.temporal.api.enums.v1.WorkflowExecutionStatus.WORKFLOW_EXECUTION_STATUS_RUNNING);
@@ -523,5 +535,134 @@ class FeatureWorkflowImplTest {
         awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G1);
         assertThat(agentActivities.poDraftCalls).containsExactly(true, true, false);
         assertThat(boardSideEffects.followUpPosts.get()).isEqualTo(2);
+    }
+
+    @Test
+    void g2RequestChangesRerunsTargetedTaskWithCommentsAndReReviews() throws Exception {
+        FeatureWorkflow wf = start("4412-g2-request-changes");
+        awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G1);
+        wf.approve(new Approval("po@acme", "PO", "story", 1, "hash-v1", Instant.now()));
+        wf.approve(new Approval("lead@acme", "SquadLead", "story", 1, "hash-v1", Instant.now()));
+        awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G2);
+
+        wf.comment(new Comment("c1", "qa@acme", "QA", "pr", "file:src/export.js:12",
+                "null check", Comment.Intent.CHANGE, true, 1));
+        awaitState(wf, s -> !s.openComments().isEmpty());
+
+        wf.requestChanges("qa@acme");
+        awaitState(wf, s -> s.version() == 2 && s.openComments().isEmpty());
+
+        long deadline = System.currentTimeMillis() + 5000;
+        while (boardSideEffects.fixRoundsPosted.isEmpty() && System.currentTimeMillis() < deadline) {
+            Thread.sleep(20);
+        }
+        awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G2);
+        assertThat(buildActivities.taskIdsRun).containsExactly("T1", "T1");
+        assertThat(buildActivities.feedbackByTask.get("T1")).contains("[QA] file:src/export.js:12: null check");
+        assertThat(boardSideEffects.fixRoundsPosted).containsExactly(1);
+        assertThat(wf.state().version()).isEqualTo(2);
+        assertThat(wf.state().openComments()).isEmpty();
+        assertThat(wf.state().stage()).isEqualTo(CanonicalState.AWAITING_G2);
+
+        wf.approve(new Approval("fsdev@acme", "FSDeveloper", "pr", 2, "hash-pr-v2", Instant.now()));
+        wf.approve(new Approval("qa@acme", "QA", "pr", 2, "hash-pr-v2", Instant.now()));
+        awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G3);
+        assertThat(boardSideEffects.approvedVersions).contains(2);
+    }
+
+    @Test
+    void reviewBlockerRedVerifierTriggersOneAutoFixRoundThenWaits() throws Exception {
+        FeatureWorkflow wf = start("4412-g2-auto-fix");
+        buildActivities.redOnce = true;
+        awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G1);
+        wf.approve(new Approval("po@acme", "PO", "story", 1, "hash-v1", Instant.now()));
+        wf.approve(new Approval("lead@acme", "SquadLead", "story", 1, "hash-v1", Instant.now()));
+
+        awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G2 && s.version() == 2);
+        long deadline = System.currentTimeMillis() + 5000;
+        while (boardSideEffects.fixRoundsPosted.isEmpty() && System.currentTimeMillis() < deadline) {
+            Thread.sleep(20);
+        }
+        awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G2);
+        assertThat(boardSideEffects.fixRoundsPosted).containsExactly(1);
+        assertThat(buildActivities.taskIdsRun).containsExactly("T1", "T1");
+        assertThat(wf.state().version()).isEqualTo(2);
+        assertThat(wf.state().openComments()).isEmpty();
+        assertThat(WorkflowStub.fromTyped(wf).describe().getStatus())
+                .isEqualTo(io.temporal.api.enums.v1.WorkflowExecutionStatus.WORKFLOW_EXECUTION_STATUS_RUNNING);
+    }
+
+    @Test
+    void buildEscalationAsksHumanRetriesWithAnswer() throws Exception {
+        FeatureWorkflow wf = start("4412-human-input-retry");
+        buildActivities.escalateOnce = true;
+        awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G1);
+        wf.approve(new Approval("po@acme", "PO", "story", 1, "hash-v1", Instant.now()));
+        wf.approve(new Approval("lead@acme", "SquadLead", "story", 1, "hash-v1", Instant.now()));
+
+        awaitState(wf, s -> s.stage() == CanonicalState.NEEDS_CLARIFICATION);
+        assertThat(boardSideEffects.humanInputRequests.get()).isEqualTo(1);
+        assertThat(wf.grill().openQuestions()).hasSize(1);
+        assertThat(wf.grill().openQuestions().get(0).id()).isEqualTo("h1");
+        assertThat(wf.grill().openQuestions().get(0).category()).isEqualTo(ai.pdlc.core.domain.GrillQuestion.Category.BUILD);
+
+        wf.commentAdded(new BoardCommentEvent("c1", "dev@acme", "h1: use the cached client"));
+        awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G2);
+
+        assertThat(buildActivities.taskIdsRun).containsExactly("T1", "T1");
+        assertThat(buildActivities.feedbackByTask.get("T1")).contains("[human/PO] use the cached client");
+        assertThat(boardSideEffects.inProgressCalls.size()).isEqualTo(2);
+    }
+
+    @Test
+    void buildEscalationSkipContinuesToReview() throws Exception {
+        FeatureWorkflow wf = start("4412-human-input-skip");
+        buildActivities.escalateOnce = true;
+        awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G1);
+        wf.approve(new Approval("po@acme", "PO", "story", 1, "hash-v1", Instant.now()));
+        wf.approve(new Approval("lead@acme", "SquadLead", "story", 1, "hash-v1", Instant.now()));
+
+        awaitState(wf, s -> s.stage() == CanonicalState.NEEDS_CLARIFICATION);
+        wf.commentAdded(new BoardCommentEvent("c1", "dev@acme", "h1: skip"));
+        awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G2);
+
+        assertThat(buildActivities.taskIdsRun).containsExactly("T1");
+    }
+
+    @Test
+    void g3RequestChangesRedraftsPackAtBumpedVersion() throws Exception {
+        FeatureWorkflow wf = start("4412-g3-redraft");
+        awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G1);
+        wf.approve(new Approval("po@acme", "PO", "story", 1, "hash-v1", Instant.now()));
+        wf.approve(new Approval("lead@acme", "SquadLead", "story", 1, "hash-v1", Instant.now()));
+        awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G2);
+        wf.approve(new Approval("fsdev@acme", "FSDeveloper", "pr", 1, "hash-pr-v1", Instant.now()));
+        wf.approve(new Approval("qa@acme", "QA", "pr", 1, "hash-pr-v1", Instant.now()));
+        awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G3);
+
+        wf.comment(new Comment("rc1", "po@acme", "PO", "release-pack:change-notes", "doc:change-notes#section",
+                "mention the rate limit change", Comment.Intent.CHANGE, true, 1));
+        awaitState(wf, s -> !s.openComments().isEmpty());
+
+        wf.requestChanges("po@acme");
+        awaitState(wf, s -> s.version() == 2);
+
+        long deadline = System.currentTimeMillis() + 5000;
+        while (boardSideEffects.releaseRevisionsPublished.isEmpty() && System.currentTimeMillis() < deadline) {
+            Thread.sleep(20);
+        }
+        assertThat(agentActivities.releaseFeedback.get(1)).extracting(Comment::id).containsExactly("rc1");
+        assertThat(boardSideEffects.releaseRevisionsPublished).containsExactly(2);
+        assertThat(wf.state().version()).isEqualTo(2);
+        assertThat(wf.state().approvals()).isEmpty();
+
+        wf.approve(new Approval("po@acme", "PO", "release-pack:change-notes", 2, "hash-doc", Instant.now()));
+        wf.approve(new Approval("lead@acme", "SquadLead", "release-pack:rollout-plan", 2, "hash-doc", Instant.now()));
+        wf.approve(new Approval("qa@acme", "QA", "release-pack:monitor-rules", 2, "hash-doc", Instant.now()));
+        wf.approve(new Approval("qa@acme", "QA", "release-pack:test-evidence", 2, "hash-doc", Instant.now()));
+
+        WorkflowStub.fromTyped(wf).getResult(5, TimeUnit.SECONDS, Void.class);
+        assertThat(wf.state().stage()).isEqualTo(CanonicalState.DONE);
+        assertThat(boardSideEffects.deployedReleases).hasSize(1);
     }
 }

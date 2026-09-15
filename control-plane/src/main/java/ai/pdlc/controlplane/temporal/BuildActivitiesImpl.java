@@ -29,9 +29,9 @@ public class BuildActivitiesImpl implements BuildActivities {
     }
 
     @Override
-    public BuildResult runTask(WorkItemRef story, Task task, String branch, String baseBranch) {
+    public BuildResult runTask(WorkItemRef story, Task task, String branch, String baseBranch, java.util.List<String> feedback) {
         ActivityExecutionContext ctx = Activity.getExecutionContext();
-        service.enqueue(story, task, branch, baseBranch, activeProfile.repo(), ctx.getInfo().getAttempt(), ctx.getTaskToken());
+        service.enqueue(story, task, branch, baseBranch, feedback, activeProfile.repo(), ctx.getInfo().getAttempt(), ctx.getTaskToken());
         ctx.doNotCompleteOnReturn();
         return null; // ignored: completed asynchronously via ActivityCompletionClient
     }

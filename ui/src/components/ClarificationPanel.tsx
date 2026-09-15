@@ -10,9 +10,11 @@ import Panel from './Panel';
 
 interface Props {
   item: ItemDetail;
+  idPrefix?: string;
+  excludePrefix?: string;
 }
 
-export default function ClarificationPanel({ item }: Props) {
+export default function ClarificationPanel({ item, idPrefix, excludePrefix }: Props) {
   const identity = useIdentity();
   const queryClient = useQueryClient();
   const [drafts, setDrafts] = useState<Record<string, string>>({});
@@ -50,32 +52,40 @@ export default function ClarificationPanel({ item }: Props) {
     onError: (e) => toast.error(errorMessage(e)),
   });
 
-  if (grillQuery.isError || !grillQuery.data || grillQuery.data.questions.length === 0) {
+  const questions = grillQuery.data?.questions
+    .filter((q) => !idPrefix || q.id.startsWith(idPrefix))
+    .filter((q) => !excludePrefix || !q.id.startsWith(excludePrefix));
+  if (grillQuery.isError || !questions || questions.length === 0) {
     return null;
   }
 
-  const canReply = GATE_ROLES.G1.includes(identity.role);
+  const anyReplyable = questions.some(
+    (q) => GATE_ROLES.G1.includes(identity.role) || (q.id.startsWith('h') && GATE_ROLES.G2.includes(identity.role)),
+  );
+  const replyRolesHint = questions.some((q) => q.id.startsWith('h'))
+    ? 'Switch to a Gate 1 or Gate 2 role to answer'
+    : 'Switch to PO or SquadLead to answer';
 
   return (
     <Box mb="4">
-      <Panel title="Clarification questions">
+      <Panel title={idPrefix === 'h' ? 'Build needs a decision' : 'Clarification questions'}>
         <Flex direction="column" gap="3">
-          {grillQuery.data.questions.map((q) => (
+          {questions.map((q) => (
             <QuestionCard
               key={q.id}
               question={q}
               draft={drafts[q.id] ?? ''}
               onDraftChange={(text) => setDrafts((prev) => ({ ...prev, [q.id]: text }))}
-              canReply={canReply}
+              canReply={GATE_ROLES.G1.includes(identity.role) || (q.id.startsWith('h') && GATE_ROLES.G2.includes(identity.role))}
               onAnswer={() => answer.mutate({ questionId: q.id, text: drafts[q.id] ?? '' })}
               onPark={() => park.mutate(q.id)}
               answering={answer.isPending && answer.variables?.questionId === q.id}
               parking={park.isPending && park.variables === q.id}
             />
           ))}
-          {!canReply && (
+          {!anyReplyable && (
             <Text size="1" color="gray">
-              Switch to PO or SquadLead to answer
+              {replyRolesHint}
             </Text>
           )}
         </Flex>
@@ -109,6 +119,8 @@ function QuestionCard({
         <Badge variant="soft">{question.id}</Badge>
         {question.askedBy === 'po-agent' ? (
           <Badge color="violet">PO agent follow-up</Badge>
+        ) : question.askedBy === 'build-agent' ? (
+          <Badge color="amber">build loop</Badge>
         ) : (
           <Badge color="gray">grill</Badge>
         )}

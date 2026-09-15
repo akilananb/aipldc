@@ -71,6 +71,13 @@ public class BoardSideEffectsImpl implements BoardSideEffects {
     private static final String MAKER_BOT_IDENTITY = "po-agent-bot";
     private static final String GRILL_BOT_IDENTITY = "grill-agent-bot";
     private static final String RELEASE_BOT_IDENTITY = "release-agent-bot";
+    private static final String BUILD_BOT_IDENTITY = "build-agent-bot";
+
+    private static final String GRILL_INSTRUCTION =
+            "Reply with \"<id>: <answer>\" or \"<id>: park\" (one per line, several per comment is fine).";
+    private static final String HUMAN_INPUT_INSTRUCTION =
+            "A build task stopped and needs your decision. Reply with \"<id>: <guidance>\" to retry the "
+                    + "task with that guidance, or \"<id>: skip\" to continue to review as-is.";
 
     private final PdlcConfig pdlcConfig;
     private final BoardPort board;
@@ -112,7 +119,7 @@ public class BoardSideEffectsImpl implements BoardSideEffects {
     @Override
     public void postGrillQuestions(WorkItemRef item, GrillHandoff grill) {
         WorkItemEntity feature = ensureWorkItem(item, "feature", null);
-        board.addComment(item, formatGrillQuestions(grill, false), GRILL_BOT_IDENTITY);
+        board.addComment(item, formatGrillQuestions(GRILL_INSTRUCTION, grill, q -> true), GRILL_BOT_IDENTITY);
         board.transition(item, CanonicalState.NEEDS_CLARIFICATION);
         workItems.save(feature.withCanonicalState(CanonicalState.NEEDS_CLARIFICATION.wireValue()));
     }
@@ -120,7 +127,8 @@ public class BoardSideEffectsImpl implements BoardSideEffects {
     @Override
     public void postFollowUpQuestions(WorkItemRef item, GrillHandoff grill) {
         WorkItemEntity feature = ensureWorkItem(item, "feature", null);
-        board.addComment(item, formatGrillQuestions(grill, true), MAKER_BOT_IDENTITY);
+        board.addComment(item, formatGrillQuestions(GRILL_INSTRUCTION, grill,
+                q -> q.askedByPoAgent() && q.status() == GrillQuestion.Status.OPEN), MAKER_BOT_IDENTITY);
         board.transition(item, CanonicalState.NEEDS_CLARIFICATION);
         board.attach(item, "grill.md", GrillMdSerializer.render(grill));
         workItems.save(feature.withCanonicalState(CanonicalState.NEEDS_CLARIFICATION.wireValue()));
@@ -221,10 +229,32 @@ public class BoardSideEffectsImpl implements BoardSideEffects {
     @Override
     public void escalateStale(WorkItemRef item) {
         WorkItemEntity feature = ensureWorkItem(item, "feature", null);
-        board.addComment(item, "@SquadLead — 5 working days with open grill questions; please answer or park.", GRILL_BOT_IDENTITY);
+        board.addComment(item, "@SquadLead — 5 working days with open questions; please answer, park, or skip.", GRILL_BOT_IDENTITY);
         board.transition(item, CanonicalState.STALE);
         workItems.save(feature.withCanonicalState(CanonicalState.STALE.wireValue()));
         reviewTrail.appendReviewEvent(feature.id(), "stale-escalation", Map.of("boardId", item.boardId()));
+    }
+
+    @Override
+    public void postHumanInputRequest(WorkItemRef story, GrillHandoff grill) {
+        WorkItemEntity storyRow = workItems.findByProfileAndBoardId(story.profile(), story.boardId())
+                .orElseThrow(() -> new IllegalStateException("No work_items row for story " + story));
+        board.addComment(story, formatGrillQuestions(HUMAN_INPUT_INSTRUCTION, grill,
+                q -> q.askedByBuildLoop() && q.status() == GrillQuestion.Status.OPEN), BUILD_BOT_IDENTITY);
+        board.transition(story, CanonicalState.NEEDS_CLARIFICATION);
+        workItems.save(storyRow.withCanonicalState(CanonicalState.NEEDS_CLARIFICATION.wireValue()));
+        String openIds = grill.questions().stream()
+                .filter(q -> q.askedByBuildLoop() && q.status() == GrillQuestion.Status.OPEN)
+                .map(GrillQuestion::id)
+                .collect(java.util.stream.Collectors.joining(","));
+        reviewTrail.appendReviewEvent(storyRow.id(), "needs-human", Map.of("questions", openIds));
+        if (storyRow.specChangePath() != null) {
+            List<String> questionLines = grill.questions().stream()
+                    .filter(q -> q.askedByBuildLoop() && q.status() == GrillQuestion.Status.OPEN)
+                    .map(q -> q.id() + ": " + q.question())
+                    .toList();
+            reviewTrail.appendReviewMd(story, storyRow.specChangePath(), ReviewMdWriter.needsHumanBlock(questionLines));
+        }
     }
 
     @Override
@@ -344,6 +374,47 @@ public class BoardSideEffectsImpl implements BoardSideEffects {
     }
 
     @Override
+    public void postFixRound(WorkItemRef story, String branch, List<Task> tasks, List<BuildResult> rerunResults,
+                              ReviewHandoff review, int round) {
+        WorkItemEntity storyRow = workItems.findByProfileAndBoardId(story.profile(), story.boardId())
+                .orElseThrow(() -> new IllegalStateException("No work_items row for story " + story));
+
+        java.util.Optional<PrEntity> pr = prs.findByWorkItemId(storyRow.id());
+        if (pr.isPresent()) {
+            for (ReviewFinding f : review.findings()) {
+                repo.commentOnPR(pr.get().prId(),
+                        "[fix round " + round + "][" + f.severity().wireValue() + "/" + f.category() + "] " + f.message(), null);
+            }
+        } else {
+            log.warn("[postFixRound] no PR row for story {}; skipping PR comments for fix round {}", story, round);
+        }
+
+        for (BuildResult r : rerunResults) {
+            jdbc.update("""
+                    INSERT INTO runs (work_item_id, agent, workflow_run_id, trace_url, tokens, iterations, outcome)
+                    VALUES (?, 'build-worker', ?, NULL, ?, ?, ?)
+                    """, storyRow.id(), story.workflowId(), r.tokens(), r.iterations(), r.verifier().result());
+        }
+
+        if (storyRow.specChangePath() != null) {
+            List<String> taskLines = rerunResults.stream().map(r -> {
+                Task task = tasks.stream().filter(t -> t.id().equals(r.taskId())).findFirst()
+                        .orElseThrow(() -> new IllegalStateException("No such task: " + r.taskId()));
+                return task.id() + " " + task.scenario() + ": " + r.verifier().result()
+                        + " (iterations=" + r.iterations() + (r.escalation() != null ? ", escalation: " + r.escalation() : "") + ")";
+            }).toList();
+            List<String> findingLines = review.findings().stream()
+                    .map(f -> "[" + f.severity().wireValue() + "] " + f.category() + ": " + f.message()).toList();
+            reviewTrail.appendReviewMd(story, storyRow.specChangePath(), ReviewMdWriter.fixRoundBlock(round, taskLines, findingLines));
+        }
+        reviewTrail.appendReviewEvent(storyRow.id(), "fix-round",
+                Map.of("round", round, "tasks", rerunResults.size(), "findings", review.findings().size()));
+
+        board.transition(story, CanonicalState.AWAITING_G2);
+        workItems.save(storyRow.withCanonicalState(CanonicalState.AWAITING_G2.wireValue()));
+    }
+
+    @Override
     public GateConfig loadGate3Config(String profile) {
         return pdlcConfig.profile(profile).gate("G3");
     }
@@ -387,6 +458,43 @@ public class BoardSideEffectsImpl implements BoardSideEffects {
         }
         reviewTrail.appendReviewEvent(storyRow.id(), "release-pack-published",
                 Map.of("releaseId", release.releaseId(), "documents", release.documents().size()));
+    }
+
+    @Override
+    public void publishReleaseRevision(WorkItemRef story, ReleaseHandoff release, int packVersion) {
+        WorkItemEntity storyRow = workItems.findByProfileAndBoardId(story.profile(), story.boardId())
+                .orElseThrow(() -> new IllegalStateException("No work_items row for story " + story));
+        String defaultBranch = pdlcConfig.profile(story.profile()).repo().defaultBranch();
+
+        Map<String, String> files = new LinkedHashMap<>();
+        for (ReleaseDocument doc : release.documents()) {
+            files.put("release/" + release.releaseId() + "/" + doc.id() + ".md", doc.content());
+        }
+        files.put("release/" + release.releaseId() + "/manifest.yaml", ReleaseManifestSerializer.render(release));
+        repo.writeFiles(defaultBranch, files, "release pack revised: " + release.releaseId() + " v" + packVersion, RELEASE_BOT_IDENTITY);
+
+        List<String> documentLines = new ArrayList<>();
+        for (ReleaseDocument doc : release.documents()) {
+            String contentHash = Anchor.hash(doc.content());
+            releaseDocuments.save(ReleaseDocumentEntity.newRow(storyRow.id(), release.releaseId(), doc.id(),
+                    doc.title(), doc.content(), doc.checkerRole(), contentHash, packVersion));
+            documentLines.add(doc.id() + " (" + doc.title() + ", checker: " + doc.checkerRole() + ")");
+        }
+
+        if (storyRow.specChangePath() != null) {
+            reviewTrail.appendReviewMd(story, storyRow.specChangePath(),
+                    ReviewMdWriter.releasePackBlock(release.releaseId() + " · pack v" + packVersion, documentLines));
+        }
+        reviewTrail.appendReviewEvent(storyRow.id(), "release-pack-revised",
+                Map.of("releaseId", release.releaseId(), "packVersion", packVersion, "documents", release.documents().size()));
+    }
+
+    @Override
+    public void transitionAwaitingG2(WorkItemRef story) {
+        WorkItemEntity storyRow = workItems.findByProfileAndBoardId(story.profile(), story.boardId())
+                .orElseThrow(() -> new IllegalStateException("No work_items row for story " + story));
+        board.transition(story, CanonicalState.AWAITING_G2);
+        workItems.save(storyRow.withCanonicalState(CanonicalState.AWAITING_G2.wireValue()));
     }
 
     @Override
@@ -456,14 +564,14 @@ public class BoardSideEffectsImpl implements BoardSideEffects {
         return files;
     }
 
-    /** Instruction line, then one line per question, id-prefixed so a human can reference it by
-     * typing {@code <id>: <answer>} or {@code <id>: park} — playbook §1 "Does" step 3. {@code poOnly}
-     * restricts the listing to the PO agent's open follow-ups ({@link GrillQuestion#askedByPoAgent()}). */
-    private static String formatGrillQuestions(GrillHandoff grill, boolean poOnly) {
-        StringBuilder sb = new StringBuilder();
-        sb.append("Reply with \"<id>: <answer>\" or \"<id>: park\" (one per line, several per comment is fine).\n");
+    /** {@code instruction}, then one line per question, id-prefixed so a human can reference it by
+     * typing {@code <id>: <answer>} or {@code <id>: park} — playbook §1 "Does" step 3. {@code
+     * include} selects which questions are listed (e.g. every question, only a PO follow-up's open
+     * ones, only a build-loop {@code h*} question's open ones). */
+    private static String formatGrillQuestions(String instruction, GrillHandoff grill, java.util.function.Predicate<GrillQuestion> include) {
+        StringBuilder sb = new StringBuilder(instruction).append('\n');
         for (GrillQuestion q : grill.questions()) {
-            if (poOnly && !(q.askedByPoAgent() && q.status() == GrillQuestion.Status.OPEN)) {
+            if (!include.test(q)) {
                 continue;
             }
             sb.append(q.id()).append(" [").append(q.category().wireValue()).append("] ").append(q.question());

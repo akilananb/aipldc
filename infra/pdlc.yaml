@@ -28,6 +28,9 @@ profiles:
       provider: none
       channel: none
     agents:
+      # Any OpenAI-compatible base URL, used verbatim: the client appends /chat/completions, so
+      # include /v1 when the server expects it. Overridden by PDLC_LLM_BASE_URL. From inside
+      # Compose a host-run server is http://host.docker.internal:<port>/v1, not localhost.
       gateway: https://openrouter.ai/api/v1
       # prompts_dir: /app/prompts   # optional: directory of *.mustache files overriding the bundled prompt templates (mount it into the agents container)
       roles:
@@ -71,7 +74,10 @@ profiles:
       provider: none
       channel: none
     agents:
-      gateway: http://litellm:4000
+      # Any OpenAI-compatible base URL, used verbatim: the client appends /chat/completions, so
+      # include /v1 when the server expects it. Overridden by PDLC_LLM_BASE_URL. From inside
+      # Compose a host-run server is http://host.docker.internal:<port>/v1, not localhost.
+      gateway: http://litellm:4000/v1
       # prompts_dir: /app/prompts   # optional: directory of *.mustache files overriding the bundled prompt templates (mount it into the agents container)
       roles:
         grill: { model: anthropic/claude-sonnet, budget_tokens: 60000 }

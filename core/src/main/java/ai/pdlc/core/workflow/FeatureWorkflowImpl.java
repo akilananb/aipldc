@@ -5,6 +5,7 @@ import ai.pdlc.core.domain.Approval;
 import ai.pdlc.core.domain.CanonicalState;
 import ai.pdlc.core.domain.Comment;
 import ai.pdlc.core.domain.GrillHandoff;
+import ai.pdlc.core.domain.GrillQuestion;
 import ai.pdlc.core.domain.MonitorHandoff;
 import ai.pdlc.core.domain.PlanHandoff;
 import ai.pdlc.core.domain.PoHandoff;
@@ -25,6 +26,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Function;
 
 /**
  * {@link FeatureWorkflow} implementation — orchestration-decision §6 Java sketch, truncated after
@@ -65,6 +67,16 @@ public class FeatureWorkflowImpl implements FeatureWorkflow {
     /** playbook §2: at most 2 PO agent follow-up rounds before it must draft regardless. */
     static final int MAX_PO_FOLLOW_UP_ROUNDS = 2;
 
+    /** A review-agent blocker on a failing task sends the task back to the build loop once,
+     * automatically, before gate 2 waits for a human; every human "Request changes" round after
+     * that is uncapped, like gate 1. */
+    static final int MAX_AUTO_FIX_ROUNDS = 1;
+
+    /** A single task escalating to a human more than this many times (even after guidance) stops
+     * asking again; the escalation flows into review as a SHOULD finding instead (today's
+     * behavior), so a stuck task can never block the story forever. */
+    static final int MAX_HUMAN_INPUT_ROUNDS_PER_TASK = 3;
+
     private static final ActivityOptions AGENT_ACTIVITY_OPTIONS = ActivityOptions.newBuilder()
             .setTaskQueue(TaskQueues.REASONING)
             .setStartToCloseTimeout(Duration.ofMinutes(10))
@@ -96,7 +108,8 @@ public class FeatureWorkflowImpl implements FeatureWorkflow {
     private final List<Comment> comments = new ArrayList<>();
     private final List<BoardCommentEvent> pendingBoardComments = new ArrayList<>();
     private CanonicalState stage = CanonicalState.NEW;
-    /** Current grill handoff, including any PO agent follow-ups — exposed via {@link #grill()}. */
+    /** Current grill handoff, including any PO agent follow-ups and build-loop {@code h*} human-
+     * input questions — exposed via {@link #grill()}. */
     private GrillHandoff grill;
 
     private WorkItemRef storyRef;
@@ -113,6 +126,25 @@ public class FeatureWorkflowImpl implements FeatureWorkflow {
      * rounds, or after a human requestChanges cycle re-evaluates) — {@link #gateSatisfied} hard-
      * blocks gate 1 while this is false, independent of the approval/comment signal surface. */
     private boolean qualityPassed;
+
+    /** Gate 2 only: a human "Request changes" while {@code AWAITING_G2}, captured by {@link
+     * #requestChanges} and consumed by {@link #run}'s gate-2 loop to drive a fix round. */
+    private record FixRequest(String by, List<Comment> comments) {
+    }
+
+    private FixRequest pendingFixRequest;
+    /** Gate 3 only: set by {@link #requestChanges} while {@code AWAITING_G3}; consumed by {@link
+     * #run}'s gate-3 loop to re-draft and republish the release pack. */
+    private boolean pendingReleaseRedraft;
+    private List<Comment> releaseFeedback = List.of();
+    /** Set by {@link #fixRound} after every re-review, so the caller can pick up the fresh
+     * {@link ReviewHandoff} without threading an extra return value through the gate-2 loop. */
+    private ReviewHandoff lastReview;
+
+    private int humanQuestionCounter = 0;
+    /** task id → how many times a human has already answered an escalation for it, capped at
+     * {@link #MAX_HUMAN_INPUT_ROUNDS_PER_TASK}. */
+    private final Map<String, Integer> humanRoundsByTask = new LinkedHashMap<>();
 
     @Override
     public void run(WorkItemRef item) {
@@ -217,7 +249,9 @@ public class FeatureWorkflowImpl implements FeatureWorkflow {
             }
 
             // 7. Build loop: omp over ACP, one shared story branch, wave by wave (a wave only starts
-            // once every earlier wave's tasks have returned).
+            // once every earlier wave's tasks have returned). A build-task escalation (budget
+            // exhausted / stuck / forbidden action) pauses for human input after every wave - see
+            // resolveEscalations.
             String branch = "story/" + storyRef.boardId();
             board.transitionInProgress(storyRef);
             stage = CanonicalState.IN_PROGRESS;
@@ -227,22 +261,9 @@ public class FeatureWorkflowImpl implements FeatureWorkflow {
             }
             List<BuildResult> results = new ArrayList<>();
             for (List<String> wave : plan.waves()) {
-                List<Promise<BuildResult>> pending = new ArrayList<>();
-                for (String taskId : wave) {
-                    Task task = tasksById.get(taskId);
-                    // Every wave's tasks share one activity type ("runTask"), so the Temporal UI's
-                    // timeline/history view shows them as indistinguishable bars unless each
-                    // execution carries its own summary (SDK "fixed summary" - annotates that view
-                    // specifically).
-                    BuildActivities taskBuild = Workflow.newActivityStub(BuildActivities.class,
-                            ActivityOptions.newBuilder(BUILD_ACTIVITY_OPTIONS)
-                                    .setSummary(task.id() + ": " + task.scenario())
-                                    .build());
-                    pending.add(Async.function(taskBuild::runTask, storyRef, task, branch, defaultBranch));
-                }
-                for (Promise<BuildResult> p : pending) {
-                    results.add(p.get());
-                }
+                List<BuildResult> waveResults = runWave(wave, tasksById, taskId -> List.of(), branch, defaultBranch);
+                waveResults = resolveEscalations(waveResults, tasksById, branch, defaultBranch);
+                results.addAll(waveResults);
             }
 
             board.recordTaskResults(storyRef, publishedTasks.taskBoardIds(), results);
@@ -256,25 +277,65 @@ public class FeatureWorkflowImpl implements FeatureWorkflow {
             // gate 2's roles (FSDeveloper, QA) and a fresh version/approval episode. Blocker findings
             // from the review agent seed the open-blocking-comments set so gate 2 cannot pass while
             // any remain open - the same mechanism gate 1 uses for human blocking comments
-            // (ReviewHandoff#hasBlockers()'s contract, otherwise unenforced).
+            // (ReviewHandoff#hasBlockers()'s contract, otherwise unenforced). A review-agent blocker
+            // on a failing task sends that task back to the build loop once, automatically
+            // (MAX_AUTO_FIX_ROUNDS); every human "Request changes" - blocker-backed or not - re-runs
+            // the targeted tasks with the comments injected, re-reviews, and re-awaits, uncapped,
+            // like gate 1.
             activeGate = gate2;
             version = 1;
             approvals.clear();
             comments.clear();
-            int findingIndex = 0;
-            for (ReviewFinding finding : review.findings()) {
-                if (finding.severity() == ReviewFinding.Severity.BLOCKER) {
-                    comments.add(new Comment("finding-" + findingIndex++, REVIEW_BOT_IDENTITY, "review-agent", "pr",
-                            finding.file() != null ? finding.file() : finding.category(), finding.message(),
-                            Comment.Intent.CHANGE, true, version));
+            seedBlockerComments(review);
+            int autoFixRounds = 0;
+            int fixRoundNumber = 0;
+            while (true) {
+                List<String> failing = failingTaskIds(results);
+                if (!failing.isEmpty() && autoFixRounds < MAX_AUTO_FIX_ROUNDS) {
+                    autoFixRounds++;
+                    fixRoundNumber++;
+                    version++;
+                    approvals.clear();
+                    comments.clear();
+                    List<BuildResult> beforeRound = results;
+                    results = fixRound(plan, tasksById, results, failing, branch, defaultBranch,
+                            taskId -> verifierFeedback(resultOf(beforeRound, taskId)), publishedTasks, fixRoundNumber);
+                    review = lastReview;
+                    seedBlockerComments(review);
+                    continue;
                 }
+                Workflow.await(() -> gateSatisfied() || pendingFixRequest != null);
+                if (pendingFixRequest == null) {
+                    break;
+                }
+                FixRequest req = pendingFixRequest;
+                pendingFixRequest = null;
+                List<Comment> feedbackComments = req.comments();
+                if (feedbackComments.isEmpty()) {
+                    feedbackComments = List.of(askWhatShouldChange(req.by()));
+                }
+                if (feedbackComments.size() == 1 && "skip".equalsIgnoreCase(feedbackComments.get(0).text())) {
+                    // No fix round follows; re-await at the bumped version. board.postHumanInputRequest
+                    // (inside askWhatShouldChange, when it ran) left the board at needs-clarification -
+                    // flip it back so it doesn't stay stuck there indefinitely.
+                    board.transitionAwaitingG2(storyRef);
+                    stage = CanonicalState.AWAITING_G2;
+                    continue;
+                }
+                List<Comment> roundFeedback = feedbackComments;
+                List<String> targets = tasksTargetedBy(roundFeedback, plan.tasks());
+                fixRoundNumber++;
+                results = fixRound(plan, tasksById, results, targets, branch, defaultBranch,
+                        taskId -> commentFeedback(roundFeedback, taskId, tasksById), publishedTasks, fixRoundNumber);
+                review = lastReview;
+                seedBlockerComments(review);
+                autoFixRounds = 0; // a human round re-arms one auto round
             }
-            Workflow.await(this::gateSatisfied);
             board.transitionApproved(storyRef, version, 2);
             stage = CanonicalState.APPROVED;
 
             // 10. Release agent drafts the pack (playbook §7); publish it, awaiting-G3.
-            ReleaseHandoff release = agents.draftReleasePack(storyRef, currentPoHandoff, plan.tasks(), results, review);
+            ReleaseHandoff release = agents.draftReleasePack(storyRef, currentPoHandoff, plan.tasks(), results, review, List.of());
             board.publishReleasePack(storyRef, release);
             currentRelease = release;
             stage = CanonicalState.AWAITING_G3;
@@ -282,12 +343,28 @@ public class FeatureWorkflowImpl implements FeatureWorkflow {
             // 11. Gate 3: a document-level "sign" is the same `approve` signal, `stage:
             // "release-pack:<doc-id>"`; gate 3 opens once every document has a signature from its
             // own named checker role (tech-stack §3.1, §3.4) - see gate3Satisfied/approveDocument.
+            // A human "Request changes" re-drafts the pack with the comments injected and
+            // republishes it at the bumped pack version, uncapped like gate 1/2.
             activeGate = gate3;
             version = 1;
             approvals.clear();
             documentSignatures.clear();
             comments.clear();
-            Workflow.await(this::gateSatisfied);
+            while (true) {
+                Workflow.await(() -> gateSatisfied() || pendingReleaseRedraft);
+                if (!pendingReleaseRedraft) {
+                    break;
+                }
+                pendingReleaseRedraft = false; // consume now: a signal during the redraft below re-arms it
+                ReleaseHandoff redrafted = agents.draftReleasePack(storyRef, currentPoHandoff, plan.tasks(), results, review, releaseFeedback);
+                // Keep the original releaseId stable across every redraft (the agent mints a fresh
+                // one from today's date, which would otherwise orphan the release board item/folder
+                // a redraft on a later day than the first publish would create a second one).
+                release = new ReleaseHandoff(redrafted.envelope(), currentRelease.releaseId(),
+                        redrafted.documents(), redrafted.rollout(), redrafted.monitorRules());
+                board.publishReleaseRevision(storyRef, release, version);
+                currentRelease = release;
+            }
             board.transitionApproved(storyRef, version, 3);
             stage = CanonicalState.APPROVED;
 
@@ -305,7 +382,7 @@ public class FeatureWorkflowImpl implements FeatureWorkflow {
 
     /** Sets {@code needs-clarification} and blocks until every grill question is answered/parked,
      * escalating to {@code stale} at the 5-day timer (playbook §1 "Stops"); re-entrant so the PO
-     * agent's follow-up rounds can drive it again. */
+     * agent's follow-up rounds and the build loop's human-input questions can drive it again. */
     private void awaitClarification(WorkItemRef item) {
         stage = CanonicalState.NEEDS_CLARIFICATION;
         while (!grill.allQuestionsResolved()) {
@@ -320,6 +397,276 @@ public class FeatureWorkflowImpl implements FeatureWorkflow {
             grill = agents.grillEvaluate(item, grill, newComments);
         }
     }
+
+    // -- build loop: waves, fix rounds, human-input escalations -----------------------------------
+
+    /** Runs one wave of tasks concurrently via {@link BuildActivities#runTask}, each carrying its
+     * own {@code feedback} lines (empty on a first attempt). Shared by the first build and every
+     * fix round. */
+    private List<BuildResult> runWave(List<String> taskIds, Map<String, Task> tasksById,
+                                       Function<String, List<String>> feedback, String branch, String defaultBranch) {
+        List<Promise<BuildResult>> pending = new ArrayList<>();
+        for (String taskId : taskIds) {
+            Task task = tasksById.get(taskId);
+            // Every wave's tasks share one activity type ("runTask"), so the Temporal UI's
+            // timeline/history view shows them as indistinguishable bars unless each execution
+            // carries its own summary (SDK "fixed summary" - annotates that view specifically).
+            BuildActivities taskBuild = Workflow.newActivityStub(BuildActivities.class,
+                    ActivityOptions.newBuilder(BUILD_ACTIVITY_OPTIONS)
+                            .setSummary(task.id() + ": " + task.scenario())
+                            .build());
+            pending.add(Async.function(taskBuild::runTask, storyRef, task, branch, defaultBranch, feedback.apply(taskId)));
+        }
+        List<BuildResult> waveResults = new ArrayList<>();
+        for (Promise<BuildResult> p : pending) {
+            waveResults.add(p.get());
+        }
+        return waveResults;
+    }
+
+    /** After every wave (first build and fix rounds): any result that escalated (budget exhausted /
+     * stuck / forbidden action) and hasn't already asked {@link #MAX_HUMAN_INPUT_ROUNDS_PER_TASK}
+     * times posts an {@code h*} question, pauses the story in {@code needs-clarification}, and
+     * retries that one task with the human's guidance injected once answered; {@code skip}/park
+     * keeps the escalated result as-is (it flows into review as a SHOULD finding, today's
+     * behavior). A retry that escalates again asks again, up to the per-task cap. */
+    private List<BuildResult> resolveEscalations(List<BuildResult> waveResults, Map<String, Task> tasksById,
+                                                  String branch, String defaultBranch) {
+        List<BuildResult> current = new ArrayList<>(waveResults);
+        java.util.Set<String> decided = new java.util.LinkedHashSet<>();
+        while (true) {
+            List<BuildResult> pending = current.stream()
+                    .filter(r -> r.escalation() != null
+                            && !decided.contains(r.taskId())
+                            && humanRoundsByTask.getOrDefault(r.taskId(), 0) < MAX_HUMAN_INPUT_ROUNDS_PER_TASK)
+                    .toList();
+            if (pending.isEmpty()) {
+                return current;
+            }
+
+            Map<String, String> questionIdByTask = new LinkedHashMap<>();
+            List<GrillQuestion> newQuestions = new ArrayList<>();
+            for (BuildResult r : pending) {
+                String id = GrillQuestion.HUMAN_INPUT_ID_PREFIX + (++humanQuestionCounter);
+                questionIdByTask.put(r.taskId(), id);
+                Task task = tasksById.get(r.taskId());
+                newQuestions.add(new GrillQuestion(id, GrillQuestion.Category.BUILD,
+                        "Task " + r.taskId() + " (" + task.scenario() + ") stopped: " + r.escalation()
+                                + ". Reply with guidance to retry, or 'skip' to continue to review as-is.",
+                        "trace: " + r.traceSummary(), GrillQuestion.Status.OPEN, null, null));
+            }
+            grill = grill.withFollowUps(newQuestions);
+            board.postHumanInputRequest(storyRef, grill);
+            awaitClarification(storyRef);
+            board.transitionInProgress(storyRef);
+            stage = CanonicalState.IN_PROGRESS;
+
+            Map<String, BuildResult> byTaskId = new LinkedHashMap<>();
+            for (BuildResult r : current) {
+                byTaskId.put(r.taskId(), r);
+            }
+            for (BuildResult r : pending) {
+                String qid = questionIdByTask.get(r.taskId());
+                GrillQuestion answered = grill.questions().stream().filter(q -> q.id().equals(qid)).findFirst()
+                        .orElseThrow(() -> new IllegalStateException("No answer recorded for " + qid));
+                String text = answered.status() == GrillQuestion.Status.PARKED
+                        ? "skip" : stripLeadingId(qid, answered.answer());
+                if ("skip".equalsIgnoreCase(text)) {
+                    decided.add(r.taskId()); // stop asking about this task; keep the escalated result as-is
+                    continue;
+                }
+                humanRoundsByTask.merge(r.taskId(), 1, Integer::sum);
+                String answeredBy = answered.answeredBy() == null ? "human" : answered.answeredBy();
+                List<String> feedback = List.of("[escalation] " + r.escalation(), "[human/" + answeredBy + "] " + text);
+                List<BuildResult> retried = runWave(List.of(r.taskId()), tasksById, taskId -> feedback, branch, defaultBranch);
+                byTaskId.put(r.taskId(), retried.get(0));
+            }
+            current = new ArrayList<>(byTaskId.values());
+        }
+    }
+
+    /** Re-runs the tasks in {@code targets} (wave by wave, skipping non-targets), merges their new
+     * results into {@code results} by task id, records them, re-reviews the whole story, posts the
+     * fix round, and returns the merged results. Sets {@link #lastReview}. Callers own the
+     * version/approvals/comments bump around this call - uniform for both the automatic
+     * (blocker-triggered) and human-requested paths. */
+    private List<BuildResult> fixRound(PlanHandoff plan, Map<String, Task> tasksById, List<BuildResult> results,
+                                        List<String> targets, String branch, String defaultBranch,
+                                        Function<String, List<String>> feedback, PublishTasksResult publishedTasks, int round) {
+        board.transitionInProgress(storyRef);
+        stage = CanonicalState.IN_PROGRESS;
+        List<BuildResult> rerunResults = new ArrayList<>();
+        for (List<String> wave : plan.waves()) {
+            List<String> waveTargets = wave.stream().filter(targets::contains).toList();
+            if (waveTargets.isEmpty()) {
+                continue;
+            }
+            List<BuildResult> waveResults = runWave(waveTargets, tasksById, feedback, branch, defaultBranch);
+            waveResults = resolveEscalations(waveResults, tasksById, branch, defaultBranch);
+            rerunResults.addAll(waveResults);
+        }
+
+        Map<String, BuildResult> merged = new LinkedHashMap<>();
+        for (BuildResult r : results) {
+            merged.put(r.taskId(), r);
+        }
+        for (BuildResult r : rerunResults) {
+            merged.put(r.taskId(), r);
+        }
+        List<BuildResult> mergedResults = List.copyOf(merged.values());
+
+        board.recordTaskResults(storyRef, publishedTasks.taskBoardIds(), rerunResults);
+        lastReview = agents.reviewStory(storyRef, currentPoHandoff, plan.tasks(), mergedResults);
+        board.postFixRound(storyRef, branch, plan.tasks(), rerunResults, lastReview, round);
+        stage = CanonicalState.AWAITING_G2;
+        return mergedResults;
+    }
+
+    /** A human "Request changes" at gate 2 with zero comments: asks what should change via an
+     * {@code h*} question rather than blindly re-running every task. A real answer becomes a
+     * general {@code pr}-targeted comment (maps to no specific task, so {@link #tasksTargetedBy}
+     * re-runs every task); a parked/{@code skip} answer becomes a comment whose text is literally
+     * {@code "skip"}, which the gate-2 loop treats as "no fix round". */
+    private Comment askWhatShouldChange(String requestedBy) {
+        String id = GrillQuestion.HUMAN_INPUT_ID_PREFIX + (++humanQuestionCounter);
+        GrillQuestion question = new GrillQuestion(id, GrillQuestion.Category.BUILD,
+                "Changes were requested on the PR by " + requestedBy + " with no comments. What should change?",
+                GrillQuestion.ASSUMPTION_CHECK, GrillQuestion.Status.OPEN, null, null);
+        grill = grill.withFollowUps(List.of(question));
+        board.postHumanInputRequest(storyRef, grill);
+        awaitClarification(storyRef);
+
+        GrillQuestion answered = grill.questions().stream().filter(q -> q.id().equals(id)).findFirst()
+                .orElseThrow(() -> new IllegalStateException("No answer recorded for " + id));
+        String text = answered.status() == GrillQuestion.Status.PARKED ? "skip" : stripLeadingId(id, answered.answer());
+        String answeredBy = answered.answeredBy() == null ? requestedBy : answered.answeredBy();
+        return new Comment(id, answeredBy, "human", "pr", "pr", text, Comment.Intent.CHANGE, false, version);
+    }
+
+    /** Tasks eligible for an automatic fix round: a fresh verifier failure the review agent
+     * hasn't seen yet. Excludes an already-escalated result - a human already decided its fate via
+     * {@link #resolveEscalations} (guidance-and-retry, or an explicit skip), and an automatic round
+     * re-running it immediately would override that decision. */
+    private static List<String> failingTaskIds(List<BuildResult> results) {
+        return results.stream()
+                .filter(r -> r.escalation() == null && (!r.verifier().scopeOk() || !"green".equals(r.verifier().result())))
+                .map(BuildResult::taskId)
+                .toList();
+    }
+
+    private static List<String> verifierFeedback(BuildResult r) {
+        List<String> lines = new ArrayList<>();
+        lines.add("[verifier] " + r.verifier().notes());
+        if (r.escalation() != null) {
+            lines.add("[escalation] " + r.escalation());
+        }
+        return lines;
+    }
+
+    /** Every comment that targets this task (per {@link #commentTargetsTask}) or targets no task
+     * at all (a general comment applies to every rerun task). */
+    private static List<String> commentFeedback(List<Comment> comments, String taskId, Map<String, Task> tasksById) {
+        Task task = tasksById.get(taskId);
+        List<String> lines = new ArrayList<>();
+        for (Comment c : comments) {
+            if (commentTargetsTask(c, task)) {
+                lines.add("[" + c.role() + "] " + c.target() + ": " + c.text());
+            }
+        }
+        return lines;
+    }
+
+    private static boolean commentTargetsTask(Comment c, Task task) {
+        String target = c.target();
+        if (target == null) {
+            return true;
+        }
+        if (target.startsWith("task:")) {
+            return target.substring("task:".length()).equals(task.id());
+        }
+        if (target.startsWith("file:")) {
+            String path = filePathFromTarget(target);
+            return task.touches().contains(path) || path.equals(task.testPath());
+        }
+        return true; // any other target (e.g. "pr", "doc:...") is general
+    }
+
+    /** Target {@code task:<id>} -> that task; {@code file:<path>} or {@code file:<path>:<line>} ->
+     * every task whose {@code touches} or {@code testPath} equals {@code <path>}; any other target
+     * maps to no task. The union of every comment's targets; empty union re-runs every task (a
+     * general comment re-runs everything). */
+    private static List<String> tasksTargetedBy(List<Comment> comments, List<Task> tasks) {
+        java.util.LinkedHashSet<String> targets = new java.util.LinkedHashSet<>();
+        for (Comment c : comments) {
+            String target = c.target();
+            if (target == null) {
+                continue;
+            }
+            if (target.startsWith("task:")) {
+                targets.add(target.substring("task:".length()));
+            } else if (target.startsWith("file:")) {
+                String path = filePathFromTarget(target);
+                for (Task t : tasks) {
+                    if (t.touches().contains(path) || path.equals(t.testPath())) {
+                        targets.add(t.id());
+                    }
+                }
+            }
+        }
+        if (targets.isEmpty()) {
+            return tasks.stream().map(Task::id).toList();
+        }
+        return List.copyOf(targets);
+    }
+
+    private static String filePathFromTarget(String target) {
+        String rest = target.substring("file:".length());
+        int lastColon = rest.lastIndexOf(':');
+        if (lastColon > 0 && lastColon < rest.length() - 1 && isDigits(rest.substring(lastColon + 1))) {
+            return rest.substring(0, lastColon);
+        }
+        return rest;
+    }
+
+    private static boolean isDigits(String s) {
+        return !s.isEmpty() && s.chars().allMatch(Character::isDigit);
+    }
+
+    private static BuildResult resultOf(List<BuildResult> results, String taskId) {
+        return results.stream().filter(r -> r.taskId().equals(taskId)).findFirst()
+                .orElseThrow(() -> new IllegalStateException("No result for task " + taskId));
+    }
+
+    /** Strips a leading {@code "<id>: "} marker from a grill answer, case-insensitively - the real
+     * {@code GrillAgent} already stores the answer body alone, but tolerating the marker here keeps
+     * this workflow's own parsing independent of that agent's exact behavior. */
+    private static String stripLeadingId(String id, String raw) {
+        if (raw == null) {
+            return "";
+        }
+        String trimmed = raw.strip();
+        String prefix = id + ":";
+        if (trimmed.regionMatches(true, 0, prefix, 0, prefix.length())) {
+            return trimmed.substring(prefix.length()).strip();
+        }
+        return trimmed;
+    }
+
+    /** Seeds one blocking comment per review-agent BLOCKER finding, so gate 2 cannot pass while any
+     * remain open - the same mechanism gate 1 uses for human blocking comments (ReviewHandoff
+     * #hasBlockers()'s contract, otherwise unenforced). */
+    private void seedBlockerComments(ReviewHandoff review) {
+        int findingIndex = 0;
+        for (ReviewFinding finding : review.findings()) {
+            if (finding.severity() == ReviewFinding.Severity.BLOCKER) {
+                comments.add(new Comment("finding-" + findingIndex++, REVIEW_BOT_IDENTITY, "review-agent", "pr",
+                        finding.file() != null ? finding.file() : finding.category(), finding.message(),
+                        Comment.Intent.CHANGE, true, version));
+            }
+        }
+    }
+
+    // -- gate signal surface ------------------------------------------------------------------
 
     private boolean gateSatisfied() {
         if (stage == CanonicalState.AWAITING_G1 && !qualityPassed) {
@@ -413,13 +760,15 @@ public class FeatureWorkflowImpl implements FeatureWorkflow {
             board.saveQualityReport(storyRef, version, q);
             qualityPassed = q.passed();
         }
+        if (stage == CanonicalState.AWAITING_G2) {
+            pendingFixRequest = new FixRequest(by, List.copyOf(comments));
+        }
         if (stage == CanonicalState.AWAITING_G3) {
             documentSignatures.clear(); // pack_version bump invalidates every signature (playbook §7 "Rules")
+            releaseFeedback = List.copyOf(comments);
+            pendingReleaseRedraft = true;
         }
-        // Gate 2/3: the pilot does not wire an automatic rebuild/re-draft from review feedback -
-        // requestChanges still bumps the version and clears approvals/signatures (blocking approval
-        // on the stale version) so the signal contract stays identical across every gate; a human
-        // pushes more commits / a future build-order phase re-invokes the agent before re-approving.
+        // G2/G3 re-runs happen in run()'s gate loops, driven by pendingFixRequest / pendingReleaseRedraft.
         comments.clear(); // every open comment is considered handled by this revision/version bump
     }
 

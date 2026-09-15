@@ -1,0 +1,61 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "PDLC Pilot — Feature Workflow",
+    "quality_profile": "showcase",
+    "output": "pdlc-workflow.html",
+    "views": [
+      { "id": "happy-path", "label": "Happy path", "focus": ["draftStory", "gate1", "plan", "buildLoop", "review", "gate2", "release", "gate3", "deployMonitor"], "note": "Follow one story from clarifying questions to deploy, assuming every gate approves first try." },
+      { "id": "gate2-fix-loop", "label": "Gate 2 fix rounds", "focus": ["buildLoop", "review", "gate2"], "note": "A review-agent blocker or a human Request Changes re-runs the targeted build tasks and re-reviews, uncapped for humans." },
+      { "id": "human-input", "label": "Build-loop human input", "focus": ["buildLoop", "humanInput"], "note": "A build task escalation (budget exhausted / stuck / forbidden action) pauses for a human decision, then retries or skips." }
+    ]
+  },
+  "lanes": [
+    { "id": "intake", "label": "Intake & Story" },
+    { "id": "build", "label": "Plan, Build & Review" },
+    { "id": "release", "label": "Release & Deploy" },
+    { "id": "gates", "label": "Human Gates", "variant": "exception" }
+  ],
+  "phases": [
+    { "id": "draft", "label": "Draft", "fromCol": 0, "toCol": 1 },
+    { "id": "buildphase", "label": "Plan + Build + Review", "fromCol": 2, "toCol": 3, "variant": "emphasis" },
+    { "id": "releasephase", "label": "Release + Deploy", "fromCol": 4, "toCol": 5, "variant": "dashed" }
+  ],
+  "groups": [
+    { "id": "gatesGroup", "label": "Human checkpoints", "lane": "gates", "fromCol": 1, "toCol": 5, "variant": "security" }
+  ],
+  "mainPath": ["draftStory", "gate1", "plan", "buildLoop", "review", "gate2", "release", "gate3", "deployMonitor"],
+  "nodes": [
+    { "id": "draftStory", "lane": "intake", "col": 0, "type": "backend", "label": "Grill + PO Agent", "sublabel": "clarify + draft story", "tag": "loops until answered", "width": 140 },
+    { "id": "gate1", "lane": "gates", "col": 1, "type": "security", "label": "Gate 1", "sublabel": "PO / SquadLead", "width": 132 },
+    { "id": "plan", "lane": "build", "col": 2, "type": "backend", "label": "Plan Agent", "sublabel": "deterministic tasks", "width": 132 },
+    { "id": "buildLoop", "lane": "build", "col": 3, "type": "backend", "label": "Build Loop", "sublabel": "build-worker + ACP", "tag": "wave by wave", "width": 140 },
+    { "id": "humanInput", "lane": "gates", "col": 3, "type": "security", "label": "Human Input", "sublabel": "h* escalation", "width": 132 },
+    { "id": "review", "lane": "build", "col": 4, "type": "backend", "label": "Review Agent", "sublabel": "open PR", "width": 132 },
+    { "id": "gate2", "lane": "gates", "col": 4, "type": "security", "label": "Gate 2", "sublabel": "FSDeveloper / QA", "width": 132 },
+    { "id": "release", "lane": "release", "col": 4, "type": "backend", "label": "Release Agent", "sublabel": "draft pack", "width": 132 },
+    { "id": "gate3", "lane": "gates", "col": 5, "type": "security", "label": "Gate 3", "sublabel": "per-doc sign-off", "width": 132 },
+    { "id": "deployMonitor", "lane": "release", "col": 5, "type": "cloud", "label": "Deploy + Monitor", "sublabel": "CI deploy, 1 eval pass", "width": 140 }
+  ],
+  "edges": [
+    { "id": "draft-to-gate1", "from": "draftStory", "to": "gate1", "label": "story drafted", "variant": "emphasis" },
+    { "id": "gate1-to-plan", "from": "gate1", "to": "plan", "label": "approved", "variant": "emphasis" },
+    { "id": "plan-to-build", "from": "plan", "to": "buildLoop", "variant": "emphasis" },
+    { "id": "build-to-review", "from": "buildLoop", "to": "review", "label": "waves green", "variant": "emphasis" },
+    { "id": "review-to-gate2", "from": "review", "to": "gate2", "label": "PR opened", "variant": "emphasis" },
+    { "id": "gate2-to-release", "from": "gate2", "to": "release", "label": "approved", "variant": "emphasis" },
+    { "id": "release-to-gate3", "from": "release", "to": "gate3", "variant": "emphasis" },
+    { "id": "gate3-to-deploy", "from": "gate3", "to": "deployMonitor", "label": "signed", "variant": "emphasis" },
+    { "id": "gate1-request-changes", "from": "gate1", "to": "draftStory", "label": "request changes", "variant": "dashed", "role": "branch" },
+    { "id": "build-escalates", "from": "buildLoop", "to": "humanInput", "label": "escalation", "variant": "security", "role": "branch" },
+    { "id": "human-answers", "from": "humanInput", "to": "buildLoop", "label": "guidance / skip", "variant": "dashed", "role": "return" },
+    { "id": "gate2-fix-round", "from": "gate2", "to": "buildLoop", "label": "fix round", "variant": "security", "role": "branch", "channelX": 620, "labelAt": [641, 538] },
+    { "id": "gate3-redraft", "from": "gate3", "to": "release", "label": "request changes: redraft", "variant": "dashed", "role": "branch" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "Gates reuse one signal surface", "items": ["comment / approve / requestChanges / commentAdded drive every gate", "Gate 3 signs per release document, not the whole pack at once"] },
+    { "dot": "rose", "title": "Fix rounds (this session's change)", "items": ["One automatic round on a fresh verifier failure, uncapped for humans", "A human Gate 2 Request Changes re-runs only the targeted tasks"] },
+    { "dot": "emerald", "title": "Build-loop human input", "items": ["A budget-exhausted / stuck / forbidden-action escalation pauses in needs-clarification", "Guidance retries the one task; skip/park continues to review as a SHOULD finding"] }
+  ]
+}

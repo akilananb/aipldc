@@ -65,9 +65,10 @@ public interface AgentActivities {
     ReviewHandoff reviewStory(WorkItemRef story, PoHandoff po, List<Task> tasks, List<BuildResult> results);
 
     /** Drafts the release pack (playbook §7): change notes, rollout/rollback plan, monitor rules,
-     * test evidence — one document per checker role, from the story, build results, and review. */
+     * test evidence — one document per checker role, from the story, build results, and review.
+     * {@code feedback}: the gate-3 comments a re-draft must address; empty on the first draft. */
     @ActivityMethod
-    ReleaseHandoff draftReleasePack(WorkItemRef story, PoHandoff po, List<Task> tasks, List<BuildResult> results, ReviewHandoff review);
+    ReleaseHandoff draftReleasePack(WorkItemRef story, PoHandoff po, List<Task> tasks, List<BuildResult> results, ReviewHandoff review, List<Comment> feedback);
 
     /** Evaluates each monitor rule against {@link ai.pdlc.core.port.MetricsPort}, comparing to a
      * baseline; a trip gathers evidence for one filed card (playbook §8). */
