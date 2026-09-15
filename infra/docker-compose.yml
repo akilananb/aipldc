@@ -1,6 +1,6 @@
 name: pdlc-pilot
 
-# Langfuse v4 (self-hosted LLM tracing). Shared by langfuse-web and langfuse-worker.
+# Langfuse v3 (self-hosted LLM tracing). Shared by langfuse-web and langfuse-worker.
 x-langfuse-env: &langfuse-env
   DATABASE_URL: postgresql://langfuse:langfuse@langfuse-postgres:5432/langfuse
   NEXTAUTH_URL: ${LANGFUSE_PUBLIC_URL:-http://localhost:3000}
@@ -224,8 +224,10 @@ services:
       timeout: 10s
       retries: 10
 
+  # Pinned to an exact v3 patch on purpose: the floating `3`/`3.225` tags briefly served a v4
+  # build with destructive migrations (langfuse/langfuse#16923). Bump web+worker together.
   langfuse-worker:
-    image: docker.langfuse.com/langfuse/langfuse-worker:4
+    image: docker.io/langfuse/langfuse-worker:3.225.7
     depends_on: &langfuse-depends-on
       langfuse-postgres:
         condition: service_healthy
@@ -238,7 +240,7 @@ services:
     environment: *langfuse-env
 
   langfuse-web:
-    image: docker.langfuse.com/langfuse/langfuse:4
+    image: docker.io/langfuse/langfuse:3.225.7
     depends_on: *langfuse-depends-on
     environment:
       <<: *langfuse-env
