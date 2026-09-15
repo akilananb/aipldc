@@ -65,6 +65,18 @@ public final class InMemoryRepoAdapter implements RepoPort {
     }
 
     @Override
+    public String resolveRef(String ref) {
+        if (commitSnapshots.containsKey(ref)) {
+            return ref; // a sha resolves to itself, matching real git rev-parse --verify semantics
+        }
+        Map<String, String> b = branches.get(ref);
+        if (b == null) {
+            throw new IllegalArgumentException("No such ref " + ref);
+        }
+        return sha256(canonicalize(b));
+    }
+
+    @Override
     public PRRef openPR(String branchName, String target, String title, String body) {
         String id = String.valueOf(prSeq.incrementAndGet());
         prs.put(id, new PRRecord(branchName, target, title, body, ""));

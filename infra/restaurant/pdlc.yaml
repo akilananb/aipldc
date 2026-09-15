@@ -1,7 +1,7 @@
 profiles:
   restaurant-local:
     board:
-      provider: in-memory                # anything other than azure-devops resolves to InMemoryBoardAdapter
+      provider: local-jdbc               # Postgres-backed LocalBoardAdapter; anything other than azure-devops/local-jdbc resolves to InMemoryBoardAdapter
       org: local
       project: restaurant
       types: { feature: feature, story: story, task: task, bug: bug }

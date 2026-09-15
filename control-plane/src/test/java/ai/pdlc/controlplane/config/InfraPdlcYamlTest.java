@@ -19,9 +19,9 @@ class InfraPdlcYamlTest {
         PdlcConfig config = PdlcConfig.loadFromFile(INFRA_PDLC_YAML);
         Profile local = config.profile("local");
 
-        assertThat(local.board().provider()).isEqualTo("in-memory");
+        assertThat(local.board().provider()).isEqualTo("local-jdbc");
         assertThat(local.repo().provider()).isEqualTo("local-git");
-        assertThat(local.repo().defaultBranch()).isEqualTo("main");
+        assertThat(local.repo().defaultBranch()).isEqualTo("restaurant-base");
         assertThat(local.gate("G1").roles()).containsExactly("PO", "SquadLead");
         assertThat(local.gate("G1").sod()).isTrue();
         assertThat(local.gate("G2").roles()).containsExactly("FSDeveloper", "QA");

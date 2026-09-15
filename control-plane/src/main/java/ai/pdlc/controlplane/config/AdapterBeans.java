@@ -4,6 +4,7 @@ import ai.pdlc.adapters.ado.AdoBoardAdapter;
 import ai.pdlc.adapters.github.GitHubRepoAdapter;
 import ai.pdlc.adapters.inmemory.InMemoryBoardAdapter;
 import ai.pdlc.adapters.inmemory.InMemoryRepoAdapter;
+import ai.pdlc.adapters.localboard.LocalBoardAdapter;
 import ai.pdlc.adapters.localci.LocalCiAdapter;
 import ai.pdlc.adapters.localgit.LocalGitRepoAdapter;
 import ai.pdlc.adapters.localmetrics.LocalMetricsAdapter;
@@ -37,7 +38,8 @@ public class AdapterBeans {
     }
 
     @Bean
-    public BoardPort boardPort(Profile activeProfile, SecretsPort secretsPort, JdbcTemplate jdbcTemplate) {
+    public BoardPort boardPort(Profile activeProfile, SecretsPort secretsPort, JdbcTemplate jdbcTemplate,
+                               javax.sql.DataSource dataSource) {
         return switch (activeProfile.board().provider()) {
             case "azure-devops" -> new AdoBoardAdapter(
                     activeProfile.board().org(),
@@ -45,6 +47,7 @@ public class AdapterBeans {
                     secretsPort.resolve(activeProfile.board().auth().secretRef()),
                     activeProfile.board().states(),
                     activeProfile.board().types());
+            case "local-jdbc" -> new LocalBoardAdapter(dataSource);
             default -> new InMemoryBoardAdapter(nextBoardIdSequenceStart(jdbcTemplate));
         };
     }

@@ -102,6 +102,11 @@ public final class LocalGitRepoAdapter implements ai.pdlc.core.port.RepoPort {
     }
 
     @Override
+    public String resolveRef(String ref) {
+        return git(List.of("rev-parse", "--verify", ref), null).strip();
+    }
+
+    @Override
     public PRRef openPR(String branch, String target, String title, String body) {
         long id = prSeq.incrementAndGet();
         ObjectNode record = mapper.createObjectNode();

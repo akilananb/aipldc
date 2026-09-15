@@ -109,7 +109,7 @@ public class ReleaseAgent {
      * verbatim where the story matches it, rather than inventing a different one. */
     private static List<MonitorRule> monitorRules(PoHandoff po) {
         List<MonitorRule> rules = new ArrayList<>();
-        rules.add(new MonitorRule("export-error-rate", "http_5xx_rate", "> 2% over 15m", "file-card", "PO"));
+        rules.add(new MonitorRule("http-error-rate", "http_5xx_rate", "> 2% over 15m", "file-card", "PO"));
         boolean hasRateLimitScenario = po.scenarios().stream()
                 .anyMatch(s -> s.toLowerCase().contains("rate") || s.toLowerCase().contains("abuse"));
         if (hasRateLimitScenario) {

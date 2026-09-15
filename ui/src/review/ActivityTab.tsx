@@ -10,6 +10,7 @@ import type { AgentRun } from '../types';
 
 interface Props {
   id: string;
+  snapshot?: boolean;
 }
 
 function formatDuration(startedAt: string, endIso: string | null): string {
@@ -32,7 +33,7 @@ function statusIcon(run: AgentRun) {
   return <CircleDashed size={16} color="var(--gray-9)" />;
 }
 
-export default function ActivityTab({ id }: Props) {
+export default function ActivityTab({ id, snapshot = false }: Props) {
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
@@ -45,7 +46,16 @@ export default function ActivityTab({ id }: Props) {
     queryFn: () => api.getActivity(id),
     refetchInterval: 2000,
     retry: false,
+    enabled: !snapshot,
   });
+
+  if (snapshot) {
+    return (
+      <Text size="2" color="gray">
+        Snapshot evidence is recorded in review.md; no live agent run was started.
+      </Text>
+    );
+  }
 
   if (activityQuery.isError || !activityQuery.data || activityQuery.data.length === 0) {
     return (

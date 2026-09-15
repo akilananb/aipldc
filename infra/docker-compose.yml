@@ -98,7 +98,7 @@ services:
   control-plane:
     build:
       context: ..
-      dockerfile: control-plane/Dockerfile
+      dockerfile: infra/restaurant/control-plane.Dockerfile
     depends_on:
       temporal:
         condition: service_started
@@ -115,13 +115,16 @@ services:
       # Shared secret the standalone build agent sends as X-Agent-Token; empty (default) = open,
       # matching the pilot's X-User header-trust model.
       BUILD_AGENT_TOKEN: ${BUILD_AGENT_TOKEN:-}
+      # DemoInitializer (control-plane/.../demo) seeds the curated restaurant-demo catalog plus
+      # the demo-live feature on startup; off by default so ado-pilot/tests never seed anything.
+      PDLC_DEMO_ENABLED: ${PDLC_DEMO_ENABLED:-true}
     volumes:
       - ./pdlc.yaml:/app/pdlc.yaml:ro
       # Same absolute path on both sides: LocalGitRepoAdapter's repo.url in pdlc.yaml is a plain
       # host path, shared 1:1 with the build-worker host process (build-order phase 3 - omp is a
       # native binary, so the build-worker that shells out to it cannot itself be containerized;
       # it runs on the host and reaches this same repo directory directly, no path translation).
-      - /Users/work/Documents/ai-pldc/target-repos/orders-service:/Users/work/Documents/ai-pldc/target-repos/orders-service
+      - /Users/work/Documents/restaurant-runtime:/Users/work/Documents/restaurant-runtime
     ports:
       - "8081:8081"
 
@@ -169,7 +172,7 @@ services:
       LANGFUSE_PROJECT_ID: ${LANGFUSE_PROJECT_ID:-}
     volumes:
       - ./pdlc.yaml:/app/pdlc.yaml:ro
-      - /Users/work/Documents/ai-pldc/target-repos/orders-service:/Users/work/Documents/ai-pldc/target-repos/orders-service
+      - /Users/work/Documents/restaurant-runtime:/Users/work/Documents/restaurant-runtime
     ports:
       - "8082:8082"
 

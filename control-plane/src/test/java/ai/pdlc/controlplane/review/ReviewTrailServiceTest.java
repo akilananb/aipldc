@@ -65,6 +65,11 @@ class ReviewTrailServiceTest {
         }
 
         @Override
+        public String resolveRef(String ref) {
+            return "sha-" + writeCount.get();
+        }
+
+        @Override
         public PRRef openPR(String branch, String target, String title, String body) {
             return null;
         }

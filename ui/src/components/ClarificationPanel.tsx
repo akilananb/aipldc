@@ -18,6 +18,7 @@ export default function ClarificationPanel({ item, idPrefix, excludePrefix }: Pr
   const identity = useIdentity();
   const queryClient = useQueryClient();
   const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const readOnly = item.snapshot != null;
 
   const grillQuery = useQuery({
     queryKey: ['grill', item.id],
@@ -76,14 +77,19 @@ export default function ClarificationPanel({ item, idPrefix, excludePrefix }: Pr
               question={q}
               draft={drafts[q.id] ?? ''}
               onDraftChange={(text) => setDrafts((prev) => ({ ...prev, [q.id]: text }))}
-              canReply={GATE_ROLES.G1.includes(identity.role) || (q.id.startsWith('h') && GATE_ROLES.G2.includes(identity.role))}
+              canReply={
+                readOnly
+                  ? false
+                  : GATE_ROLES.G1.includes(identity.role) || (q.id.startsWith('h') && GATE_ROLES.G2.includes(identity.role))
+              }
+              readOnly={readOnly}
               onAnswer={() => answer.mutate({ questionId: q.id, text: drafts[q.id] ?? '' })}
               onPark={() => park.mutate(q.id)}
               answering={answer.isPending && answer.variables?.questionId === q.id}
               parking={park.isPending && park.variables === q.id}
             />
           ))}
-          {!anyReplyable && (
+          {!anyReplyable && !readOnly && (
             <Text size="1" color="gray">
               {replyRolesHint}
             </Text>
@@ -99,6 +105,7 @@ function QuestionCard({
   draft,
   onDraftChange,
   canReply,
+  readOnly,
   onAnswer,
   onPark,
   answering,
@@ -108,6 +115,7 @@ function QuestionCard({
   draft: string;
   onDraftChange: (text: string) => void;
   canReply: boolean;
+  readOnly: boolean;
   onAnswer: () => void;
   onPark: () => void;
   answering: boolean;
@@ -159,6 +167,11 @@ function QuestionCard({
               Park
             </Button>
           </Flex>
+          {readOnly && (
+            <Text size="1" color="gray">
+              Read-only demo snapshot
+            </Text>
+          )}
         </Flex>
       )}
     </Card>

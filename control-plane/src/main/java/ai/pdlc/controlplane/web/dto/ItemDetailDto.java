@@ -15,5 +15,6 @@ public record ItemDetailDto(
         ReviewStateDto gate,
         String parentId,
         String qualityVerdict,
-        AgentRunDto activeRun) {
+        AgentRunDto activeRun,
+        DemoSnapshotDto snapshot) {
 }

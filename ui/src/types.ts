@@ -64,6 +64,19 @@ export interface AgentRun {
   traceUrl: string | null;
 }
 
+export interface DemoSnapshot {
+  key: string;
+  label: string;
+  order: number;
+  sourceRef: string;
+  replay: boolean;
+}
+
+export interface DemoStatus {
+  enabled: boolean;
+  liveItemId: string | null;
+}
+
 export interface ItemDetail {
   id: string;
   profile: string;
@@ -78,6 +91,7 @@ export interface ItemDetail {
   parentId: string | null;
   qualityVerdict: string | null;
   activeRun: AgentRun | null;
+  snapshot: DemoSnapshot | null;
 }
 
 export interface ItemSummary {
@@ -90,6 +104,7 @@ export interface ItemSummary {
   parentId: string | null;
   qualityVerdict: string | null;
   activeRun: AgentRun | null;
+  snapshot: DemoSnapshot | null;
 }
 
 export interface QualityReport {

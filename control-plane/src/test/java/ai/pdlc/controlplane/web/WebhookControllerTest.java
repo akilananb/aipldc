@@ -2,6 +2,7 @@ package ai.pdlc.controlplane.web;
 
 import ai.pdlc.adapters.inmemory.InMemoryBoardAdapter;
 import ai.pdlc.controlplane.persistence.IngestedEventStore;
+import ai.pdlc.controlplane.temporal.FeatureWorkflowStarter;
 import ai.pdlc.core.config.AgentsConfig;
 import ai.pdlc.core.config.BoardConfig;
 import ai.pdlc.core.config.GateConfig;
@@ -87,7 +88,8 @@ class WebhookControllerTest {
                 new NotifyConfig("none", "none"),
                 new AgentsConfig("http://stub", null, Map.of()),
                 Map.of("G1", new GateConfig(List.of("PO", "SquadLead"), true)));
-        return new WebhookController(board, store, client, profile);
+        ai.pdlc.controlplane.demo.DemoSnapshotService demoSnapshots = mock(ai.pdlc.controlplane.demo.DemoSnapshotService.class);
+        return new WebhookController(board, store, new FeatureWorkflowStarter(client), client, profile, demoSnapshots);
     }
 
     @AfterEach
@@ -134,7 +136,8 @@ class WebhookControllerTest {
                 new NotifyConfig("none", "none"),
                 new AgentsConfig("http://stub", null, Map.of()),
                 Map.of("G1", new GateConfig(List.of("PO", "SquadLead"), true)));
-        WebhookController controller = new WebhookController(board, store, testEnv.getWorkflowClient(), profile);
+        WebhookController controller = new WebhookController(board, store, new FeatureWorkflowStarter(testEnv.getWorkflowClient()),
+                testEnv.getWorkflowClient(), profile, mock(ai.pdlc.controlplane.demo.DemoSnapshotService.class));
 
         var first = controller.local(Map.of("kind", "item.created", "boardId", "4413", "rev", 1,
                 "itemKind", "feature", "title", "Second feature"));

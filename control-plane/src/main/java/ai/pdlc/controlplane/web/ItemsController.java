@@ -74,11 +74,12 @@ public class ItemsController {
     private final IdentityResolver identityResolver;
     private final ReviewTrailService reviewTrail;
     private final RepoPort repo;
+    private final ai.pdlc.controlplane.demo.DemoSnapshotService demoSnapshots;
 
     public ItemsController(WorkItemRepository workItems, ArtifactRepository artifacts,
                             ApprovalRepository approvalOps, QualityReportRepository qualityReports, RunRepository runs,
                             BoardPort board, PdlcConfig pdlcConfig, WorkflowStubs workflowStubs, IdentityResolver identityResolver,
-                            ReviewTrailService reviewTrail, RepoPort repo) {
+                            ReviewTrailService reviewTrail, RepoPort repo, ai.pdlc.controlplane.demo.DemoSnapshotService demoSnapshots) {
         this.workItems = workItems;
         this.artifacts = artifacts;
         this.approvalOps = approvalOps;
@@ -90,15 +91,22 @@ public class ItemsController {
         this.identityResolver = identityResolver;
         this.reviewTrail = reviewTrail;
         this.repo = repo;
+        this.demoSnapshots = demoSnapshots;
+    }
+
+    private static ai.pdlc.controlplane.web.dto.DemoSnapshotDto snapshotDto(ai.pdlc.controlplane.demo.DemoSnapshotEntity s) {
+        return s == null ? null
+                : new ai.pdlc.controlplane.web.dto.DemoSnapshotDto(s.snapshotKey(), s.label(), s.ordinal(), s.sourceRef(), s.replay());
     }
 
     @GetMapping
     public List<ItemSummaryDto> list() {
         Map<UUID, AgentRunDto> active = activeRuns();
+        Map<UUID, ai.pdlc.controlplane.demo.DemoSnapshotEntity> snapshotIndex = demoSnapshots.findAllIndexed();
         return workItems.findAllByOrderByUpdatedAtDesc().stream()
                 .map(row -> new ItemSummaryDto(row.id(), row.boardId(), row.kind(),
                         safeTitle(row), row.canonicalState(), row.updatedAt(), row.parentId(), latestQualityVerdict(row.id()),
-                        active.get(row.id())))
+                        active.get(row.id()), snapshotDto(snapshotIndex.get(row.id()))))
                 .toList();
     }
 
@@ -110,8 +118,9 @@ public class ItemsController {
         ReviewStateDto gate = queryGate(row);
         return new ItemDetailDto(row.id(), row.profile(), row.boardId(), row.kind(), item.title(), item.description(),
                 row.canonicalState(), latest == null ? null : latest.version(), latest == null ? null : latest.contentHash(),
-                gate, row.parentId(), latestQualityVerdict(row.id()), activeRuns().get(id));
+                gate, row.parentId(), latestQualityVerdict(row.id()), activeRuns().get(id), snapshotDto(demoSnapshots.find(id).orElse(null)));
     }
+
 
     @GetMapping("/{id}/activity")
     public List<AgentRunDto> activity(@PathVariable UUID id) {
@@ -136,7 +145,10 @@ public class ItemsController {
         if (row.specChangePath() == null) {
             return ResponseEntity.ok("");
         }
-        String content = reviewTrail.readReviewMd(new WorkItemRef(row.profile(), row.boardId()), row.specChangePath());
+        java.util.Optional<ai.pdlc.controlplane.demo.DemoSnapshotEntity> snap = demoSnapshots.find(id);
+        String content = snap.isPresent() && snap.get().gitRef() != null
+                ? reviewTrail.readReviewMd(new WorkItemRef(row.profile(), row.boardId()), row.specChangePath(), snap.get().gitRef())
+                : reviewTrail.readReviewMd(new WorkItemRef(row.profile(), row.boardId()), row.specChangePath());
         return ResponseEntity.ok(content);
     }
 
@@ -161,12 +173,14 @@ public class ItemsController {
         String specMd = null;
         String tasksMd = null;
         if (slug != null) {
-            String defaultBranch = pdlcConfig.profile(row.profile()).repo().defaultBranch();
-            proposalMd = readOrNull(defaultBranch, slug + "/proposal.md");
-            tasksMd = readOrNull(defaultBranch, slug + "/tasks.md");
+            java.util.Optional<ai.pdlc.controlplane.demo.DemoSnapshotEntity> snap = demoSnapshots.find(storyRow.id());
+            String readRef = snap.map(ai.pdlc.controlplane.demo.DemoSnapshotEntity::gitRef)
+                    .orElseGet(() -> pdlcConfig.profile(row.profile()).repo().defaultBranch());
+            proposalMd = readOrNull(readRef, slug + "/proposal.md");
+            tasksMd = readOrNull(readRef, slug + "/tasks.md");
             Matcher areaMatch = proposalMd == null ? null : AREA_PATTERN.matcher(proposalMd);
             String area = areaMatch != null && areaMatch.find() ? areaMatch.group(1) : "default";
-            specMd = readOrNull(defaultBranch, slug + "/specs/" + area + "/spec.md");
+            specMd = readOrNull(readRef, slug + "/specs/" + area + "/spec.md");
         }
 
         List<SpecDocsDto.DocApproval> approvals = artifacts.findByWorkItemIdOrderByVersionDesc(storyRow.id()).stream()
@@ -179,6 +193,7 @@ public class ItemsController {
 
     @PostMapping("/{id}/approve")
     public ResponseEntity<ReviewStateDto> approve(@PathVariable UUID id, @RequestBody ApproveRequest request, HttpServletRequest httpRequest) {
+        demoSnapshots.requireWritable(id);
         Identity identity = identityResolver.resolve(httpRequest);
         WorkItemEntity story = requireItem(id);
         var gate1 = pdlcConfig.profile(story.profile()).gate("G1");
@@ -221,6 +236,7 @@ public class ItemsController {
 
     @PostMapping("/{id}/request-changes")
     public ResponseEntity<ReviewStateDto> requestChanges(@PathVariable UUID id, HttpServletRequest httpRequest) {
+        demoSnapshots.requireWritable(id);
         Identity identity = identityResolver.resolve(httpRequest);
         WorkItemEntity story = requireItem(id);
         WorkItemRef featureRef = new WorkItemRef(story.profile(), story.parentId());
@@ -239,6 +255,11 @@ public class ItemsController {
     public GrillQuestionsDto grill(@PathVariable UUID id) {
         WorkItemEntity row = requireItem(id);
         WorkItemEntity feature = clarificationOwner(row);
+        java.util.Optional<ai.pdlc.controlplane.demo.DemoSnapshotEntity> snap = demoSnapshots.find(feature.id());
+        if (snap.isPresent()) {
+            String json = snap.get().grillJson();
+            return json == null ? new GrillQuestionsDto(true, List.of()) : readJson(json, GrillQuestionsDto.class);
+        }
         GrillHandoff grill;
         try {
             grill = workflowStubs.featureWorkflow(new WorkItemRef(feature.profile(), feature.boardId())).grill();
@@ -287,6 +308,7 @@ public class ItemsController {
      * than relying on a webhook echo (harmless if one also arrives - step 4 below ignores a
      * non-{@code OPEN} question). */
     private void submitGrillReply(UUID id, String questionId, String body, HttpServletRequest httpRequest) {
+        demoSnapshots.requireWritable(id);
         Identity identity = identityResolver.resolve(httpRequest);
         WorkItemEntity row = requireItem(id);
         WorkItemEntity feature = clarificationOwner(row);
@@ -340,6 +362,11 @@ public class ItemsController {
         if (!"story".equals(row.kind()) || row.parentId() == null) {
             return null;
         }
+        java.util.Optional<ai.pdlc.controlplane.demo.DemoSnapshotEntity> snap = demoSnapshots.find(row.id());
+        if (snap.isPresent()) {
+            String json = snap.get().gateJson();
+            return json == null ? null : readJson(json, ReviewStateDto.class);
+        }
         try {
             FeatureWorkflow stub = workflowStubs.featureWorkflow(new WorkItemRef(row.profile(), row.parentId()));
             ReviewState state = stub.state();
@@ -375,6 +402,16 @@ public class ItemsController {
             return repo.readFile(branch, path);
         } catch (RuntimeException notFound) {
             return null;
+        }
+    }
+
+    private static final com.fasterxml.jackson.databind.ObjectMapper SNAPSHOT_JSON = new com.fasterxml.jackson.databind.ObjectMapper();
+
+    private static <T> T readJson(String json, Class<T> type) {
+        try {
+            return SNAPSHOT_JSON.readValue(json, type);
+        } catch (Exception e) {
+            throw new IllegalStateException("Corrupt demo snapshot JSON for " + type.getSimpleName(), e);
         }
     }
 }

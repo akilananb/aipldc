@@ -67,11 +67,13 @@ public class ArtifactsController {
     private final IdentityResolver identityResolver;
     private final WorkflowClient workflowClient;
     private final PdlcConfig pdlcConfig;
+    private final ai.pdlc.controlplane.demo.DemoSnapshotService demoSnapshots;
 
     public ArtifactsController(WorkItemRepository workItems, ArtifactRepository artifacts, CommentRepository comments,
                                 RepoPort repo, CommentReanchorer reanchorer, ReviewTrailService reviewTrail,
                                 WorkflowStubs workflowStubs, IdentityResolver identityResolver,
-                                WorkflowClient workflowClient, PdlcConfig pdlcConfig) {
+                                WorkflowClient workflowClient, PdlcConfig pdlcConfig,
+                                ai.pdlc.controlplane.demo.DemoSnapshotService demoSnapshots) {
         this.workItems = workItems;
         this.artifacts = artifacts;
         this.comments = comments;
@@ -82,6 +84,7 @@ public class ArtifactsController {
         this.identityResolver = identityResolver;
         this.workflowClient = workflowClient;
         this.pdlcConfig = pdlcConfig;
+        this.demoSnapshots = demoSnapshots;
     }
 
     @GetMapping("/{id}/versions/{v}")
@@ -107,6 +110,7 @@ public class ArtifactsController {
 
     @PostMapping("/{id}/comments")
     public ResponseEntity<CommentDto> addComment(@PathVariable UUID id, @RequestBody CommentRequest request, HttpServletRequest httpRequest) {
+        demoSnapshots.requireWritable(id);
         Identity identity = identityResolver.resolve(httpRequest);
         WorkItemEntity story = requireItem(id);
         ArtifactEntity latest = artifacts.findByWorkItemIdOrderByVersionDesc(id).stream().findFirst()
@@ -150,6 +154,7 @@ public class ArtifactsController {
     @PostMapping("/{id}/comments/{commentId}/approve-agent-result")
     public ResponseEntity<Void> approveAgentResult(@PathVariable UUID id, @PathVariable UUID commentId,
                                                     HttpServletRequest httpRequest) {
+        demoSnapshots.requireWritable(id);
         Identity identity = identityResolver.resolve(httpRequest);
         WorkItemEntity story = requireItem(id);
         var gate1 = pdlcConfig.profile(story.profile()).gate("G1");

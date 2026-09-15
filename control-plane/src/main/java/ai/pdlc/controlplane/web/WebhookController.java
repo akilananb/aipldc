@@ -1,6 +1,7 @@
 package ai.pdlc.controlplane.web;
 
 import ai.pdlc.controlplane.persistence.IngestedEventStore;
+import ai.pdlc.controlplane.temporal.FeatureWorkflowStarter;
 import ai.pdlc.core.config.Profile;
 import ai.pdlc.core.domain.CanonicalEvent;
 import ai.pdlc.core.domain.WorkItem;
@@ -8,11 +9,7 @@ import ai.pdlc.core.domain.WorkItemRef;
 import ai.pdlc.core.port.BoardPort;
 import ai.pdlc.core.workflow.BoardCommentEvent;
 import ai.pdlc.core.workflow.FeatureWorkflow;
-import ai.pdlc.core.workflow.TaskQueues;
-import io.temporal.api.enums.v1.WorkflowIdReusePolicy;
 import io.temporal.client.WorkflowClient;
-import io.temporal.client.WorkflowExecutionAlreadyStarted;
-import io.temporal.client.WorkflowOptions;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -34,14 +31,19 @@ public class WebhookController {
 
     private final BoardPort board;
     private final IngestedEventStore ingestedEvents;
+    private final FeatureWorkflowStarter featureWorkflowStarter;
     private final WorkflowClient workflowClient;
     private final Profile activeProfile;
+    private final ai.pdlc.controlplane.demo.DemoSnapshotService demoSnapshots;
 
-    public WebhookController(BoardPort board, IngestedEventStore ingestedEvents, WorkflowClient workflowClient, Profile activeProfile) {
+    public WebhookController(BoardPort board, IngestedEventStore ingestedEvents, FeatureWorkflowStarter featureWorkflowStarter,
+                              WorkflowClient workflowClient, Profile activeProfile, ai.pdlc.controlplane.demo.DemoSnapshotService demoSnapshots) {
         this.board = board;
         this.ingestedEvents = ingestedEvents;
+        this.featureWorkflowStarter = featureWorkflowStarter;
         this.workflowClient = workflowClient;
         this.activeProfile = activeProfile;
+        this.demoSnapshots = demoSnapshots;
     }
 
     @PostMapping("/local")
@@ -55,6 +57,10 @@ public class WebhookController {
     }
 
     private ResponseEntity<Map<String, String>> handle(Map<String, Object> payload) {
+        Object rawBoardId = payload.get("boardId");
+        if (rawBoardId != null) {
+            demoSnapshots.requireWritable(activeProfile.name(), String.valueOf(rawBoardId));
+        }
         CanonicalEvent event = board.onWebhook(activeProfile.name(), payload);
         boolean isNew = ingestedEvents.recordIfNew(
                 event.itemRef().profile(), event.itemRef().boardId(), event.rev(), event.kind().wireValue());
@@ -66,7 +72,7 @@ public class WebhookController {
             case ITEM_CREATED -> {
                 WorkItem item = board.getItem(event.itemRef());
                 if ("feature".equals(item.kind())) {
-                    startFeatureWorkflow(event.itemRef());
+                    featureWorkflowStarter.start(event.itemRef());
                 }
             }
             case COMMENT_ADDED -> signalCommentAdded(event.itemRef(), payload);
@@ -75,20 +81,6 @@ public class WebhookController {
             }
         }
         return ResponseEntity.ok(Map.of("status", "ok"));
-    }
-
-    private void startFeatureWorkflow(WorkItemRef itemRef) {
-        WorkflowOptions options = WorkflowOptions.newBuilder()
-                .setTaskQueue(TaskQueues.REASONING)
-                .setWorkflowId(itemRef.workflowId())
-                .setWorkflowIdReusePolicy(WorkflowIdReusePolicy.WORKFLOW_ID_REUSE_POLICY_REJECT_DUPLICATE)
-                .build();
-        FeatureWorkflow stub = workflowClient.newWorkflowStub(FeatureWorkflow.class, options);
-        try {
-            WorkflowClient.start(stub::run, itemRef);
-        } catch (WorkflowExecutionAlreadyStarted alreadyStarted) {
-            // Idempotent: a webhook replay (or reconciler safety-net event) for the same item is a no-op.
-        }
     }
 
     private void signalCommentAdded(WorkItemRef itemRef, Map<String, Object> payload) {

@@ -1,9 +1,9 @@
 profiles:
   local:
     board:
-      provider: in-memory                # anything other than azure-devops resolves to InMemoryBoardAdapter
+      provider: local-jdbc               # Postgres-backed LocalBoardAdapter; anything other than azure-devops/local-jdbc resolves to InMemoryBoardAdapter
       org: local
-      project: PDLC
+      project: restaurant
       types: { feature: feature, story: story, task: task, bug: bug }
       states:
         new: new
@@ -20,9 +20,9 @@ profiles:
         stale: stale
       auth: { kind: none, secret_ref: kv://none }
     repo:
-      provider: local-git                # real git CLI adapter (build-order phase 3); anything other than github/local-git resolves to InMemoryRepoAdapter
-      url: /Users/work/Documents/ai-pldc/target-repos/orders-service
-      default_branch: main
+      provider: local-git                # real git CLI adapter; anything other than github/local-git resolves to InMemoryRepoAdapter
+      url: /Users/work/Documents/restaurant-runtime
+      default_branch: restaurant-base
       spec_dir: openspec
     notify:
       provider: none

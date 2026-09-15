@@ -12,5 +12,6 @@ public record ItemSummaryDto(
         OffsetDateTime updatedAt,
         String parentId,
         String qualityVerdict,
-        AgentRunDto activeRun) {
+        AgentRunDto activeRun,
+        DemoSnapshotDto snapshot) {
 }

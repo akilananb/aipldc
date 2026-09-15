@@ -9,6 +9,7 @@ import { extendLineTarget, formatLineTarget, parseLineTarget } from '../ui-utils
 import PageHeader from '../components/PageHeader';
 import StatusBadge from '../components/StatusBadge';
 import AgentActivityBadge from '../components/AgentActivityBadge';
+import DemoSnapshotBadge from '../components/DemoSnapshotBadge';
 import ErrorCallout from '../components/ErrorCallout';
 import EmptyState from '../components/EmptyState';
 import QualityIcon from '../components/QualityIcon';
@@ -25,6 +26,7 @@ import ActivityTab from '../review/ActivityTab';
 import ReleaseTab from '../review/ReleaseTab';
 import TaskDetailPage from './TaskDetailPage';
 import FeaturePage from './FeaturePage';
+import BoardItemPage from './BoardItemPage';
 
 type Tab = 'preview' | 'source' | 'diff' | 'tasks' | 'quality' | 'release' | 'activity' | 'reviewmd';
 
@@ -69,20 +71,20 @@ export default function ReviewPage() {
   const artifactQuery = useQuery({
     queryKey: ['artifact', id, selectedVersion],
     queryFn: () => api.getArtifact(id!, selectedVersion!),
-    enabled: !!id && selectedVersion != null,
+    enabled: !!id && item?.kind === 'story' && selectedVersion != null,
     refetchInterval: 2000,
   });
 
   const prevArtifactQuery = useQuery({
     queryKey: ['artifact', id, (selectedVersion ?? 0) - 1],
     queryFn: () => api.getArtifact(id!, (selectedVersion ?? 0) - 1),
-    enabled: !!id && selectedVersion != null && selectedVersion > 1,
+    enabled: !!id && item?.kind === 'story' && selectedVersion != null && selectedVersion > 1,
   });
 
   const reviewMdQuery = useQuery({
     queryKey: ['reviewmd', id],
     queryFn: () => api.getReviewMd(id!),
-    enabled: !!id && tab === 'reviewmd',
+    enabled: !!id && item?.kind === 'story' && tab === 'reviewmd',
     refetchInterval: 2000,
   });
 
@@ -109,6 +111,7 @@ export default function ReviewPage() {
   if (!item) return null;
   if (item.kind === 'task') return <TaskDetailPage item={item} />;
   if (item.kind === 'feature') return <FeaturePage item={item} />;
+  if (item.kind === 'release' || item.kind === 'bug') return <BoardItemPage item={item} />;
 
   return (
     <Box>
@@ -120,6 +123,7 @@ export default function ReviewPage() {
             <Badge color="gray">{item.kind}</Badge>
             <StatusBadge state={item.canonicalState} />
             <AgentActivityBadge run={item.activeRun} />
+            {item.snapshot && <DemoSnapshotBadge snapshot={item.snapshot} />}
           </>
         }
         meta={`board ${item.boardId} · profile ${item.profile}`}
@@ -193,6 +197,7 @@ export default function ReviewPage() {
                     onApproveAgentResult={(commentId) => actions.approveAgentResult.mutate(commentId)}
                     approvingAgentResult={actions.approveAgentResult.isPending}
                     canApproveAgentResult={actions.g1RoleAllowed}
+                    readOnly={item.snapshot != null}
                   />
                 </div>
               </div>
@@ -258,11 +263,11 @@ export default function ReviewPage() {
           </Tabs.Content>
 
           <Tabs.Content value="release">
-            <ReleaseTab id={id!} />
+            <ReleaseTab id={id!} readOnly={item.snapshot != null} />
           </Tabs.Content>
 
           <Tabs.Content value="activity">
-            <ActivityTab id={id!} />
+            <ActivityTab id={id!} snapshot={item.snapshot != null} />
           </Tabs.Content>
 
           <Tabs.Content value="reviewmd">

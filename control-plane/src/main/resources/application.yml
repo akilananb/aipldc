@@ -17,6 +17,8 @@ pdlc:
   active-profile: ${PDLC_ACTIVE_PROFILE:local}
   build-agent:
     token: ${BUILD_AGENT_TOKEN:}
+  demo:
+    enabled: ${PDLC_DEMO_ENABLED:false}
 
 temporal:
   target: ${TEMPORAL_TARGET:127.0.0.1:7233}

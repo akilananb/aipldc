@@ -44,19 +44,23 @@ public class PrController {
     private final PdlcConfig pdlcConfig;
     private final WorkflowStubs workflowStubs;
     private final IdentityResolver identityResolver;
+    private final ai.pdlc.controlplane.demo.DemoSnapshotService demoSnapshots;
 
     public PrController(WorkItemRepository workItems, PrRepository prs, RepoPort repo, PdlcConfig pdlcConfig,
-                         WorkflowStubs workflowStubs, IdentityResolver identityResolver) {
+                         WorkflowStubs workflowStubs, IdentityResolver identityResolver,
+                         ai.pdlc.controlplane.demo.DemoSnapshotService demoSnapshots) {
         this.workItems = workItems;
         this.prs = prs;
         this.repo = repo;
         this.pdlcConfig = pdlcConfig;
         this.workflowStubs = workflowStubs;
         this.identityResolver = identityResolver;
+        this.demoSnapshots = demoSnapshots;
     }
 
     @PostMapping("/{id}/pr/approve")
     public ResponseEntity<ReviewStateDto> approve(@PathVariable UUID id, @RequestBody ApproveRequest request, HttpServletRequest httpRequest) {
+        demoSnapshots.requireWritable(id);
         Identity identity = identityResolver.resolve(httpRequest);
         WorkItemEntity story = requireItem(id);
         var gate2 = pdlcConfig.profile(story.profile()).gate("G2");
@@ -79,6 +83,7 @@ public class PrController {
 
     @PostMapping("/{id}/pr/request-changes")
     public ResponseEntity<ReviewStateDto> requestChanges(@PathVariable UUID id, HttpServletRequest httpRequest) {
+        demoSnapshots.requireWritable(id);
         Identity identity = identityResolver.resolve(httpRequest);
         WorkItemEntity story = requireItem(id);
         FeatureWorkflow stub = workflowStubs.featureWorkflow(new WorkItemRef(story.profile(), story.parentId()));

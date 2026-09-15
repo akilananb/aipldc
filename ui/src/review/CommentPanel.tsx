@@ -20,6 +20,7 @@ interface Props {
   onApproveAgentResult: (commentId: string) => void;
   approvingAgentResult: boolean;
   canApproveAgentResult: boolean;
+  readOnly: boolean;
 }
 
 const INTENTS: CommentIntent[] = ['change', 'question', 'note'];
@@ -53,6 +54,7 @@ export default function CommentPanel({
   onApproveAgentResult,
   approvingAgentResult,
   canApproveAgentResult,
+  readOnly,
 }: Props) {
   const [text, setText] = useState('');
   const [intent, setIntent] = useState<CommentIntent>('note');
@@ -134,7 +136,8 @@ export default function CommentPanel({
         Comments
       </Heading>
 
-      <Card size="2" mb="4">
+      {!readOnly && (
+        <Card size="2" mb="4">
         <Flex direction="column" gap="2">
           <Flex align="center" gap="2" wrap="wrap">
             <Text size="2" color="gray">
@@ -252,6 +255,7 @@ export default function CommentPanel({
           </Flex>
         </Flex>
       </Card>
+      )}
 
       <Flex direction="column" gap="3">
         {comments.length === 0 && (
@@ -274,6 +278,7 @@ export default function CommentPanel({
                   onApproveAgentResult={onApproveAgentResult}
                   approvingAgentResult={approvingAgentResult}
                   canApproveAgentResult={canApproveAgentResult}
+                  readOnly={readOnly}
                 />
               ))}
             </Flex>
@@ -305,11 +310,13 @@ function CommentCard({
   onApproveAgentResult,
   approvingAgentResult,
   canApproveAgentResult,
+  readOnly,
 }: {
   comment: Comment;
   onApproveAgentResult: (commentId: string) => void;
   approvingAgentResult: boolean;
   canApproveAgentResult: boolean;
+  readOnly: boolean;
 }) {
   const resolved = comment.resolvedInVersion != null;
   return (
@@ -358,10 +365,22 @@ function CommentCard({
             <Flex direction="column" gap="2">
               <Badge color="amber">pending approval (PO/SquadLead)</Badge>
               <AgentMarkdown content={comment.agentResultMd ?? ''} />
-              {canApproveAgentResult && (
-                <Button size="1" loading={approvingAgentResult} onClick={() => onApproveAgentResult(comment.id)}>
-                  Approve result
-                </Button>
+              {(canApproveAgentResult || readOnly) && (
+                <Flex direction="column" gap="1">
+                  <Button
+                    size="1"
+                    loading={approvingAgentResult && !readOnly}
+                    disabled={readOnly}
+                    onClick={() => onApproveAgentResult(comment.id)}
+                  >
+                    Approve result
+                  </Button>
+                  {readOnly && (
+                    <Text size="1" color="gray">
+                      Read-only demo snapshot
+                    </Text>
+                  )}
+                </Flex>
               )}
             </Flex>
           )}

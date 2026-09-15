@@ -239,11 +239,11 @@ class PromptTemplatesTest {
 
     @Test
     void releaseMonitorRulesRendersByteExactIncludingEmptyList() {
-        String expected = "- export-error-rate: http_5xx_rate > 2% over 15m -> file-card (owner: PO)\n"
+        String expected = "- http-error-rate: http_5xx_rate > 2% over 15m -> file-card (owner: PO)\n"
                 + "- export-abuse: exports_per_user_hour >= 10 for > 3 users in 1h -> file-card+notify-squad-lead (owner: SquadLead)\n";
 
         Map<String, Object> view = Map.of("rules", List.of(
-                Map.of("id", "export-error-rate", "signal", "http_5xx_rate", "threshold", "> 2% over 15m",
+                Map.of("id", "http-error-rate", "signal", "http_5xx_rate", "threshold", "> 2% over 15m",
                         "action", "file-card", "owner", "PO"),
                 Map.of("id", "export-abuse", "signal", "exports_per_user_hour", "threshold", ">= 10 for > 3 users in 1h",
                         "action", "file-card+notify-squad-lead", "owner", "SquadLead")));

@@ -19,6 +19,13 @@ public interface RepoPort {
 
     void createBranch(String from, String name);
 
+    /** Resolves {@code ref} (branch name or commit sha) to the commit sha it currently points at;
+     * throws if {@code ref} does not exist. Used to verify a branch's identity/ownership before a
+     * caller decides whether {@link #createBranch} is safe to invoke (that call unconditionally
+     * moves the ref, so a caller that must never clobber an existing unrelated branch needs to
+     * check first). */
+    String resolveRef(String ref);
+
     PRRef openPR(String branch, String target, String title, String body);
 
     void commentOnPR(String prId, String body, Integer line);

@@ -23,6 +23,7 @@ export default function GatePanel({ item, actions }: Props) {
 
   const g2Allowed = GATE_ROLES.G2.includes(identity.role);
   const g2DisabledReason = !g2Allowed ? `Role ${identity.role} is not a Gate 2 checker` : null;
+  const readOnly = item.snapshot != null;
 
   if (item.canonicalState === 'queued') {
     return (
@@ -43,11 +44,17 @@ export default function GatePanel({ item, actions }: Props) {
         <GateProgress item={item} />
       </Box>
 
+      {readOnly && (
+        <Text size="1" color="gray" mb="2" as="p">
+          Read-only demo snapshot — gate actions are disabled.
+        </Text>
+      )}
+
       {(stage == null || stage === 'awaiting-G1') && (
         <Flex gap="3" align="center" wrap="wrap">
-          <Tooltip content={qualityBlocked ? 'Quality evaluation has not passed' : (actions.disabledReason ?? '')}>
+          <Tooltip content={readOnly ? 'Read-only demo snapshot' : qualityBlocked ? 'Quality evaluation has not passed' : (actions.disabledReason ?? '')}>
             <Button
-              disabled={actions.approveDisabled || qualityBlocked}
+              disabled={readOnly || actions.approveDisabled || qualityBlocked}
               onClick={() => actions.approve.mutate(note)}
               loading={actions.approve.isPending}
             >
@@ -57,6 +64,7 @@ export default function GatePanel({ item, actions }: Props) {
           <Button
             color="amber"
             variant="soft"
+            disabled={readOnly}
             onClick={() => actions.requestChanges.mutate()}
             loading={actions.requestChanges.isPending}
           >
@@ -66,6 +74,7 @@ export default function GatePanel({ item, actions }: Props) {
             placeholder="Approval note (optional)"
             value={note}
             onChange={(e) => setNote(e.target.value)}
+            disabled={readOnly}
             style={{ width: 280 }}
           />
         </Flex>
@@ -77,20 +86,20 @@ export default function GatePanel({ item, actions }: Props) {
             Gate 2 · PR review
           </Text>
           <Flex gap="3" align="center" wrap="wrap">
-            <Tooltip content={g2DisabledReason ?? ''}>
+            <Tooltip content={readOnly ? 'Read-only demo snapshot' : g2DisabledReason ?? ''}>
               <Button
-                disabled={!g2Allowed}
+                disabled={readOnly || !g2Allowed}
                 onClick={() => actions.prApprove.mutate('')}
                 loading={actions.prApprove.isPending}
               >
                 Approve PR
               </Button>
             </Tooltip>
-            <Tooltip content={g2DisabledReason ?? ''}>
+            <Tooltip content={readOnly ? 'Read-only demo snapshot' : g2DisabledReason ?? ''}>
               <Button
                 color="amber"
                 variant="soft"
-                disabled={!g2Allowed}
+                disabled={readOnly || !g2Allowed}
                 onClick={() => actions.prRequestChanges.mutate()}
                 loading={actions.prRequestChanges.isPending}
               >
@@ -116,11 +125,11 @@ export default function GatePanel({ item, actions }: Props) {
             Sign the release documents in the Release tab.
           </Text>
           <Flex gap="3" align="center" wrap="wrap">
-            <Tooltip content={!GATE_ROLES.G3.includes(identity.role) ? `Role ${identity.role} is not a Gate 3 checker` : ''}>
+            <Tooltip content={readOnly ? 'Read-only demo snapshot' : !GATE_ROLES.G3.includes(identity.role) ? `Role ${identity.role} is not a Gate 3 checker` : ''}>
               <Button
                 color="amber"
                 variant="soft"
-                disabled={!GATE_ROLES.G3.includes(identity.role)}
+                disabled={readOnly || !GATE_ROLES.G3.includes(identity.role)}
                 onClick={() => actions.releaseRequestChanges.mutate()}
                 loading={actions.releaseRequestChanges.isPending}
               >

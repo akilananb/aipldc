@@ -12,9 +12,10 @@ import EmptyState from '../components/EmptyState';
 
 interface Props {
   id: string;
+  readOnly: boolean;
 }
 
-export default function ReleaseTab({ id }: Props) {
+export default function ReleaseTab({ id, readOnly }: Props) {
   const identity = useIdentity();
   const queryClient = useQueryClient();
 
@@ -82,16 +83,22 @@ export default function ReleaseTab({ id }: Props) {
               </Collapsible>
             </Box>
             {!doc.signed && (
-              <Tooltip content={canSign ? '' : `Only ${doc.checkerRole} can sign this document`}>
-                <Button
-                  mt="3"
-                  disabled={!canSign}
-                  loading={signMutation.isPending && signMutation.variables?.docId === doc.docId}
-                  onClick={() => signMutation.mutate({ docId: doc.docId, title: doc.title })}
-                >
-                  Sign
-                </Button>
-              </Tooltip>
+              <Flex direction="column" gap="1" mt="3">
+                <Tooltip content={readOnly ? 'Read-only demo snapshot' : canSign ? '' : `Only ${doc.checkerRole} can sign this document`}>
+                  <Button
+                    disabled={readOnly || !canSign}
+                    loading={signMutation.isPending && signMutation.variables?.docId === doc.docId}
+                    onClick={() => signMutation.mutate({ docId: doc.docId, title: doc.title })}
+                  >
+                    Sign
+                  </Button>
+                </Tooltip>
+                {readOnly && (
+                  <Text size="1" color="gray">
+                    Read-only demo snapshot
+                  </Text>
+                )}
+              </Flex>
             )}
           </Card>
         );

@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # scripts/e2e-demo-phase4.sh — scripted end-to-end walkthrough of build-order phase 4, against the
-# `local` profile and the real target-repos/orders-service git repo. Runs the full phase 1-3 flow
-# (intake -> grill -> gate 1 -> plan -> build loop -> gate 2) then continues into phase 4:
-# release agent drafts the pack -> gate 3 (PO/SquadLead/QA sign each document by its own checker
-# role) -> deploy through CiPort (real git verify + deployment-marker file) -> one monitor
-# evaluation pass -> a tripped rule files a card back on the board.
+# `local` profile's restaurant demo and the real /Users/work/Documents/restaurant-runtime git repo.
+# Exercises the SEEDED demo-live feature (started via /api/demo/live/start, not a synthetic
+# webhook item.created) through the full phase 1-3 flow (intake -> grill -> gate 1 -> plan ->
+# build loop -> gate 2) then continues into phase 4: release agent drafts the pack -> gate 3
+# (PO/SquadLead/QA sign each document by its own checker role) -> deploy through CiPort (real git
+# verify + deployment-marker file) -> one monitor evaluation pass -> a tripped rule files a card
+# back on the board.
 #
 # Prerequisite: the standalone build agent (build-worker/dist/worker.js) must be running and
 # polling control-plane's REST API (PDLC_API_URL, BUILD_FILTER_PROFILE, ANTHROPIC_OAUTH_TOKEN
@@ -12,12 +14,13 @@
 set -euo pipefail
 
 BASE="${BASE_URL:-http://localhost:8081}"
-FEATURE_BOARD_ID="${FEATURE_BOARD_ID:-4414}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+FIXTURE="$SCRIPT_DIR/../control-plane/src/main/resources/demo/restaurant-demo.json"
 PO_USER="po@acme"
 LEAD_USER="lead@acme"
 FSDEV_USER="fsdev@acme"
 QA_USER="qa@acme"
-REPO_PATH="${TARGET_REPO_PATH:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/target-repos/orders-service}"
+REPO_PATH="${TARGET_REPO_PATH:-/Users/work/Documents/restaurant-runtime}"
 
 log() { echo "[e2e-phase4] $*" >&2; }
 
@@ -36,42 +39,83 @@ poll() {
 
 api() { curl -sf "$@"; }
 
-# 1. Intake.
-log "1/12 POST item.created for feature #$FEATURE_BOARD_ID"
-api -X POST "$BASE/webhooks/local" -H 'Content-Type: application/json' -d '{
-  "kind": "item.created",
-  "boardId": "'"$FEATURE_BOARD_ID"'",
-  "rev": 1,
-  "itemKind": "feature",
-  "title": "Export the filtered orders view to CSV",
-  "description": "Sales ops wants to export the current filtered orders view to CSV.",
-  "areaPath": "orders"
-}' >/dev/null
+# --- fixture bundle (authored by the parallel fixture task) -------------------------------
+[ -f "$FIXTURE" ] || {
+  echo "error: fixture bundle missing at $FIXTURE (the DemoInitializer's restaurant-demo.json has not landed yet; run again after the fixture task completes)" >&2
+  exit 1
+}
+LIVE_TITLE="$(jq -r '.live.title' "$FIXTURE")"
+LIVE_DESCRIPTION="$(jq -r '.live.description' "$FIXTURE")"
+RESOLVED_ANSWER="$(jq -r '.live.resolvedAnswer' "$FIXTURE")"
+[ -n "$RESOLVED_ANSWER" ] && [ "$RESOLVED_ANSWER" != "null" ] || {
+  echo "error: $FIXTURE has no .live.resolvedAnswer" >&2; exit 1
+}
 
-FEATURE_ID=$(poll "feature work_items row" 240 bash -c \
-  "curl -sf '$BASE/api/items' | jq -er '.[] | select(.boardId==\"$FEATURE_BOARD_ID\") | .id'")
-log "feature work_item id = $FEATURE_ID"
+answer_open_questions() {
+  local deadline=$((SECONDS + 120)) grill_json open_ids qid
+  while true; do
+    grill_json="$(curl -s "$BASE/api/items/$FEATURE_ID/grill" || true)"
+    if printf '%s' "$grill_json" | jq -e '.resolved == true' >/dev/null 2>&1; then
+      log "    OK: all grill questions resolved"
+      return 0
+    fi
+    open_ids="$(printf '%s' "$grill_json" | jq -r '.questions[]? | select(.status == "open") | .id' 2>/dev/null || true)"
+    if [ -z "$open_ids" ]; then
+      if [ "$SECONDS" -ge "$deadline" ]; then
+        log "FAIL: grill questions never resolved; last state: $grill_json"
+        return 1
+      fi
+      sleep 3
+      continue
+    fi
+    for qid in $open_ids; do
+      log "    answering $qid from the resolved brief"
+      if ! api -X POST "$BASE/api/items/$FEATURE_ID/grill/$qid/answer" \
+          -H "X-User: $PO_USER" -H 'X-Role: PO' -H 'Content-Type: application/json' \
+          -d "$(jq -n --arg a "$RESOLVED_ANSWER" '{text: $a}')" >/dev/null 2>&1; then
+        if curl -s "$BASE/api/items/$FEATURE_ID/grill" | jq -e --arg q "$qid" \
+            '[.questions[] | select(.id == $q and .status == "open")] | length == 0' >/dev/null 2>&1; then
+          log "    $qid already resolved (benign race); continuing"
+        else
+          log "FAIL: could not answer grill question $qid and it is still open"
+          return 1
+        fi
+      fi
+    done
+  done
+}
 
-# 2. Answer the grill questions (fixture answers matching stub-llm's questions).
-log "2/12 Poll for grill questions, then answer q1/q4"
+# 1. Discover the seeded live feature and start its real workflow.
+log "1/12 Start live restaurant demo feature via /api/demo/live/start"
+DEMO_JSON=$(api "$BASE/api/demo")
+if ! echo "$DEMO_JSON" | jq -e '.enabled == true' >/dev/null; then
+  log "FAIL: /api/demo reports demo disabled: $DEMO_JSON"; exit 1
+fi
+FEATURE_ID=$(echo "$DEMO_JSON" | jq -er '.liveItemId')
+FEATURE_BOARD_ID=$(api "$BASE/api/items/$FEATURE_ID" | jq -er '.boardId')
+log "feature work_item id = $FEATURE_ID (boardId $FEATURE_BOARD_ID)"
+log "live feature: $LIVE_TITLE"
+
+START_JSON=$(api -X POST "$BASE/api/demo/live/start")
+STARTED_ID=$(echo "$START_JSON" | jq -er '.itemId')
+if [ "$STARTED_ID" != "$FEATURE_ID" ]; then
+  log "FAIL: /api/demo/live/start returned itemId $STARTED_ID != liveItemId $FEATURE_ID"; exit 1
+fi
+
+# 2. Poll for grill questions, then answer each from the resolved brief.
+log "2/12 Poll for grill questions, answer from resolved brief"
 poll "grill questions posted" 180 bash -c \
-  "curl -sf '$BASE/api/items/$FEATURE_ID/board-comments' | jq -e 'length > 0'" >/dev/null
-api -X POST "$BASE/webhooks/local" -H 'Content-Type: application/json' -d '{
-  "kind": "comment.added", "boardId": "'"$FEATURE_BOARD_ID"'", "rev": 2,
-  "author": "'"$PO_USER"'", "text": "q1: Current filtered view, max 10k rows."
-}' >/dev/null
-api -X POST "$BASE/webhooks/local" -H 'Content-Type: application/json' -d '{
-  "kind": "comment.added", "boardId": "'"$FEATURE_BOARD_ID"'", "rev": 3,
-  "author": "'"$PO_USER"'", "text": "q4: Audit every export; 10 per user per hour."
-}' >/dev/null
+  "curl -sf '$BASE/api/items/$FEATURE_ID/grill' | jq -e '(.questions | length) > 0 and .resolved == false'"
+answer_open_questions
 
-# 3. Story drafted, awaiting-G1.
+# 3. Story drafted, awaiting-G1 (parentId == the feature's boardId, never first/last story globally).
 log "3/12 Poll for story draft (awaiting-G1)"
 STORY_ID=$(poll "story work_items row" 120 bash -c \
-  "curl -sf '$BASE/api/items' | jq -er '[.[] | select(.kind==\"story\")] | last | .id'")
+  "curl -sf '$BASE/api/items' | jq -er '.[] | select(.kind==\"story\" and .parentId==\"$FEATURE_BOARD_ID\") | .id'")
+STORY_BOARD_ID=$(api "$BASE/api/items/$STORY_ID" | jq -er '.boardId')
 poll "story awaiting-G1" 180 bash -c \
-  "curl -sf '$BASE/api/items/$STORY_ID' | jq -e 'select(.latestVersion==1)'" >/dev/null
-log "story work_item id = $STORY_ID"
+  "curl -sf '$BASE/api/items/$STORY_ID' | jq -e 'select(.latestVersion==1)'"
+log "story work_item id = $STORY_ID (boardId $STORY_BOARD_ID)"
 
 # 4. Gate 1: PO + Squad Lead approve v1 directly.
 log "4/12 Approve gate 1 as PO and Squad Lead"
@@ -80,20 +124,20 @@ api -X POST "$BASE/api/items/$STORY_ID/approve" -H "X-User: $PO_USER" -H 'X-Role
 api -X POST "$BASE/api/items/$STORY_ID/approve" -H "X-User: $LEAD_USER" -H 'X-Role: SquadLead' \
   -H 'Content-Type: application/json' -d '{"note":"scope ok"}' >/dev/null
 poll "gate 1 passed -> approved" 120 bash -c \
-  "curl -sf '$BASE/api/items/$STORY_ID' | jq -e 'select(.canonicalState==\"approved\")'" >/dev/null
+  "curl -sf '$BASE/api/items/$STORY_ID' | jq -e 'select(.canonicalState==\"approved\")'"
 log "    OK: gate 1 passed"
 
 # 5-7. Plan -> build loop -> review -> PR -> awaiting-G2 (real omp sessions, can take minutes).
 log "5/12 Poll for planned (plan agent ran, tasks.md written)"
 poll "story planned" 120 bash -c \
-  "curl -sf '$BASE/api/items/$STORY_ID' | jq -e 'select(.canonicalState==\"planned\" or .canonicalState==\"in-progress\" or .canonicalState==\"awaiting-G2\")'" >/dev/null
+  "curl -sf '$BASE/api/items/$STORY_ID' | jq -e 'select(.canonicalState==\"planned\" or .canonicalState==\"in-progress\" or .canonicalState==\"awaiting-G2\")'"
 log "6/12 Poll for in-progress (build loop started)"
 poll "story in-progress" 120 bash -c \
-  "curl -sf '$BASE/api/items/$STORY_ID' | jq -e 'select(.canonicalState==\"in-progress\" or .canonicalState==\"awaiting-G2\")'" >/dev/null
+  "curl -sf '$BASE/api/items/$STORY_ID' | jq -e 'select(.canonicalState==\"in-progress\" or .canonicalState==\"awaiting-G2\")'"
 log "    OK: build loop running - this drives real omp sessions, can take several minutes"
 log "7/12 Poll for awaiting-G2 (build loop + review agent finished, PR opened)"
 poll "story awaiting-G2" 900 bash -c \
-  "curl -sf '$BASE/api/items/$STORY_ID' | jq -e 'select(.canonicalState==\"awaiting-G2\")'" >/dev/null
+  "curl -sf '$BASE/api/items/$STORY_ID' | jq -e 'select(.canonicalState==\"awaiting-G2\")'"
 log "    OK: awaiting-G2"
 
 # 8. Gate 2: FS Developer + QA approve.
@@ -118,14 +162,14 @@ if [ "$OPEN_BLOCKING" != "0" ]; then
     -H 'Content-Type: application/json' -d '{"note":"verifier green, scope clean on the actual diff"}' >/dev/null
 fi
 poll "gate 2 passed -> awaiting-G3" 240 bash -c \
-  "curl -sf '$BASE/api/items/$STORY_ID' | jq -e 'select(.canonicalState==\"awaiting-G3\")'" >/dev/null
+  "curl -sf '$BASE/api/items/$STORY_ID' | jq -e 'select(.canonicalState==\"awaiting-G3\")'"
 log "    OK: gate 2 passed, release agent drafted the pack"
 
 # 9. Seed metric samples BEFORE gate 3 passes: the workflow deploys and runs the one monitor
 # evaluation pass immediately once gate 3 is satisfied, so the samples must already be in the
 # shared metric_samples table (control-plane and agents are separate JVMs; see LocalMetricsAdapter)
-# and within the export-error-rate rule's "> 2% over 15m" trailing window before that happens.
-log "9/12 Seed http_5xx_rate samples above the export-error-rate threshold"
+# and within the http-error-rate rule's "> 2% over 15m" trailing window before that happens.
+log "9/12 Seed http_5xx_rate samples above the http-error-rate threshold"
 for v in 2.8 3.1 3.4; do
   api -X POST "$BASE/api/metrics" -H 'Content-Type: application/json' \
     -d '{"signal":"http_5xx_rate","value":'"$v"'}' >/dev/null
@@ -147,17 +191,28 @@ sign rollout-plan "$LEAD_USER" SquadLead
 sign monitor-rules "$QA_USER" QA
 sign test-evidence "$QA_USER" QA
 poll "gate 3 passed -> done (deployed)" 180 bash -c \
-  "curl -sf '$BASE/api/items/$STORY_ID' | jq -e 'select(.canonicalState==\"done\")'" >/dev/null
+  "curl -sf '$BASE/api/items/$STORY_ID' | jq -e 'select(.canonicalState==\"done\")'"
 log "    OK: gate 3 passed, release deployed"
 
-# 11. Verify the deploy marker + monitor trip card, both real side effects.
+# 11. Verify the deploy marker + monitor trip card, both real side effects, linked to THIS story.
 log "11/12 Verify deploy marker file and monitor trip card"
-RELEASE_ID=$(ls "$REPO_PATH"/.git/pdlc-deploys/*.json | tail -1)
-log "deploy marker: $RELEASE_ID"
-cat "$RELEASE_ID" | jq .
+# Deploy marker is named <releaseId>.json; resolve THIS story's releaseId from its release item's
+# description ("Release pack <releaseId>"), never the last sidecar globally.
+RELEASE_ITEM_ID=$(curl -sf "$BASE/api/items" | jq -er '.[] | select(.kind=="release" and .parentId=="'"$STORY_BOARD_ID"'") | .id')
+RELEASE_DESC=$(api "$BASE/api/items/$RELEASE_ITEM_ID" | jq -r '.description')
+RELEASE_ID=$(printf '%s' "$RELEASE_DESC" | sed -nE 's/^Release pack //p')
+if [ -z "$RELEASE_ID" ]; then
+  log "FAIL: could not resolve release id from release item $RELEASE_ITEM_ID (description: $RELEASE_DESC)"; exit 1
+fi
+DEPLOY_MARKER="$REPO_PATH/.git/pdlc-deploys/$RELEASE_ID.json"
+if [ ! -f "$DEPLOY_MARKER" ]; then
+  log "FAIL: no deploy marker at $DEPLOY_MARKER"; exit 1
+fi
+log "deploy marker: $DEPLOY_MARKER"
+cat "$DEPLOY_MARKER" | jq .
 
 TRIP_ITEM=$(poll "monitor trip card filed" 120 bash -c \
-  "curl -sf '$BASE/api/items' | jq -e '.[] | select(.kind==\"bug\" or .kind==\"feature\")'")
+  "curl -sf '$BASE/api/items' | jq -e '.[] | select((.kind==\"bug\" or .kind==\"feature\") and .parentId==\"$STORY_BOARD_ID\")'")
 echo "$TRIP_ITEM" | jq .
 log "    OK: monitor trip filed a card"
 

@@ -10,6 +10,7 @@ import { extendLineTarget, formatLineTarget, parseLineTarget } from '../ui-utils
 import PageHeader from '../components/PageHeader';
 import StatusBadge from '../components/StatusBadge';
 import AgentActivityBadge from '../components/AgentActivityBadge';
+import DemoSnapshotBadge from '../components/DemoSnapshotBadge';
 import ErrorCallout from '../components/ErrorCallout';
 import Panel from '../components/Panel';
 import { useReviewActions } from '../review/useReviewActions';
@@ -94,6 +95,8 @@ export default function TaskDetailPage({ item }: Props) {
 
   const docsLoading = specDocsQuery.isLoading;
 
+  const readOnly = item.snapshot != null || (story != null && story.snapshot != null);
+
   return (
     <Box>
       <PageHeader
@@ -104,6 +107,7 @@ export default function TaskDetailPage({ item }: Props) {
             <Badge color="gray">task</Badge>
             <StatusBadge state={item.canonicalState} />
             <AgentActivityBadge run={item.activeRun} />
+            {item.snapshot && <DemoSnapshotBadge snapshot={item.snapshot} />}
           </>
         }
         meta={`board ${item.boardId} · profile ${item.profile}`}
@@ -167,6 +171,7 @@ export default function TaskDetailPage({ item }: Props) {
                     onApproveAgentResult={(commentId) => actions.approveAgentResult.mutate(commentId)}
                     approvingAgentResult={actions.approveAgentResult.isPending}
                     canApproveAgentResult={actions.g1RoleAllowed}
+                    readOnly={readOnly}
                   />
                 </div>
               </div>
@@ -190,7 +195,7 @@ export default function TaskDetailPage({ item }: Props) {
             <QualityTab id={item.id} />
           </Tabs.Content>
           <Tabs.Content value="activity">
-            <ActivityTab id={item.id} />
+            <ActivityTab id={item.id} snapshot={readOnly} />
           </Tabs.Content>
         </Box>
       </Tabs.Root>

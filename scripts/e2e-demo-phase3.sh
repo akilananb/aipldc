@@ -1,22 +1,24 @@
 #!/usr/bin/env bash
 # scripts/e2e-demo-phase3.sh — scripted end-to-end walkthrough of build-order phase 3, against the
-# `local` profile and the real target-repos/orders-service git repo.
-# Demonstrates: intake -> grill -> answers -> story v1 -> gate 1 (PO + SquadLead approve) ->
-# plan agent (one task per scenario) -> build loop (omp over ACP against a real git worktree,
-# real npm test verifier) -> review agent -> PR opened on the shared story branch -> gate 2
-# (FSDeveloper + QA approve) -> board state `approved`.
+# `local` profile's restaurant demo and the real /Users/work/Documents/restaurant-runtime git repo.
+# Exercises the SEEDED demo-live feature (started via /api/demo/live/start, not a synthetic
+# webhook item.created): intake -> grill -> answers from the resolved brief -> story v1 -> gate 1
+# (PO + SquadLead approve) -> plan agent (one task per scenario) -> build loop (omp over ACP
+# against a real git worktree, real npm test verifier) -> review agent -> PR opened on the shared
+# story branch -> gate 2 (FSDeveloper + QA approve) -> board state `approved`.
 #
 # Prerequisite: the build-worker host process must be running and polling task queue "build"
 # (ANTHROPIC_OAUTH_TOKEN / TARGET_REPO_PATH set) - this script does not start it.
 set -euo pipefail
 
 BASE="${BASE_URL:-http://localhost:8081}"
-FEATURE_BOARD_ID="${FEATURE_BOARD_ID:-4413}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+FIXTURE="$SCRIPT_DIR/../control-plane/src/main/resources/demo/restaurant-demo.json"
 PO_USER="po@acme"
 LEAD_USER="lead@acme"
 FSDEV_USER="fsdev@acme"
 QA_USER="qa@acme"
-REPO_PATH="${TARGET_REPO_PATH:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/target-repos/orders-service}"
+REPO_PATH="${TARGET_REPO_PATH:-/Users/work/Documents/restaurant-runtime}"
 
 log() { echo "[e2e-phase3] $*" >&2; }
 
@@ -39,39 +41,79 @@ poll() {
 
 api() { curl -sf "$@"; }
 
-# 1. Intake.
-log "1/12 POST item.created for feature #$FEATURE_BOARD_ID"
-api -X POST "$BASE/webhooks/local" -H 'Content-Type: application/json' -d '{
-  "kind": "item.created",
-  "boardId": "'"$FEATURE_BOARD_ID"'",
-  "rev": 1,
-  "itemKind": "feature",
-  "title": "Export the filtered orders view to CSV",
-  "description": "Sales ops wants to export the current filtered orders view to CSV.",
-  "areaPath": "orders"
-}' >/dev/null
+# --- fixture bundle (authored by the parallel fixture task) -------------------------------
+[ -f "$FIXTURE" ] || {
+  echo "error: fixture bundle missing at $FIXTURE (the DemoInitializer's restaurant-demo.json has not landed yet; run again after the fixture task completes)" >&2
+  exit 1
+}
+LIVE_TITLE="$(jq -r '.live.title' "$FIXTURE")"
+LIVE_DESCRIPTION="$(jq -r '.live.description' "$FIXTURE")"
+RESOLVED_ANSWER="$(jq -r '.live.resolvedAnswer' "$FIXTURE")"
+[ -n "$RESOLVED_ANSWER" ] && [ "$RESOLVED_ANSWER" != "null" ] || {
+  echo "error: $FIXTURE has no .live.resolvedAnswer" >&2; exit 1
+}
 
-FEATURE_ID=$(poll "feature work_items row" 240 bash -c \
-  "curl -sf '$BASE/api/items' | jq -r '.[] | select(.boardId==\"$FEATURE_BOARD_ID\") | .id'")
-log "feature work_item id = $FEATURE_ID"
+answer_open_questions() {
+  local deadline=$((SECONDS + 120)) grill_json open_ids qid
+  while true; do
+    grill_json="$(curl -s "$BASE/api/items/$FEATURE_ID/grill" || true)"
+    if printf '%s' "$grill_json" | jq -e '.resolved == true' >/dev/null 2>&1; then
+      log "    OK: all grill questions resolved"
+      return 0
+    fi
+    open_ids="$(printf '%s' "$grill_json" | jq -r '.questions[]? | select(.status == "open") | .id' 2>/dev/null || true)"
+    if [ -z "$open_ids" ]; then
+      if [ "$SECONDS" -ge "$deadline" ]; then
+        log "FAIL: grill questions never resolved; last state: $grill_json"
+        return 1
+      fi
+      sleep 3
+      continue
+    fi
+    for qid in $open_ids; do
+      log "    answering $qid from the resolved brief"
+      if ! api -X POST "$BASE/api/items/$FEATURE_ID/grill/$qid/answer" \
+          -H "X-User: $PO_USER" -H 'X-Role: PO' -H 'Content-Type: application/json' \
+          -d "$(jq -n --arg a "$RESOLVED_ANSWER" '{text: $a}')" >/dev/null 2>&1; then
+        if curl -s "$BASE/api/items/$FEATURE_ID/grill" | jq -e --arg q "$qid" \
+            '[.questions[] | select(.id == $q and .status == "open")] | length == 0' >/dev/null 2>&1; then
+          log "    $qid already resolved (benign race); continuing"
+        else
+          log "FAIL: could not answer grill question $qid and it is still open"
+          return 1
+        fi
+      fi
+    done
+  done
+}
 
-# 2. Answer the grill questions (fixture answers matching stub-llm's questions).
-log "2/12 Poll for grill questions, then answer q1/q4"
-poll "grill questions posted" 60 bash -c \
-  "curl -sf '$BASE/api/items/$FEATURE_ID/board-comments' | jq -e 'length > 0'" >/dev/null
-api -X POST "$BASE/webhooks/local" -H 'Content-Type: application/json' -d '{
-  "kind": "comment.added", "boardId": "'"$FEATURE_BOARD_ID"'", "rev": 2,
-  "author": "'"$PO_USER"'", "text": "q1: Current filtered view, max 10k rows."
-}' >/dev/null
-api -X POST "$BASE/webhooks/local" -H 'Content-Type: application/json' -d '{
-  "kind": "comment.added", "boardId": "'"$FEATURE_BOARD_ID"'", "rev": 3,
-  "author": "'"$PO_USER"'", "text": "q4: Audit every export; 10 per user per hour."
-}' >/dev/null
+# 1. Discover the seeded live feature and start its real workflow.
+log "1/12 Start live restaurant demo feature via /api/demo/live/start"
+DEMO_JSON=$(api "$BASE/api/demo")
+if ! echo "$DEMO_JSON" | jq -e '.enabled == true' >/dev/null; then
+  log "FAIL: /api/demo reports demo disabled: $DEMO_JSON"; exit 1
+fi
+FEATURE_ID=$(echo "$DEMO_JSON" | jq -er '.liveItemId')
+FEATURE_BOARD_ID=$(api "$BASE/api/items/$FEATURE_ID" | jq -er '.boardId')
+log "feature work_item id = $FEATURE_ID (boardId $FEATURE_BOARD_ID)"
+log "live feature: $LIVE_TITLE"
 
-# 3. Story drafted, awaiting-G1.
+START_JSON=$(api -X POST "$BASE/api/demo/live/start")
+STARTED_ID=$(echo "$START_JSON" | jq -er '.itemId')
+if [ "$STARTED_ID" != "$FEATURE_ID" ]; then
+  log "FAIL: /api/demo/live/start returned itemId $STARTED_ID != liveItemId $FEATURE_ID"; exit 1
+fi
+
+# 2. Poll for grill questions, then answer each from the resolved brief.
+log "2/12 Poll for grill questions, answer from resolved brief"
+poll "grill questions posted" 120 bash -c \
+  "curl -sf '$BASE/api/items/$FEATURE_ID/grill' | jq -e '(.questions | length) > 0 and .resolved == false'" >/dev/null
+answer_open_questions
+
+# 3. Story drafted, awaiting-G1 (parentId == the feature's boardId, never first/last story globally).
 log "3/12 Poll for story draft (awaiting-G1)"
 STORY_ID=$(poll "story work_items row" 120 bash -c \
-  "curl -sf '$BASE/api/items' | jq -r '.[] | select(.kind==\"story\") | .id' | tail -1")
+  "curl -sf '$BASE/api/items' | jq -er '.[] | select(.kind==\"story\" and .parentId==\"$FEATURE_BOARD_ID\") | .id'")
 poll "story awaiting-G1" 60 bash -c \
   "curl -sf '$BASE/api/items/$STORY_ID' | jq -e 'select(.latestVersion==1)'" >/dev/null
 log "story work_item id = $STORY_ID"
@@ -108,7 +150,7 @@ log "    OK: awaiting-G2"
 BRANCH="story/$(api "$BASE/api/items/$STORY_ID" | jq -r .boardId)"
 log "8/12 Inspect branch $BRANCH in $REPO_PATH"
 git -C "$REPO_PATH" log --oneline "$BRANCH" | head -10
-git -C "$REPO_PATH" diff main..."$BRANCH" --stat
+git -C "$REPO_PATH" diff restaurant-base..."$BRANCH" --stat
 
 # 9. review.md shows the plan + build + review trail.
 log "9/12 GET review.md"
@@ -119,9 +161,19 @@ if ! echo "$REVIEW_MD" | grep -q "PR opened"; then
 fi
 log "    OK: review.md shows the PR-opened block"
 
-# 10. PR record + comments (LocalGitRepoAdapter's sidecar store - no dedicated REST endpoint yet).
-log "10/12 Inspect PR record"
-PR_JSON=$(ls "$REPO_PATH"/.git/pdlc-prs/*.json | tail -1)
+# 10. PR record for THIS story's branch (LocalGitRepoAdapter sidecar store, keyed by branch).
+log "10/12 Inspect PR record for branch $BRANCH"
+PR_JSON=""
+for f in "$REPO_PATH"/.git/pdlc-prs/*.json; do
+  [ -f "$f" ] || continue
+  if jq -e --arg b "$BRANCH" 'select(.branch == $b)' "$f" >/dev/null 2>&1; then
+    PR_JSON="$f"
+    break
+  fi
+done
+if [ -z "$PR_JSON" ]; then
+  log "FAIL: no PR record found for branch $BRANCH in $REPO_PATH/.git/pdlc-prs/"; exit 1
+fi
 cat "$PR_JSON" | jq .
 
 # 11. Gate 2: FS Developer + QA approve.

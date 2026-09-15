@@ -8,6 +8,7 @@ import { intentBadgeColor } from '../ui-utils';
 import PageHeader from '../components/PageHeader';
 import StatusBadge from '../components/StatusBadge';
 import AgentActivityBadge from '../components/AgentActivityBadge';
+import DemoSnapshotBadge from '../components/DemoSnapshotBadge';
 import EmptyState from '../components/EmptyState';
 import Panel from '../components/Panel';
 import ClarificationPanel from '../components/ClarificationPanel';
@@ -41,6 +42,7 @@ export default function FeaturePage({ item }: Props) {
           <>
             <StatusBadge state={item.canonicalState} />
             <AgentActivityBadge run={item.activeRun} />
+            {item.snapshot && <DemoSnapshotBadge snapshot={item.snapshot} />}
           </>
         }
       />
@@ -73,7 +75,7 @@ export default function FeaturePage({ item }: Props) {
 
       <Box mb="4">
         <Panel title="Agent activity">
-          <ActivityTab id={item.id} />
+          <ActivityTab id={item.id} snapshot={item.snapshot != null} />
         </Panel>
       </Box>
 

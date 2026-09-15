@@ -1,5 +1,5 @@
 import { getIdentity } from './identity';
-import type { AgentRun, ArtifactVersion, BoardComment, Comment, CommentIntent, GrillQuestions, ItemDetail, ItemSummary, QualityReport, ReleaseDocument, SpecDocs } from './types';
+import type { AgentRun, ArtifactVersion, BoardComment, Comment, CommentIntent, DemoStatus, GrillQuestions, ItemDetail, ItemSummary, QualityReport, ReleaseDocument, SpecDocs } from './types';
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8081';
 
@@ -66,6 +66,16 @@ export interface AddCommentBody {
 export const api = {
   listItems(): Promise<ItemSummary[]> {
     return request<ItemSummary[]>('/api/items');
+  },
+
+  getDemoStatus(): Promise<DemoStatus> {
+    return request<DemoStatus>('/api/demo');
+  },
+
+  startLiveDemo(): Promise<{ itemId: string }> {
+    return request<{ itemId: string }>('/api/demo/live/start', {
+      method: 'POST',
+    });
   },
 
   getItem(id: string): Promise<ItemDetail> {

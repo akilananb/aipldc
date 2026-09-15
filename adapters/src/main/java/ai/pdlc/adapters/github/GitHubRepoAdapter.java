@@ -179,6 +179,11 @@ public final class GitHubRepoAdapter implements RepoPort {
     }
 
     @Override
+    public String resolveRef(String ref) {
+        return refSha(ref);
+    }
+
+    @Override
     public PRRef openPR(String branch, String target, String title, String body) {
         ObjectNode payload = mapper.createObjectNode();
         payload.put("title", title);

@@ -38,23 +38,37 @@ import java.util.UUID;
 public class ReleaseController {
 
     private static final String STAGE_PREFIX = "release-pack:";
-
     private final WorkItemRepository workItems;
     private final ReleaseDocumentRepository releaseDocuments;
     private final WorkflowStubs workflowStubs;
     private final IdentityResolver identityResolver;
+    private final ai.pdlc.controlplane.demo.DemoSnapshotService demoSnapshots;
 
     public ReleaseController(WorkItemRepository workItems, ReleaseDocumentRepository releaseDocuments,
-                              WorkflowStubs workflowStubs, IdentityResolver identityResolver) {
+                              WorkflowStubs workflowStubs, IdentityResolver identityResolver,
+                              ai.pdlc.controlplane.demo.DemoSnapshotService demoSnapshots) {
         this.workItems = workItems;
         this.releaseDocuments = releaseDocuments;
         this.workflowStubs = workflowStubs;
         this.identityResolver = identityResolver;
+        this.demoSnapshots = demoSnapshots;
     }
 
     @GetMapping("/{id}/release")
     public ResponseEntity<List<ReleaseDocumentDto>> documents(@PathVariable UUID id) {
         WorkItemEntity story = requireItem(id);
+        java.util.Optional<ai.pdlc.controlplane.demo.DemoSnapshotEntity> snap = demoSnapshots.find(id);
+        if (snap.isPresent()) {
+            String json = snap.get().gateJson();
+            if (json == null) {
+                return ResponseEntity.ok(List.of());
+            }
+            ReviewStateDto gate = readGateJson(json);
+            List<ReleaseDocumentEntity> docs = releaseDocuments.findByStoryIdAndPackVersion(story.id(), gate.version());
+            return ResponseEntity.ok(docs.stream()
+                    .map(d -> ReleaseDocumentDto.from(d, gate.approvals().containsKey(d.docId())))
+                    .toList());
+        }
         ReviewState state = featureWorkflow(story).state();
         List<ReleaseDocumentEntity> docs = releaseDocuments.findByStoryIdAndPackVersion(story.id(), state.version());
         return ResponseEntity.ok(docs.stream()
@@ -62,9 +76,20 @@ public class ReleaseController {
                 .toList());
     }
 
+    private static final com.fasterxml.jackson.databind.ObjectMapper SNAPSHOT_JSON = new com.fasterxml.jackson.databind.ObjectMapper();
+
+    private static ReviewStateDto readGateJson(String json) {
+        try {
+            return SNAPSHOT_JSON.readValue(json, ReviewStateDto.class);
+        } catch (Exception e) {
+            throw new IllegalStateException("Corrupt demo snapshot gate JSON", e);
+        }
+    }
+
     @PostMapping("/{id}/release/{docId}/sign")
     public ResponseEntity<ReviewStateDto> sign(@PathVariable UUID id, @PathVariable String docId,
                                                 @RequestBody ApproveRequest request, HttpServletRequest httpRequest) {
+        demoSnapshots.requireWritable(id);
         Identity identity = identityResolver.resolve(httpRequest);
         WorkItemEntity story = requireItem(id);
         FeatureWorkflow stub = featureWorkflow(story);
@@ -85,6 +110,7 @@ public class ReleaseController {
 
     @PostMapping("/{id}/release/request-changes")
     public ResponseEntity<ReviewStateDto> requestChanges(@PathVariable UUID id, HttpServletRequest httpRequest) {
+        demoSnapshots.requireWritable(id);
         Identity identity = identityResolver.resolve(httpRequest);
         WorkItemEntity story = requireItem(id);
         FeatureWorkflow stub = featureWorkflow(story);

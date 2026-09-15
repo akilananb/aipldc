@@ -66,7 +66,13 @@ public class ReviewTrailService {
 
     public String readReviewMd(WorkItemRef story, String slug) {
         String defaultBranch = pdlcConfig.profile(story.profile()).repo().defaultBranch();
-        return repo.readFile(defaultBranch, slug + "/" + REVIEW_MD_FILE);
+        return readReviewMd(story, slug, defaultBranch);
+    }
+
+    /** Reads {@code review.md} from an explicit {@code ref} (a snapshot's frozen commit sha)
+     * instead of the profile's mutable default branch - a demo snapshot's trail never moves. */
+    public String readReviewMd(WorkItemRef story, String slug, String ref) {
+        return repo.readFile(ref, slug + "/" + REVIEW_MD_FILE);
     }
 
     public void appendReviewEvent(UUID workItemId, String kind, Map<String, Object> payload) {
