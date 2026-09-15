@@ -1,6 +1,13 @@
 name: pdlc-pilot
 
-# Langfuse v3 (self-hosted LLM tracing). Shared by langfuse-web and langfuse-worker.
+# Langfuse v3 (self-hosted LLM tracing), OPTIONAL. Shared by langfuse-web and langfuse-worker.
+# All six langfuse-* services below carry `profiles: [langfuse]`: `docker compose up`/`pull`
+# skip them entirely (no image pull, no container) unless `COMPOSE_PROFILES=langfuse` is set in
+# infra/.env. `agents` deliberately has no depends_on for langfuse-web — Compose force-starts a
+# profiled dependency of an always-on service regardless of profile (docker/compose#9795), which
+# would defeat the gating. Enabling: set COMPOSE_PROFILES=langfuse plus LANGFUSE_PUBLIC_KEY/
+# LANGFUSE_SECRET_KEY in infra/.env (see infra/.env.example) — AgentsApplication.applyLangfuseFromEnv
+# treats absent/blank keys as tracing-off, so half-enabling (profile only, no keys) stays silent.
 x-langfuse-env: &langfuse-env
   DATABASE_URL: postgresql://langfuse:langfuse@langfuse-postgres:5432/langfuse
   NEXTAUTH_URL: ${LANGFUSE_PUBLIC_URL:-http://localhost:3000}
@@ -129,8 +136,6 @@ services:
         condition: service_healthy
       stub-llm:
         condition: service_started
-      langfuse-web:
-        condition: service_started
     environment:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/pdlc
       SPRING_DATASOURCE_USERNAME: pdlc
@@ -151,11 +156,17 @@ services:
       PDLC_LLM_BASE_URL: ${PDLC_LLM_BASE_URL:-}
       PDLC_LLM_API_KEY: ${PDLC_LLM_API_KEY:-}
       # Langfuse tracing (AgentsApplication.applyLangfuseFromEnv derives the OTLP auth header).
+      # No hardcoded defaults for PUBLIC_URL/PROJECT_ID: a Tracer bean and span/trace IDs exist
+      # regardless of LANGFUSE_TRACING_ENABLED (that flag only gates the OTLP exporter, not span
+      # creation — verified empirically, management.tracing.enabled does not remove the Tracer
+      # bean on this stack). Blanking these instead makes AgentRunTracer.traceUrl() null when
+      # disabled (isBlank check on publicUrl/projectId/traceId), so runs.trace_url stays empty
+      # instead of a dead link into a Langfuse that isn't running.
       LANGFUSE_OTLP_ENDPOINT: http://langfuse-web:3000/api/public/otel/v1/traces
-      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-pk-lf-pdlc-local}
-      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-sk-lf-pdlc-local}
-      LANGFUSE_PUBLIC_URL: ${LANGFUSE_PUBLIC_URL:-http://localhost:3000}
-      LANGFUSE_PROJECT_ID: ${LANGFUSE_PROJECT_ID:-pdlc-pilot}
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+      LANGFUSE_PUBLIC_URL: ${LANGFUSE_PUBLIC_URL:-}
+      LANGFUSE_PROJECT_ID: ${LANGFUSE_PROJECT_ID:-}
     volumes:
       - ./pdlc.yaml:/app/pdlc.yaml:ro
       - /Users/work/Documents/ai-pldc/target-repos/orders-service:/Users/work/Documents/ai-pldc/target-repos/orders-service
@@ -174,6 +185,7 @@ services:
       - "5173:80"
 
   langfuse-postgres:
+    profiles: [langfuse]
     image: postgres:16-alpine
     environment:
       POSTGRES_DB: langfuse
@@ -186,6 +198,7 @@ services:
       retries: 10
 
   langfuse-clickhouse:
+    profiles: [langfuse]
     image: clickhouse/clickhouse-server:25.12
     user: "101:101"
     environment:
@@ -200,6 +213,7 @@ services:
       start_period: 1s
 
   langfuse-minio:
+    profiles: [langfuse]
     image: cgr.dev/chainguard/minio
     entrypoint: sh
     command: -c 'mkdir -p /data/langfuse && minio server --address ":9000" --console-address ":9001" /data'
@@ -214,6 +228,7 @@ services:
       start_period: 1s
 
   langfuse-redis:
+    profiles: [langfuse]
     image: redis:7
     command: >
       --requirepass ${LANGFUSE_REDIS_PASSWORD:-pdlc-redis-secret}
@@ -227,6 +242,7 @@ services:
   # Pinned to an exact v3 patch on purpose: the floating `3`/`3.225` tags briefly served a v4
   # build with destructive migrations (langfuse/langfuse#16923). Bump web+worker together.
   langfuse-worker:
+    profiles: [langfuse]
     image: docker.io/langfuse/langfuse-worker:3.225.7
     depends_on: &langfuse-depends-on
       langfuse-postgres:
@@ -240,6 +256,7 @@ services:
     environment: *langfuse-env
 
   langfuse-web:
+    profiles: [langfuse]
     image: docker.io/langfuse/langfuse:3.225.7
     depends_on: *langfuse-depends-on
     environment:
