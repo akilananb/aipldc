@@ -10,6 +10,8 @@ import ai.pdlc.controlplane.persistence.WorkItemEntity;
 import ai.pdlc.controlplane.persistence.WorkItemRepository;
 import ai.pdlc.controlplane.persistence.QualityReportEntity;
 import ai.pdlc.controlplane.persistence.QualityReportRepository;
+import ai.pdlc.controlplane.persistence.RunEntity;
+import ai.pdlc.controlplane.persistence.RunRepository;
 import ai.pdlc.controlplane.review.ReviewTrailService;
 import ai.pdlc.controlplane.temporal.WorkflowStubs;
 import ai.pdlc.controlplane.web.dto.ApproveRequest;
@@ -19,6 +21,7 @@ import ai.pdlc.controlplane.web.dto.ItemDetailDto;
 import ai.pdlc.controlplane.web.dto.ItemSummaryDto;
 import ai.pdlc.controlplane.web.dto.ReviewStateDto;
 import ai.pdlc.controlplane.web.dto.QualityReportDto;
+import ai.pdlc.controlplane.web.dto.AgentRunDto;
 import ai.pdlc.controlplane.web.dto.SpecDocsDto;
 import ai.pdlc.core.config.PdlcConfig;
 import ai.pdlc.core.domain.Approval;
@@ -45,6 +48,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.time.Instant;
 import java.time.OffsetDateTime;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -63,6 +67,7 @@ public class ItemsController {
     private final ArtifactRepository artifacts;
     private final ApprovalRepository approvalOps;
     private final QualityReportRepository qualityReports;
+    private final RunRepository runs;
     private final BoardPort board;
     private final PdlcConfig pdlcConfig;
     private final WorkflowStubs workflowStubs;
@@ -71,13 +76,14 @@ public class ItemsController {
     private final RepoPort repo;
 
     public ItemsController(WorkItemRepository workItems, ArtifactRepository artifacts,
-                            ApprovalRepository approvalOps, QualityReportRepository qualityReports, BoardPort board,
-                            PdlcConfig pdlcConfig, WorkflowStubs workflowStubs, IdentityResolver identityResolver,
+                            ApprovalRepository approvalOps, QualityReportRepository qualityReports, RunRepository runs,
+                            BoardPort board, PdlcConfig pdlcConfig, WorkflowStubs workflowStubs, IdentityResolver identityResolver,
                             ReviewTrailService reviewTrail, RepoPort repo) {
         this.workItems = workItems;
         this.artifacts = artifacts;
         this.approvalOps = approvalOps;
         this.qualityReports = qualityReports;
+        this.runs = runs;
         this.board = board;
         this.pdlcConfig = pdlcConfig;
         this.workflowStubs = workflowStubs;
@@ -88,9 +94,11 @@ public class ItemsController {
 
     @GetMapping
     public List<ItemSummaryDto> list() {
+        Map<UUID, AgentRunDto> active = activeRuns();
         return workItems.findAllByOrderByUpdatedAtDesc().stream()
                 .map(row -> new ItemSummaryDto(row.id(), row.boardId(), row.kind(),
-                        safeTitle(row), row.canonicalState(), row.updatedAt(), row.parentId(), latestQualityVerdict(row.id())))
+                        safeTitle(row), row.canonicalState(), row.updatedAt(), row.parentId(), latestQualityVerdict(row.id()),
+                        active.get(row.id())))
                 .toList();
     }
 
@@ -102,7 +110,16 @@ public class ItemsController {
         ReviewStateDto gate = queryGate(row);
         return new ItemDetailDto(row.id(), row.profile(), row.boardId(), row.kind(), item.title(), item.description(),
                 row.canonicalState(), latest == null ? null : latest.version(), latest == null ? null : latest.contentHash(),
-                gate, row.parentId(), latestQualityVerdict(row.id()));
+                gate, row.parentId(), latestQualityVerdict(row.id()), activeRuns().get(id));
+    }
+
+    @GetMapping("/{id}/activity")
+    public List<AgentRunDto> activity(@PathVariable UUID id) {
+        requireItem(id);
+        OffsetDateTime now = OffsetDateTime.now();
+        return runs.findByWorkItemIdOrderByCreatedAtDesc(id).stream().limit(100)
+                .map(r -> AgentRunDto.from(r, now))
+                .toList();
     }
 
     @GetMapping("/{id}/quality")
@@ -338,6 +355,19 @@ public class ItemsController {
     private String latestQualityVerdict(UUID workItemId) {
         return qualityReports.findByWorkItemIdOrderByCreatedAtDesc(workItemId).stream().findFirst()
                 .map(QualityReportEntity::verdict).orElse(null);
+    }
+
+    /** One live run per work item (newest wins, rows are newest-first), keyed by work item id. */
+    private Map<UUID, AgentRunDto> activeRuns() {
+        OffsetDateTime now = OffsetDateTime.now();
+        Map<UUID, AgentRunDto> active = new LinkedHashMap<>();
+        for (RunEntity r : runs.findByOutcomeOrderByCreatedAtDesc("running")) {
+            AgentRunDto dto = AgentRunDto.from(r, now);
+            if ("running".equals(dto.status())) {
+                active.putIfAbsent(r.workItemId(), dto);
+            }
+        }
+        return active;
     }
 
     private String readOrNull(String branch, String path) {

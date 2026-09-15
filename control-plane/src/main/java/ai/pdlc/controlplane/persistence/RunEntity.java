@@ -11,14 +11,12 @@ public record RunEntity(
         @Id UUID id,
         UUID workItemId,
         String agent,
+        String phase,
         String workflowRunId,
         String traceUrl,
         Long tokens,
         Integer iterations,
         String outcome,
-        OffsetDateTime createdAt) {
-
-    public static RunEntity newRow(UUID workItemId, String agent, String workflowRunId, String traceUrl, Long tokens, Integer iterations, String outcome) {
-        return new RunEntity(null, workItemId, agent, workflowRunId, traceUrl, tokens, iterations, outcome, OffsetDateTime.now());
-    }
+        OffsetDateTime createdAt,
+        OffsetDateTime finishedAt) {
 }

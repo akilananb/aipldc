@@ -8,4 +8,6 @@ import java.util.UUID;
 public interface RunRepository extends CrudRepository<RunEntity, UUID> {
 
     List<RunEntity> findByWorkItemIdOrderByCreatedAtDesc(UUID workItemId);
+
+    List<RunEntity> findByOutcomeOrderByCreatedAtDesc(String outcome);
 }

@@ -311,9 +311,9 @@ public class BoardSideEffectsImpl implements BoardSideEffects {
 
         for (BuildResult r : results) {
             jdbc.update("""
-                    INSERT INTO runs (work_item_id, agent, workflow_run_id, trace_url, tokens, iterations, outcome)
-                    VALUES (?, 'build-worker', ?, NULL, ?, ?, ?)
-                    """, storyRow.id(), story.workflowId(), r.tokens(), r.iterations(), r.verifier().result());
+                    INSERT INTO runs (work_item_id, agent, phase, workflow_run_id, trace_url, tokens, iterations, outcome, finished_at)
+                    VALUES (?, 'build-worker', ?, ?, NULL, ?, ?, ?, now())
+                    """, storyRow.id(), r.taskId(), story.workflowId(), r.tokens(), r.iterations(), r.verifier().result());
         }
 
         for (ReviewFinding f : review.findings()) {
@@ -391,9 +391,9 @@ public class BoardSideEffectsImpl implements BoardSideEffects {
 
         for (BuildResult r : rerunResults) {
             jdbc.update("""
-                    INSERT INTO runs (work_item_id, agent, workflow_run_id, trace_url, tokens, iterations, outcome)
-                    VALUES (?, 'build-worker', ?, NULL, ?, ?, ?)
-                    """, storyRow.id(), story.workflowId(), r.tokens(), r.iterations(), r.verifier().result());
+                    INSERT INTO runs (work_item_id, agent, phase, workflow_run_id, trace_url, tokens, iterations, outcome, finished_at)
+                    VALUES (?, 'build-worker', ?, ?, NULL, ?, ?, ?, now())
+                    """, storyRow.id(), r.taskId(), story.workflowId(), r.tokens(), r.iterations(), r.verifier().result());
         }
 
         if (storyRow.specChangePath() != null) {
@@ -505,9 +505,9 @@ public class BoardSideEffectsImpl implements BoardSideEffects {
         RunRef run = ci.runDeploy("production", release.releaseId(), Map.of("branch", branch));
         RunStatus status = ci.getRun(run.id());
         jdbc.update("""
-                INSERT INTO runs (work_item_id, agent, workflow_run_id, trace_url, tokens, iterations, outcome)
-                VALUES (?, 'ci-deploy', ?, NULL, NULL, NULL, ?)
-                """, storyRow.id(), story.workflowId(), status.state());
+                INSERT INTO runs (work_item_id, agent, phase, workflow_run_id, trace_url, tokens, iterations, outcome, finished_at)
+                VALUES (?, 'ci-deploy', ?, ?, NULL, NULL, NULL, ?, now())
+                """, storyRow.id(), release.releaseId(), story.workflowId(), status.state());
         if (!status.success()) {
             throw new IllegalStateException("Deploy failed for release " + release.releaseId() + ": run " + run.id());
         }

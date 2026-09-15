@@ -14,5 +14,6 @@ public record ItemDetailDto(
         String latestContentHash,
         ReviewStateDto gate,
         String parentId,
-        String qualityVerdict) {
+        String qualityVerdict,
+        AgentRunDto activeRun) {
 }

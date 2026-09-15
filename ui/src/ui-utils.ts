@@ -22,6 +22,51 @@ export function stateBadgeColor(state: string): BadgeColor {
   }
 }
 
+export function agentRunLabel(run: { agent: string; phase: string | null }): string {
+  switch (`${run.agent}/${run.phase ?? ''}`) {
+    case 'grill/questions':
+      return 'Grill agent drafting clarification questions';
+    case 'grill/answers':
+      return 'Grill agent evaluating the answers';
+    case 'po/draft':
+      return 'PO agent drafting the story';
+    case 'po/revise':
+      return 'PO agent revising the story';
+    case 'quality/story':
+      return 'Quality agent reviewing the story';
+    case 'quality/task':
+      return 'Quality agent reviewing the task';
+    case 'plan/plan':
+      return 'Plan agent breaking the story into tasks';
+    case 'review/review':
+      return 'Review agent reviewing the diff';
+    case 'release/draft':
+      return 'Release agent drafting the release pack';
+    case 'release/redraft':
+      return 'Release agent redrafting the release pack';
+    case 'monitor/evaluate':
+      return 'Monitor agent evaluating monitor rules';
+    default:
+      if (run.agent === 'mention') return `@${run.phase} agent analyzing`;
+      if (run.agent === 'build-worker') return `Build worker: task ${run.phase ?? '?'}`;
+      if (run.agent === 'ci-deploy') return `Deploy ${run.phase ?? ''}`.trim();
+      return `${run.agent} agent working`;
+  }
+}
+
+export function runOutcomeColor(outcome: string | null): BadgeColor {
+  switch (outcome) {
+    case 'ok':
+    case 'green':
+      return 'green';
+    case 'error':
+    case 'red':
+      return 'red';
+    default:
+      return 'gray';
+  }
+}
+
 export function intentBadgeColor(intent: string): BadgeColor {
   switch (intent) {
     case 'change':

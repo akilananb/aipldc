@@ -11,5 +11,6 @@ public record ItemSummaryDto(
         String canonicalState,
         OffsetDateTime updatedAt,
         String parentId,
-        String qualityVerdict) {
+        String qualityVerdict,
+        AgentRunDto activeRun) {
 }

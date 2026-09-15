@@ -8,6 +8,7 @@ import type { CommentIntent } from '../types';
 import { extendLineTarget, formatLineTarget, parseLineTarget } from '../ui-utils';
 import PageHeader from '../components/PageHeader';
 import StatusBadge from '../components/StatusBadge';
+import AgentActivityBadge from '../components/AgentActivityBadge';
 import ErrorCallout from '../components/ErrorCallout';
 import EmptyState from '../components/EmptyState';
 import QualityIcon from '../components/QualityIcon';
@@ -20,11 +21,12 @@ import SourceTab from '../review/SourceTab';
 import DiffTab from '../review/DiffTab';
 import ReviewMdTab from '../review/ReviewMdTab';
 import QualityTab from '../review/QualityTab';
+import ActivityTab from '../review/ActivityTab';
 import ReleaseTab from '../review/ReleaseTab';
 import TaskDetailPage from './TaskDetailPage';
 import FeaturePage from './FeaturePage';
 
-type Tab = 'preview' | 'source' | 'diff' | 'tasks' | 'quality' | 'release' | 'reviewmd';
+type Tab = 'preview' | 'source' | 'diff' | 'tasks' | 'quality' | 'release' | 'activity' | 'reviewmd';
 
 export default function ReviewPage() {
   const { id } = useParams<{ id: string }>();
@@ -117,6 +119,7 @@ export default function ReviewPage() {
           <>
             <Badge color="gray">{item.kind}</Badge>
             <StatusBadge state={item.canonicalState} />
+            <AgentActivityBadge run={item.activeRun} />
           </>
         }
         meta={`board ${item.boardId} · profile ${item.profile}`}
@@ -160,6 +163,7 @@ export default function ReviewPage() {
           <Tabs.Trigger value="tasks">Tasks ({childTasks.length})</Tabs.Trigger>
           <Tabs.Trigger value="quality">Quality</Tabs.Trigger>
           <Tabs.Trigger value="release">Release</Tabs.Trigger>
+          <Tabs.Trigger value="activity">Activity</Tabs.Trigger>
           <Tabs.Trigger value="reviewmd">review.md</Tabs.Trigger>
         </Tabs.List>
 
@@ -255,6 +259,10 @@ export default function ReviewPage() {
 
           <Tabs.Content value="release">
             <ReleaseTab id={id!} />
+          </Tabs.Content>
+
+          <Tabs.Content value="activity">
+            <ActivityTab id={id!} />
           </Tabs.Content>
 
           <Tabs.Content value="reviewmd">

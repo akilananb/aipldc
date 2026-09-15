@@ -1,5 +1,5 @@
 import { getIdentity } from './identity';
-import type { ArtifactVersion, BoardComment, Comment, CommentIntent, GrillQuestions, ItemDetail, ItemSummary, QualityReport, ReleaseDocument, SpecDocs } from './types';
+import type { AgentRun, ArtifactVersion, BoardComment, Comment, CommentIntent, GrillQuestions, ItemDetail, ItemSummary, QualityReport, ReleaseDocument, SpecDocs } from './types';
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8081';
 
@@ -74,6 +74,10 @@ export const api = {
 
   getQuality(id: string): Promise<QualityReport> {
     return request<QualityReport>(`/api/items/${encodeURIComponent(id)}/quality`);
+  },
+
+  getActivity(id: string): Promise<AgentRun[]> {
+    return request<AgentRun[]>(`/api/items/${encodeURIComponent(id)}/activity`);
   },
 
   getSpecDocs(id: string): Promise<SpecDocs> {

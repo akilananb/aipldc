@@ -9,6 +9,7 @@ import type { CommentIntent, DocApproval, ItemDetail } from '../types';
 import { extendLineTarget, formatLineTarget, parseLineTarget } from '../ui-utils';
 import PageHeader from '../components/PageHeader';
 import StatusBadge from '../components/StatusBadge';
+import AgentActivityBadge from '../components/AgentActivityBadge';
 import ErrorCallout from '../components/ErrorCallout';
 import Panel from '../components/Panel';
 import { useReviewActions } from '../review/useReviewActions';
@@ -17,6 +18,7 @@ import CommentPanel from '../review/CommentPanel';
 import PreviewTab from '../review/PreviewTab';
 import ReviewMdTab from '../review/ReviewMdTab';
 import QualityTab from '../review/QualityTab';
+import ActivityTab from '../review/ActivityTab';
 
 interface Props {
   item: ItemDetail;
@@ -101,6 +103,7 @@ export default function TaskDetailPage({ item }: Props) {
           <>
             <Badge color="gray">task</Badge>
             <StatusBadge state={item.canonicalState} />
+            <AgentActivityBadge run={item.activeRun} />
           </>
         }
         meta={`board ${item.boardId} · profile ${item.profile}`}
@@ -130,6 +133,7 @@ export default function TaskDetailPage({ item }: Props) {
           <Tabs.Trigger value="spec">Design spec</Tabs.Trigger>
           <Tabs.Trigger value="tasks">Tasks plan</Tabs.Trigger>
           <Tabs.Trigger value="quality">Quality</Tabs.Trigger>
+          <Tabs.Trigger value="activity">Activity</Tabs.Trigger>
         </Tabs.List>
 
         <Box pt="4">
@@ -184,6 +188,9 @@ export default function TaskDetailPage({ item }: Props) {
           </Tabs.Content>
           <Tabs.Content value="quality">
             <QualityTab id={item.id} />
+          </Tabs.Content>
+          <Tabs.Content value="activity">
+            <ActivityTab id={item.id} />
           </Tabs.Content>
         </Box>
       </Tabs.Root>

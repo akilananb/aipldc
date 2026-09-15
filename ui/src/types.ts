@@ -51,6 +51,19 @@ export interface GateState {
   stage: string;
 }
 
+export type AgentRunStatus = 'running' | 'abandoned' | 'finished';
+
+export interface AgentRun {
+  id: string;
+  agent: string;
+  phase: string | null;
+  status: AgentRunStatus;
+  outcome: string | null;
+  startedAt: string;
+  finishedAt: string | null;
+  traceUrl: string | null;
+}
+
 export interface ItemDetail {
   id: string;
   profile: string;
@@ -64,6 +77,7 @@ export interface ItemDetail {
   gate: GateState | null;
   parentId: string | null;
   qualityVerdict: string | null;
+  activeRun: AgentRun | null;
 }
 
 export interface ItemSummary {
@@ -75,6 +89,7 @@ export interface ItemSummary {
   updatedAt: string;
   parentId: string | null;
   qualityVerdict: string | null;
+  activeRun: AgentRun | null;
 }
 
 export interface QualityReport {

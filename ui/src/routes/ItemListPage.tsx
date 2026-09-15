@@ -10,6 +10,7 @@ import { GATE_ROLES } from '../gates';
 import ErrorCallout from '../components/ErrorCallout';
 import EmptyState from '../components/EmptyState';
 import StatusBadge from '../components/StatusBadge';
+import AgentActivityBadge from '../components/AgentActivityBadge';
 import RelativeTime from '../components/RelativeTime';
 import { stateBadgeColor } from '../ui-utils';
 import QualityIcon from '../components/QualityIcon';
@@ -242,7 +243,10 @@ export default function ItemListPage() {
         </Table.RowHeaderCell>
         <Table.Cell>{item.kind}</Table.Cell>
         <Table.Cell>
-          <StatusBadge state={item.canonicalState} />
+          <Flex gap="1" align="center" wrap="wrap">
+            <StatusBadge state={item.canonicalState} />
+            <AgentActivityBadge run={item.activeRun} />
+          </Flex>
         </Table.Cell>
         <Table.Cell>
           {item.kind === 'story' && <QualityIcon verdict={item.qualityVerdict} />}

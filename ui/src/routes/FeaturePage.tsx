@@ -7,9 +7,11 @@ import type { ItemDetail } from '../types';
 import { intentBadgeColor } from '../ui-utils';
 import PageHeader from '../components/PageHeader';
 import StatusBadge from '../components/StatusBadge';
+import AgentActivityBadge from '../components/AgentActivityBadge';
 import EmptyState from '../components/EmptyState';
 import Panel from '../components/Panel';
 import ClarificationPanel from '../components/ClarificationPanel';
+import ActivityTab from '../review/ActivityTab';
 
 interface Props {
   item: ItemDetail;
@@ -32,7 +34,16 @@ export default function FeaturePage({ item }: Props) {
 
   return (
     <Box>
-      <PageHeader backTo={{ to: '/', label: 'Items' }} title={item.title} badges={<StatusBadge state={item.canonicalState} />} />
+      <PageHeader
+        backTo={{ to: '/', label: 'Items' }}
+        title={item.title}
+        badges={
+          <>
+            <StatusBadge state={item.canonicalState} />
+            <AgentActivityBadge run={item.activeRun} />
+          </>
+        }
+      />
 
       <ClarificationPanel item={item} excludePrefix="h" />
 
@@ -49,11 +60,20 @@ export default function FeaturePage({ item }: Props) {
               {stories.map((s) => (
                 <Flex key={s.id} align="center" justify="between" gap="2">
                   <Link to={`/items/${s.id}`}>{s.title}</Link>
-                  <StatusBadge state={s.canonicalState} />
+                  <Flex gap="1" align="center">
+                    <StatusBadge state={s.canonicalState} />
+                    <AgentActivityBadge run={s.activeRun} />
+                  </Flex>
                 </Flex>
               ))}
             </Flex>
           )}
+        </Panel>
+      </Box>
+
+      <Box mb="4">
+        <Panel title="Agent activity">
+          <ActivityTab id={item.id} />
         </Panel>
       </Box>
 

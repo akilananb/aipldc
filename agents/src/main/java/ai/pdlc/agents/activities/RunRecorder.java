@@ -30,32 +30,48 @@ public class RunRecorder {
         this.activeProfile = activeProfile;
     }
 
-    public void record(WorkItemRef item, String agent, String workflowRunId, String traceUrl, String outcome,
-                       Long tokens, Integer iterations) {
+    /** Inserts the in-flight row (outcome {@code running}); returns its id, or {@code null} when
+     * recording failed (best-effort: never fails the activity being recorded). */
+    public UUID start(WorkItemRef item, String agent, String phase, String workflowRunId, String traceUrl) {
         try {
             UUID workItemId = findOrCreateWorkItem(item);
-            jdbc.update("""
-                    INSERT INTO runs (work_item_id, agent, workflow_run_id, trace_url, tokens, iterations, outcome)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """, workItemId, agent, workflowRunId, traceUrl, tokens, iterations, outcome);
+            return jdbc.queryForObject("""
+                    INSERT INTO runs (work_item_id, agent, phase, workflow_run_id, trace_url, outcome)
+                    VALUES (?, ?, ?, ?, ?, 'running')
+                    RETURNING id
+                    """, UUID.class, workItemId, agent, phase, workflowRunId, traceUrl);
         } catch (RuntimeException e) {
-            log.warn("[runs] could not record {} run for {}: {}", agent, item, e.toString());
+            log.warn("[runs] could not start {} run for {}: {}", agent, item, e.toString());
+            return null;
         }
     }
 
-    /** Same as {@link #record} but for callers that already hold the control-plane {@code
+    /** Same as {@link #start} but for callers that already hold the control-plane {@code
      * work_items.id} (no board_id lookup/placeholder-creation needed) — used by the mention flow,
      * whose {@link ai.pdlc.core.domain.AgentMentionRequest} carries the internal work item id, not
      * a board-native id. */
-    public void recordById(UUID workItemId, String agent, String workflowRunId, String traceUrl, String outcome,
-                            Long tokens, Integer iterations) {
+    public UUID startById(UUID workItemId, String agent, String phase, String workflowRunId, String traceUrl) {
         try {
-            jdbc.update("""
-                    INSERT INTO runs (work_item_id, agent, workflow_run_id, trace_url, tokens, iterations, outcome)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """, workItemId, agent, workflowRunId, traceUrl, tokens, iterations, outcome);
+            return jdbc.queryForObject("""
+                    INSERT INTO runs (work_item_id, agent, phase, workflow_run_id, trace_url, outcome)
+                    VALUES (?, ?, ?, ?, ?, 'running')
+                    RETURNING id
+                    """, UUID.class, workItemId, agent, phase, workflowRunId, traceUrl);
         } catch (RuntimeException e) {
-            log.warn("[runs] could not record {} run for work item {}: {}", agent, workItemId, e.toString());
+            log.warn("[runs] could not start {} run for work item {}: {}", agent, workItemId, e.toString());
+            return null;
+        }
+    }
+
+    /** Closes the row opened by {@link #start}/{@link #startById}; no-op when {@code runId} is null. */
+    public void finish(UUID runId, String outcome) {
+        if (runId == null) {
+            return;
+        }
+        try {
+            jdbc.update("UPDATE runs SET outcome = ?, finished_at = now() WHERE id = ?", outcome, runId);
+        } catch (RuntimeException e) {
+            log.warn("[runs] could not finish run {}: {}", runId, e.toString());
         }
     }
 
