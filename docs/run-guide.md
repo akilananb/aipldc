@@ -27,15 +27,21 @@ control is disabled on them), and starting the live demo never touches them.
 
 ## Prerequisites
 
-- Node ≥22.14, `openspec` CLI, `omp` with a working model credential (only needed for the live
-  demo and for Part 1's live `omp` moments — the guided walkthrough needs neither), Docker
-  (Colima or Docker Desktop), `jq`, `curl`, a browser.
+- Node ≥22.14, `openspec` CLI, `omp` with a working model credential, Docker (Colima or Docker
+  Desktop), `jq`, `curl`, a browser. Only needed for the live demo and Part 1's live `omp`
+  moments — the guided walkthrough needs none of this.
 - `infra/.env` in `ai-pldc` exists (even if empty — the primary stack's Compose file reads it
-  automatically) and points the agents at an OpenAI-compatible endpoint: `PDLC_LLM_API_KEY` for
-  the gateway in `infra/pdlc.yaml` (OpenRouter by default), or `PDLC_LLM_BASE_URL` plus a blank
-  key for an unauthenticated one. Never print/copy it. Models are `agents.roles.*.model` in
-  that `pdlc.yaml` and must exist on the chosen endpoint. Only required for the live demo — the
-  guided walkthrough works with no credentials at all.
+  automatically) and points the **agents** service (grill/PO/plan/review/release/monitor, the
+  Embabel-based LLM calls) at an OpenAI-compatible endpoint: `PDLC_LLM_API_KEY` for the gateway
+  in `infra/pdlc.yaml` (OpenRouter by default), or `PDLC_LLM_BASE_URL` plus a blank key for an
+  unauthenticated one. Models are `agents.roles.*.model` in that `pdlc.yaml` and must exist on
+  the chosen endpoint.
+- The **build-worker** host process is a separate credential surface: it spawns `omp acp`
+  directly (via `ACP_AGENT_CMD`, default `omp acp`), which needs its own working `omp` auth in
+  that terminal's environment — `ANTHROPIC_OAUTH_TOKEN`, per `scripts/e2e-demo-phase3.sh`'s
+  documented prerequisite. This is independent of `PDLC_LLM_API_KEY` above; both are required
+  for the live demo's build stage, neither is needed for the guided walkthrough. Never
+  print/copy either.
 - Docker daemon running: `colima start` if using Colima.
 - Ahead of time: `cd /Users/work/Documents/ai-pldc && scripts/demo.sh up` and leave it running.
   First-time image builds can take several minutes — don't discover that live. `scripts/demo.sh
@@ -173,8 +179,12 @@ Only do this when you specifically want the room to see the agents produce somet
 ### Setup
 
 1. **Start the build-worker in its own visible terminal, before starting the live demo** — it
-   must already be polling once the story reaches planning:
+   must already be polling once the story reaches planning. Needs `ANTHROPIC_OAUTH_TOKEN` set
+   in this terminal's environment first (the credential `omp acp` itself authenticates with —
+   separate from `PDLC_LLM_API_KEY` above; never paste the actual value into this guide):
    ```bash
+   export ANTHROPIC_OAUTH_TOKEN=...
+
    cd /Users/work/Documents/ai-pldc/build-worker
    npm ci && npm run build
    PDLC_API_URL=http://localhost:8081 \
