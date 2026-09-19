@@ -52,9 +52,9 @@ class QualityAgentTest {
     void unparseableOutputFailsSafeWithSentinelFinding() {
         String out = "I cannot evaluate this content.";
 
-        QualityReport report = QualityAgent.parse(out, "task");
+        QualityReport report = QualityAgent.parse(out, "story");
 
-        assertThat(report.subjectKind()).isEqualTo("task");
+        assertThat(report.subjectKind()).isEqualTo("story");
         assertThat(report.passed()).isFalse();
         assertThat(report.score()).isEqualTo(0);
         assertThat(report.findings()).containsExactly("quality agent returned unparseable output");

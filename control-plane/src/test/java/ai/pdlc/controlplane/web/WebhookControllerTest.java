@@ -76,6 +76,15 @@ class WebhookControllerTest {
         public ai.pdlc.core.domain.GrillHandoff grill() {
             return null;
         }
+
+        @Override
+        public void proceedToStory(String by) {
+        }
+
+        @Override
+        public int grillRounds() {
+            return 0;
+        }
     }
 
     private WebhookController newController(WorkflowClient client, InMemoryBoardAdapter board) {

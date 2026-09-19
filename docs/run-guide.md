@@ -411,7 +411,7 @@ projects.
 
 ```bash
 cd /Users/work/Documents/ai-pldc
-docker compose -f infra/docker-compose.yml down   # no --volumes: data survives
+tilt down --file Tiltfile   # tilt.dev/down-policy: keep on the PVCs -> data survives
 ```
 
 Either way, remember to `Ctrl-C` the build-worker terminal first if it's running.
@@ -423,11 +423,12 @@ Either way, remember to `Ctrl-C` the build-worker terminal first if it's running
 # 2 releases, 1 bug) without mutating anything.
 cd /Users/work/Documents/ai-pldc && scripts/demo.sh verify
 
-# Container status:
-docker compose -f infra/docker-compose.yml ps
+# Pod status:
+kubectl -n pdlc get pods
 
 # Logs if control-plane didn't seed:
-docker compose -f infra/docker-compose.yml logs --tail=80 control-plane agents
+kubectl -n pdlc logs deploy/control-plane --tail=80
+kubectl -n pdlc logs deploy/agents --tail=80
 
 # restaurant-runtime should be clean, on restaurant-base, at the pinned baseline commit
 # (e20025a, "05-verify-retry-loop") unless a live demo has progressed it:

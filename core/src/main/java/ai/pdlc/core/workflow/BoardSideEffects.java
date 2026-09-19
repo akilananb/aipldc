@@ -44,6 +44,13 @@ public interface BoardSideEffects {
     @ActivityMethod
     void postFollowUpQuestions(WorkItemRef item, GrillHandoff grill);
 
+    /** Publishes one adaptive-intake round (ADAPTIVE_GRILL_PLAN.md step 4): posts the currently
+     * OPEN grill {@code q*} questions (not historical answers, not po/h questions) as one comment
+     * by the Grill bot, sets {@code needs-clarification}, and re-attaches the full updated
+     * {@code grill.md} — including the final confirmation round. */
+    @ActivityMethod
+    void postGrillRound(WorkItemRef item, GrillHandoff grill);
+
     /** Creates the child User Story, writes the spec delta + story files, inserts {@code artifacts} v1,
      * appends the {@code review.md} v1 block. {@code storyIndex} is this story's position among a
      * multi-story split (0 = first/active); {@code queued} sets state {@code queued} instead of

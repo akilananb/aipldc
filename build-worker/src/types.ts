@@ -19,6 +19,7 @@ export interface TaskBudget {
 export interface Task {
   id: string;
   title: string;
+  description: string;
   area: string;
   scenario: string;
   touches: string[];
@@ -54,16 +55,54 @@ export interface ClaimedRepo {
   specDir: string;
 }
 
+export interface BuildPayload {
+  kind: 'build';
+  story: WorkItemRef;
+  task: Task;
+  branch: string;
+  baseBranch: string;
+  feedback: string[];
+  repo: ClaimedRepo;
+}
+
+/** PO handoff subset the planning prompt needs - mirrors core's `PoHandoff`. */
+export interface PlanPoHandoff {
+  change: string;
+  scenarios: string[];
+  areas: string[];
+  nfr: Record<string, unknown>;
+}
+
+export interface PlanPayload {
+  kind: 'plan';
+  story: WorkItemRef;
+  po: PlanPoHandoff;
+  baseBranch: string;
+  repo: ClaimedRepo;
+}
+
 /** `POST /api/build-tasks/claim` 200 response body. */
 export interface ClaimedTask {
   id: string;
   attempt: number;
-  payload: {
-    story: WorkItemRef;
-    task: Task;
-    branch: string;
-    baseBranch: string;
-    feedback: string[];
-    repo: ClaimedRepo;
-  };
+  payload: BuildPayload | PlanPayload;
+}
+
+/** One task the planning agent writes to `.pdlc/plan.json` - mirrors control-plane's
+ * `PlanResultRequest.PlannedTask`. */
+export interface PlannedTask {
+  id: string;
+  title: string;
+  description: string;
+  area: string;
+  scenario: string;
+  touches: string[];
+  testPath: string;
+  blockedBy: string[];
+}
+
+/** Body of `POST /api/build-tasks/{id}/plan-result`. */
+export interface PlanResult {
+  tasks: PlannedTask[];
+  newFiles: string[];
 }

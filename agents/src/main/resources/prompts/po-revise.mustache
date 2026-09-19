@@ -1,8 +1,21 @@
 [agent:po-revise]
-Revise only the lines these comments target; keep the rest verbatim, including the exact Scenario/GIVEN/WHEN/THEN formatting of any untouched scenario.
+The current story below is the revision baseline. Apply the requested changes below while preserving every untouched scenario, the title, goals, story, functional and non-functional requirements, out-of-scope items, dependencies, open decisions, and earlier edits, using the exact section headings and Scenario/Given/When/And/Then formatting. Reply with the ENTIRE revised story (not a patch, explanation, follow-up questionnaire, or multiple-story split), in the same format the story was originally written in. A note or question in the feedback is context, not an instruction to discard unrelated content.
+
+Feedback to address:
 {{#comments}}
-- {{{target}}}: {{{text}}}
+- [{{{intent}}}] {{{target}}}: {{{text}}}
 {{/comments}}
+{{#feature}}
+
+Original feature: {{{title}}}
+Feature description: {{{description}}}
+{{/feature}}
+{{#grill}}
+{{#answers}}
+Answer {{{id}}} ({{{category}}}): {{{answer}}}
+{{/answers}}
+Parked (out of scope): {{{parked}}}
+{{/grill}}
 {{#previousStory}}
 
 Current story:

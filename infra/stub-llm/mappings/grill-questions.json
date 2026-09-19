@@ -1,10 +1,14 @@
 {
+  "priority": 1,
   "request": {
     "method": "POST",
     "urlPath": "/v1/chat/completions",
     "bodyPatterns": [
       {
         "contains": "[agent:grill]"
+      },
+      {
+        "contains": "[grill-next-id:q1]"
       }
     ]
   },
@@ -23,7 +27,7 @@
           "index": 0,
           "message": {
             "role": "assistant",
-            "content": "{\"type_decision\": \"story\", \"questions\": [{\"id\": \"q1\", \"category\": \"scope\", \"question\": \"Which orders \\u2014 everything the user can see, or the current filtered view?\", \"evidence\": \"orders-grid uses server-side paging (src/orders/grid.tsx:41)\"}, {\"id\": \"q2\", \"category\": \"users\", \"question\": \"Who can export \\u2014 all roles or sales/admin only?\", \"evidence\": \"assumption-check\"}, {\"id\": \"q3\", \"category\": \"acceptance\", \"question\": \"What file format and columns must the export contain?\", \"evidence\": \"assumption-check\"}, {\"id\": \"q4\", \"category\": \"risk\", \"question\": \"Orders contain customer PII. Log and rate-limit exports?\", \"evidence\": \"docs/constraints.md#data-classification; INC-2210 (bulk download abuse)\"}, {\"id\": \"q5\", \"category\": \"dependency\", \"question\": \"Does the export reuse the existing streaming endpoint?\", \"evidence\": \"assumption-check\"}, {\"id\": \"q6\", \"category\": \"nfr\", \"question\": \"What is the export volume and latency ceiling?\", \"evidence\": \"assumption-check\"}], \"constraints_hit\": [\"pii\", \"rate-limit\"]}"
+            "content": "{\"type_decision\": \"story\", \"questions\": [{\"category\": \"scope\", \"question\": \"Which orders \\u2014 everything the user can see, or the current filtered view?\", \"recommendation\": \"Use the current filtered view.\", \"evidence\": \"orders-grid uses server-side paging (src/orders/grid.tsx:41)\"}, {\"category\": \"users\", \"question\": \"Who can export \\u2014 all roles or sales/admin only?\", \"recommendation\": \"Restrict to sales and admin roles.\", \"evidence\": \"assumption-check\"}, {\"category\": \"acceptance\", \"question\": \"What file format and columns must the export contain?\", \"recommendation\": \"CSV with the visible grid columns.\", \"evidence\": \"assumption-check\"}, {\"category\": \"risk\", \"question\": \"Orders contain customer PII. Log and rate-limit exports?\", \"recommendation\": \"Audit every export; 10 per user per hour.\", \"evidence\": \"docs/constraints.md#data-classification; INC-2210 (bulk download abuse)\"}, {\"category\": \"dependency\", \"question\": \"Does the export reuse the existing streaming endpoint?\", \"recommendation\": \"Yes, reuse the existing streaming endpoint.\", \"evidence\": \"assumption-check\"}, {\"category\": \"nfr\", \"question\": \"What is the export volume and latency ceiling?\", \"recommendation\": \"Up to 50k rows within 5 seconds.\", \"evidence\": \"assumption-check\"}], \"constraints_hit\": [\"pii\", \"rate-limit\"], \"summary\": \"\"}"
           },
           "finish_reason": "stop"
         }

@@ -1,5 +1,5 @@
 import type { AgentConfig } from './config';
-import type { BuildResult, ClaimedTask } from './types';
+import type { BuildResult, ClaimedTask, PlanResult } from './types';
 
 /** Thin REST wrapper over control-plane's `/api/build-tasks/*` — the agent's only Temporal
  * boundary (control-plane owns the actual Temporal client and async activity completion). */
@@ -26,6 +26,15 @@ export class ApiClient {
 
   async postResult(id: string, result: BuildResult): Promise<'ok' | 'gone'> {
     const res = await this.post(`/api/build-tasks/${id}/result`, result);
+    if (res.status === 410) {
+      return 'gone';
+    }
+    await this.assertOk(res);
+    return 'ok';
+  }
+
+  async postPlanResult(id: string, result: PlanResult): Promise<'ok' | 'gone'> {
+    const res = await this.post(`/api/build-tasks/${id}/plan-result`, result);
     if (res.status === 410) {
       return 'gone';
     }

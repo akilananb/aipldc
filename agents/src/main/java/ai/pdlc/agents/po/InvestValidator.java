@@ -21,7 +21,7 @@ public final class InvestValidator {
             "http", "status", "row", "log", "error", "file", "download", "message", "response",
             "request", "written", "created", "rendered", "metric", "column");
 
-    /** Implementation nouns that violate N when present outside the NFR section (class names, libraries). */
+    /** Implementation nouns that violate N when present outside the Non-Functional requirements section (class names, libraries). */
     static final List<String> IMPLEMENTATION_NOUNS = List.of(
             "class ", "interface ", "method ", "abstract ", "singleton",
             "spring", "lombok", "react", "angular", "vue", "hibernate", "mybatis", "jackson", "gson",
@@ -64,9 +64,9 @@ public final class InvestValidator {
         return true;
     }
 
-    /** N — no implementation nouns (class names, library choices) outside the NFR section. */
+    /** N — no implementation nouns (class names, library choices) outside the Non-Functional requirements section. */
     public static boolean negotiable(String markdown) {
-        String body = StoryParser.withoutSections(markdown, "NFR");
+        String body = StoryParser.withoutSections(markdown, "Non-Functional requirements");
         for (String noun : IMPLEMENTATION_NOUNS) {
             if (body.toLowerCase().contains(noun)) {
                 return false;
@@ -75,9 +75,9 @@ public final class InvestValidator {
         return !CLASS_LIKE.matcher(body).find();
     }
 
-    /** V — the "So that" line is present and non-empty. */
+    /** V — the Story section's {@code So that} outcome line is present and non-empty. */
     public static boolean valuable(String markdown) {
-        return StoryParser.soThat(markdown) != null;
+        return StoryParser.outcome(markdown) != null;
     }
 
     /** E — every scenario names concrete data: a number, a role, or a field token. */

@@ -7,7 +7,8 @@ import java.time.OffsetDateTime;
 import java.util.UUID;
 
 public record AgentRunDto(UUID id, String agent, String phase, String status, String outcome,
-                           OffsetDateTime startedAt, OffsetDateTime finishedAt, String traceUrl) {
+                           OffsetDateTime startedAt, OffsetDateTime finishedAt, String traceUrl,
+                           Long tokens, Integer iterations) {
 
     /** A 'running' row older than this is reported as abandoned: the agents worker died mid-call
      * and Temporal will retry as a fresh row. Matches AGENT_ACTIVITY_OPTIONS' StartToClose (10 min). */
@@ -18,6 +19,6 @@ public record AgentRunDto(UUID id, String agent, String phase, String status, St
         String status = running
                 ? (r.createdAt().isAfter(now.minus(RUNNING_TTL)) ? "running" : "abandoned")
                 : "finished";
-        return new AgentRunDto(r.id(), r.agent(), r.phase(), status, r.outcome(), r.createdAt(), r.finishedAt(), r.traceUrl());
+        return new AgentRunDto(r.id(), r.agent(), r.phase(), status, r.outcome(), r.createdAt(), r.finishedAt(), r.traceUrl(), r.tokens(), r.iterations());
     }
 }

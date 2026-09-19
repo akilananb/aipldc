@@ -68,6 +68,8 @@ class PersistenceIntegrationTest {
     @Autowired
     ApprovalRepository approvals;
     @Autowired
+    ScenarioReviewRepository scenarioReviews;
+    @Autowired
     ReviewEventRepository reviewEvents;
     @Autowired
     org.springframework.jdbc.core.JdbcTemplate jdbcTemplate;
@@ -98,6 +100,16 @@ class PersistenceIntegrationTest {
 
         approvals.save(ApprovalEntity.newRow(artifact.id(), 1, "abc123", "po@acme", "PO", "story", OffsetDateTime.now()));
         assertThat(approvals.findByArtifactIdAndVersion(artifact.id(), 1)).hasSize(1);
+
+        scenarioReviews.save(ScenarioReviewEntity.newRow(artifact.id(), 1, "send-order", "meets", "po@acme", "PO"));
+        assertThat(scenarioReviews.findByArtifactIdAndScenario(artifact.id(), "send-order"))
+                .hasValueSatisfying(r -> assertThat(r.status()).isEqualTo("meets"));
+
+        scenarioReviews.save(scenarioReviews.findByArtifactIdAndScenario(artifact.id(), "send-order").orElseThrow()
+                .withStatus("not-reviewed", "po@acme", "PO"));
+        assertThat(scenarioReviews.findByArtifactIdAndScenario(artifact.id(), "send-order"))
+                .hasValueSatisfying(r -> assertThat(r.status()).isEqualTo("not-reviewed"));
+        assertThat(scenarioReviews.findByArtifactIdOrderByAt(artifact.id())).hasSize(1);
 
         reviewEvents.save(ReviewEventEntity.newRow(story.id(), "drafted", "{}"));
         reviewEvents.save(ReviewEventEntity.newRow(story.id(), "gate-passed", "{\"version\":2}"));

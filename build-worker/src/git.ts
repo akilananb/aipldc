@@ -37,6 +37,13 @@ export async function addWorktree(repoPath: string, worktreePath: string, branch
   }
 }
 
+/** Adds a read-only detached worktree at `worktreePath` on `ref` - used by the plan step, which
+ * only analyzes the repo and never commits, so a detached checkout is safe even when `ref` (the
+ * default branch) is already checked out elsewhere (e.g. the shared repo in local mode). */
+export async function addDetachedWorktree(repoPath: string, worktreePath: string, ref: string): Promise<void> {
+  await git(repoPath, ['worktree', 'add', '--detach', worktreePath, ref]);
+}
+
 export async function removeWorktree(repoPath: string, worktreePath: string): Promise<void> {
   try {
     await git(repoPath, ['worktree', 'remove', '--force', worktreePath]);
@@ -118,4 +125,13 @@ export async function fetchBranch(repoPath: string, branch: string, authHeader?:
 export async function pushBranch(worktreePath: string, branch: string, authHeader?: string): Promise<void> {
   const authArgs = authHeader ? ['-c', `http.extraHeader=${authHeader}`] : [];
   await git(worktreePath, [...authArgs, 'push', 'origin', branch]);
+}
+
+/** Stages every change (tracked and untracked) and diffs it against `baseRef` - used by
+ * `pdlc-assist` to preserve a cancelled/superseded assisted session's work as a patch file before
+ * its disposable worktree is discarded. Staging happens in that worktree, which is removed
+ * regardless of outcome, so it never affects a real commit. */
+export async function diffCached(worktreePath: string, baseRef: string): Promise<string> {
+  await git(worktreePath, ['add', '-A']);
+  return git(worktreePath, ['diff', '--cached', baseRef]);
 }

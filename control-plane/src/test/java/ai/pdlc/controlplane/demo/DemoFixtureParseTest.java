@@ -114,8 +114,8 @@ class DemoFixtureParseTest {
         assertThat(tasks).hasSize(25);
         for (DemoWorkItemFixture task : tasks) {
             assertThat(task.description()).isNotBlank();
-            assertThat(task.description()).contains("Wave ").contains("Scenario: ")
-                    .contains("Touches: src/orders.ts").contains("Test: test/orders.test.ts");
+            assertThat(task.description()).contains("- **Scenario:**").contains("- **Area:** orders")
+                    .contains("- **Touches:** src/orders.ts").contains("- **Test:** test/orders.test.ts");
             assertThat(task.versions()).isEmpty();
             assertThat(task.qualityReports()).isEmpty();
             assertThat(task.gate()).isNull();

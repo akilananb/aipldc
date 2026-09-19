@@ -1,9 +1,9 @@
 package ai.pdlc.controlplane.temporal;
 
 import ai.pdlc.core.config.RepoConfig;
+import ai.pdlc.core.domain.PoHandoff;
 import ai.pdlc.core.domain.Task;
 import ai.pdlc.core.domain.WorkItemRef;
-import ai.pdlc.core.workflow.BuildResult;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
@@ -20,6 +20,7 @@ import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -67,12 +68,30 @@ public class BuildTaskService {
                 story.profile(), story.boardId(), task.id());
 
         String payloadJson = writeJson(Map.of(
-                "story", story, "task", task, "branch", branch, "baseBranch", baseBranch,
+                "kind", "build", "story", story, "task", task, "branch", branch, "baseBranch", baseBranch,
                 "feedback", feedback == null ? List.of() : feedback, "repo", repo));
         jdbcTemplate.update(
                 "INSERT INTO build_tasks (profile, story_board_id, task_id, attempt, payload_json, task_token, state) "
                         + "VALUES (?, ?, ?, ?, ?, ?, 'pending')",
                 story.profile(), story.boardId(), task.id(), attempt, payloadJson,
+                Base64.getEncoder().encodeToString(taskToken));
+    }
+
+    /** Parks a fresh {@code pending} row for the plan step's Temporal task token, under the fixed
+     * task id {@code plan} - a story has at most one in-flight plan attempt, so a retry supersedes
+     * whatever non-terminal plan row this story already had, same as {@link #enqueue}. */
+    public void enqueuePlan(WorkItemRef story, PoHandoff po, RepoConfig repo, int attempt, byte[] taskToken) {
+        jdbcTemplate.update(
+                "UPDATE build_tasks SET state='superseded', updated_at=now() "
+                        + "WHERE profile=? AND story_board_id=? AND task_id=? AND state IN ('pending','claimed')",
+                story.profile(), story.boardId(), "plan");
+
+        String payloadJson = writeJson(Map.of(
+                "kind", "plan", "story", story, "po", po, "baseBranch", repo.defaultBranch(), "repo", repo));
+        jdbcTemplate.update(
+                "INSERT INTO build_tasks (profile, story_board_id, task_id, attempt, payload_json, task_token, state) "
+                        + "VALUES (?, ?, ?, ?, ?, ?, 'pending')",
+                story.profile(), story.boardId(), "plan", attempt, payloadJson,
                 Base64.getEncoder().encodeToString(taskToken));
     }
 
@@ -109,7 +128,7 @@ public class BuildTaskService {
 
     /** Resolves the parked Temporal activity with {@code result} and marks the row {@code done}.
      * A re-post of an already-{@code done} row is a no-op (idempotent). */
-    public void complete(UUID id, BuildResult result) {
+    public void complete(UUID id, Object result) {
         TaskRow row = requireRow(id);
         if ("done".equals(row.state())) {
             return;
@@ -124,6 +143,61 @@ public class BuildTaskService {
         jdbcTemplate.update(
                 "UPDATE build_tasks SET state='done', result_json=?, updated_at=now() WHERE id=?",
                 writeJson(result), id);
+    }
+
+    private static final Task.TaskBudget DEFAULT_TASK_BUDGET =
+            new Task.TaskBudget(6, 120_000L, java.time.Duration.ofMinutes(10));
+
+    /** Validates the build-worker's posted plan against the story's own scenario list (coverage,
+     * no in-wave conflicts, DAG order — {@link ai.pdlc.core.plan.PlanValidator#violations}),
+     * computes waves and per-task plan-check reports, then resolves the parked plan activity with
+     * the result. A rejected plan throws {@link IllegalArgumentException} (400) without touching
+     * the row - the build-worker posts {@code /fail}, and Temporal retries the plan activity. */
+    public ai.pdlc.core.domain.PlanResult completePlan(UUID id, ai.pdlc.controlplane.web.dto.PlanResultRequest request) {
+        requireRow(id);
+        String payloadJson = jdbcTemplate.queryForObject(
+                "SELECT payload_json FROM build_tasks WHERE id=?", String.class, id);
+        com.fasterxml.jackson.databind.JsonNode payload = readTree(payloadJson);
+        com.fasterxml.jackson.databind.JsonNode poNode = payload.get("po");
+        String storyBoardId = payload.get("story").get("boardId").asText();
+        String change = poNode.get("change").asText();
+        List<String> scenarios = new java.util.ArrayList<>();
+        for (com.fasterxml.jackson.databind.JsonNode s : poNode.get("scenarios")) {
+            scenarios.add(s.asText());
+        }
+
+        List<Task> tasks = new java.util.ArrayList<>();
+        for (ai.pdlc.controlplane.web.dto.PlanResultRequest.PlannedTask t : request.tasks()) {
+            tasks.add(new Task(t.id(), t.title(), t.description(), t.area(), t.scenario(), t.touches(),
+                    t.testPath(), DEFAULT_TASK_BUDGET, t.blockedBy()));
+        }
+        List<List<String>> waves = ai.pdlc.core.plan.PlanWaves.compute(tasks);
+        ai.pdlc.core.domain.Handoff envelope = new ai.pdlc.core.domain.Handoff("plan-agent", "build-worker",
+                storyBoardId, ai.pdlc.core.domain.CanonicalState.PLANNED, List.of("po:" + change), 0.85,
+                List.of(), List.of());
+        ai.pdlc.core.domain.PlanHandoff plan = new ai.pdlc.core.domain.PlanHandoff(envelope, tasks, waves);
+
+        List<String> violations = ai.pdlc.core.plan.PlanValidator.violations(plan, scenarios);
+        if (!violations.isEmpty()) {
+            throw new IllegalArgumentException("plan rejected: " + String.join("; ", violations));
+        }
+
+        java.util.Set<String> newFiles = Set.copyOf(request.newFiles());
+        Map<String, ai.pdlc.core.domain.QualityReport> checksByTaskId = new java.util.LinkedHashMap<>();
+        for (Task t : tasks) {
+            checksByTaskId.put(t.id(), ai.pdlc.core.plan.PlanChecks.report(plan, t, newFiles));
+        }
+        ai.pdlc.core.domain.PlanResult result = new ai.pdlc.core.domain.PlanResult(plan, checksByTaskId);
+        complete(id, result);
+        return result;
+    }
+
+    private com.fasterxml.jackson.databind.JsonNode readTree(String json) {
+        try {
+            return mapper.readTree(json);
+        } catch (JsonProcessingException e) {
+            throw new RuntimeException("failed to parse stored build task payload", e);
+        }
     }
 
     /** Resolves the parked Temporal activity exceptionally (retryable — Temporal re-runs {@code

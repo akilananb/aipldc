@@ -1,22 +1,25 @@
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { Badge, Box } from '@radix-ui/themes';
+import { Box, Tabs } from '@radix-ui/themes';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
 import { api } from '../api';
 import type { ItemDetail } from '../types';
-import PageHeader from '../components/PageHeader';
+import PageHeader, { MetaItems } from '../components/PageHeader';
 import StatusBadge from '../components/StatusBadge';
 import AgentActivityBadge from '../components/AgentActivityBadge';
 import DemoSnapshotBadge from '../components/DemoSnapshotBadge';
-import Panel from '../components/Panel';
+import Surface from '../components/Surface';
 
 interface Props {
   item: ItemDetail;
 }
 
 export default function BoardItemPage({ item }: Props) {
+  const [tab, setTab] = useState('details');
+
   const itemsQuery = useQuery({
     queryKey: ['items'],
     queryFn: api.listItems,
@@ -29,32 +32,32 @@ export default function BoardItemPage({ item }: Props) {
   return (
     <Box>
       <PageHeader
-        backTo={{ to: '/', label: 'Items' }}
         title={item.title}
         badges={
           <>
-            <Badge color="gray">{item.kind}</Badge>
+            <span className="pill">{item.kind.toUpperCase()}</span>
             <StatusBadge state={item.canonicalState} />
             <AgentActivityBadge run={item.activeRun} />
             {item.snapshot && <DemoSnapshotBadge snapshot={item.snapshot} />}
           </>
         }
-        meta={`board ${item.boardId} · profile ${item.profile}`}
+        meta={<MetaItems items={[`board ${item.boardId}`, `profile ${item.profile}`]} />}
+        subtitle={
+          parentStory ? (
+            <>
+              Parent story: <Link to={`/items/${encodeURIComponent(parentStory.id)}`}>{parentStory.title}</Link>
+            </>
+          ) : undefined
+        }
       />
 
-      <Panel title="Details">
-        <Box className="review-md">
-          <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>{item.description}</Markdown>
-        </Box>
-      </Panel>
-
-      {parentStory && (
-        <Box mt="4">
-          <Panel title="Parent story">
-            <Link to={`/items/${encodeURIComponent(parentStory.id)}`}>{parentStory.title}</Link>
-          </Panel>
-        </Box>
-      )}
+      <Surface value={tab} onValueChange={setTab} tabs={[{ value: 'details', label: 'Details' }]}>
+        <Tabs.Content value="details">
+          <Box className="review-md">
+            <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>{item.description}</Markdown>
+          </Box>
+        </Tabs.Content>
+      </Surface>
     </Box>
   );
 }

@@ -1,0 +1,71 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: control-plane
+  namespace: pdlc
+  labels: {app: control-plane}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: control-plane}
+  template:
+    metadata:
+      labels: {app: control-plane}
+    spec:
+      enableServiceLinks: false
+      initContainers:
+        - name: wait-for-deps
+          image: busybox:1.36
+          command: ["sh", "-c", "until nc -z postgres 5432 && nc -z temporal 7233; do echo waiting; sleep 2; done"]
+      containers:
+        - name: control-plane
+          image: pdlc-pilot/control-plane
+          env:
+            - {name: SPRING_DATASOURCE_URL, value: "jdbc:postgresql://postgres:5432/pdlc"}
+            - {name: SPRING_DATASOURCE_USERNAME, value: pdlc}
+            - {name: SPRING_DATASOURCE_PASSWORD, value: pdlc}
+            - {name: PDLC_CONFIG_PATH, value: /app/pdlc.yaml}
+            - {name: PDLC_ACTIVE_PROFILE, value: local}
+            - {name: TEMPORAL_TARGET, value: "temporal:7233"}
+            - {name: TEMPORAL_NAMESPACE, value: default}
+            # Shared secret the standalone build agent sends as X-Agent-Token; empty (default) = open,
+            # matching the pilot's X-User header-trust model.
+            - name: BUILD_AGENT_TOKEN
+              valueFrom: {secretKeyRef: {name: pdlc-env, key: BUILD_AGENT_TOKEN}}
+            # DemoInitializer (control-plane/.../demo) seeds the curated restaurant-demo catalog plus
+            # the demo-live feature on startup; off by default so ado-pilot/tests never seed anything.
+            - name: PDLC_DEMO_ENABLED
+              valueFrom: {secretKeyRef: {name: pdlc-env, key: PDLC_DEMO_ENABLED}}
+          ports:
+            - {containerPort: 8081}
+          volumeMounts:
+            - {name: config, mountPath: /app/pdlc.yaml, subPath: pdlc.yaml, readOnly: true}
+            # Same absolute path on both sides: LocalGitRepoAdapter's repo.url in pdlc.yaml is a plain
+            # host path, shared 1:1 with the build-worker host process (build-order phase 3 - omp is a
+            # native binary, so the build-worker that shells out to it cannot itself be containerized;
+            # it runs on the host and reaches this same repo directory directly, no path translation).
+            # Colima mounts /Users into the VM at the identical path, so the hostPath below matches
+            # the host path verbatim.
+            - {name: runtime, mountPath: /Users/work/Documents/restaurant-runtime}
+          readinessProbe:
+            tcpSocket: {port: 8081}
+            initialDelaySeconds: 15
+            periodSeconds: 5
+            failureThreshold: 60
+      volumes:
+        - name: config
+          configMap: {name: pdlc-config}
+        - name: runtime
+          hostPath: {path: /Users/work/Documents/restaurant-runtime, type: Directory}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: control-plane
+  namespace: pdlc
+spec:
+  type: LoadBalancer
+  selector: {app: control-plane}
+  ports:
+    - {port: 8081, targetPort: 8081}

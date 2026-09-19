@@ -140,6 +140,21 @@ public class BoardSideEffectsImpl implements BoardSideEffects {
     }
 
     @Override
+    public void postGrillRound(WorkItemRef item, GrillHandoff grill) {
+        WorkItemEntity feature = ensureWorkItem(item, "feature", null);
+        String openIds = grill.questions().stream()
+                .filter(q -> !q.askedByPoAgent() && !q.askedByBuildLoop() && q.status() == GrillQuestion.Status.OPEN)
+                .map(GrillQuestion::id)
+                .collect(java.util.stream.Collectors.joining(","));
+        board.addComment(item, formatGrillQuestions(GRILL_INSTRUCTION, grill,
+                q -> !q.askedByPoAgent() && !q.askedByBuildLoop() && q.status() == GrillQuestion.Status.OPEN), GRILL_BOT_IDENTITY);
+        board.transition(item, CanonicalState.NEEDS_CLARIFICATION);
+        board.attach(item, "grill.md", GrillMdSerializer.render(grill));
+        workItems.save(feature.withCanonicalState(CanonicalState.NEEDS_CLARIFICATION.wireValue()));
+        reviewTrail.appendReviewEvent(feature.id(), "grill-round", Map.of("boardId", item.boardId(), "questions", openIds));
+    }
+
+    @Override
     public void transitionReadyForStory(WorkItemRef item, GrillHandoff grill) {
         WorkItemEntity feature = ensureWorkItem(item, "feature", null);
         board.transition(item, CanonicalState.READY_FOR_STORY);
@@ -585,12 +600,14 @@ public class BoardSideEffectsImpl implements BoardSideEffects {
 
     private static final Pattern HEADING = Pattern.compile("^#{1,6}\\s+(.*\\S)\\s*$");
 
-    /** Structural section headings the story/task format uses (playbook lines 120-149) that are
+    /** Structural section headings the story/task format uses (playbook §2 Story format) that are
      * never a real title - {@code firstHeadingOrDefault} must skip these or a story whose first
-     * (and possibly only) heading is {@code ## Acceptance criteria} gets stored with that as its
+     * (and possibly only) heading is {@code ## Acceptance Criteria} gets stored with that as its
      * board title instead of something a human can recognize. */
     private static final Set<String> NON_TITLE_HEADINGS = Set.of(
-            "story", "user story", "acceptance criteria", "out of scope", "nfr", "dependencies");
+            "story", "user story", "goals", "context", "requirements", "functional requirements",
+            "non-functional requirements", "acceptance criteria", "out of scope", "dependencies",
+            "open decisions for approvers");
 
     /** Validates the extracted title isn't blank and isn't a structural section heading; falls
      * back to {@code fallback} and logs a warning otherwise so a mis-titled board item is visible
@@ -626,29 +643,23 @@ public class BoardSideEffectsImpl implements BoardSideEffects {
         return storyIndex > 0 ? featureTitle + " (" + (storyIndex + 1) + ")" : featureTitle;
     }
 
-    /** The plan agent builds every task title deterministically from its scenario name
-     * ({@code Implement "<scenario>"}) - the {@code "Implement "} prefix means {@code task.title()}
-     * itself is never blank, so the failure mode to guard is a blank {@code scenario} (parser
-     * accepts a whitespace-only {@code Scenario:} capture), which yields the uninformative literal
-     * {@code Implement ""}; detect via the scenario, not the title, and fall back to a task-id-based
-     * title, warning so it's visible. */
+    /** Title is agent-written; fall back to {@code Task <id>} when blank. */
     static String taskTitleOrDefault(Task task) {
-        if (task.scenario() == null || task.scenario().isBlank()) {
-            log.warn("[publishTasks] blank scenario for task {}; using fallback title", task.id());
-            return "Task " + task.id();
-        }
         String title = task.title();
         return title == null || title.isBlank() ? "Task " + task.id() : title;
     }
 
     private static String taskDescription(Task task) {
         StringBuilder sb = new StringBuilder();
-        sb.append("Scenario: ").append(task.scenario()).append('\n');
-        sb.append("Area: ").append(task.area()).append('\n');
-        sb.append("Touches: ").append(String.join(", ", task.touches())).append('\n');
-        sb.append("Test: ").append(task.testPath()).append('\n');
+        if (task.description() != null && !task.description().isBlank()) {
+            sb.append(task.description().strip()).append("\n\n---\n");
+        }
+        sb.append("- **Scenario:** ").append(task.scenario()).append('\n');
+        sb.append("- **Area:** ").append(task.area()).append('\n');
+        sb.append("- **Touches:** ").append(String.join(", ", task.touches())).append('\n');
+        sb.append("- **Test:** ").append(task.testPath()).append('\n');
         if (!task.blockedBy().isEmpty()) {
-            sb.append("Blocked by: ").append(String.join(", ", task.blockedBy())).append('\n');
+            sb.append("- **Blocked by:** ").append(String.join(", ", task.blockedBy())).append('\n');
         }
         return sb.toString();
     }
@@ -660,9 +671,9 @@ public class BoardSideEffectsImpl implements BoardSideEffects {
             for (String taskId : plan.waves().get(i)) {
                 Task task = plan.task(taskId);
                 sb.append("- ").append(task.id()).append(' ').append(task.title())
-                        .append(" (proves: ").append(task.scenario())
+                        .append(" — proves \"").append(task.scenario()).append('"')
                         .append("; touches: ").append(String.join(", ", task.touches()))
-                        .append("; test: ").append(task.testPath()).append(")\n");
+                        .append("; test: ").append(task.testPath()).append('\n');
             }
         }
         return sb.toString();

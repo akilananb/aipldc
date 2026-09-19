@@ -84,8 +84,12 @@ class SpacerMarker extends GutterMarker {
 
 const commentTheme = EditorView.theme({
   '&.cm-editor': {
-    backgroundColor: 'var(--color-panel-solid)',
-    color: 'var(--gray-12)',
+    backgroundColor: 'var(--s1)',
+    color: 'var(--text)',
+    fontFamily: 'var(--font-mono)',
+  },
+  '.cm-gutters': {
+    backgroundColor: 'var(--soft)',
   },
   '.cm-comment-range': {
     backgroundColor: 'var(--amber-a4)',

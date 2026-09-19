@@ -1,37 +1,39 @@
 import type { ReactNode } from 'react';
-import { Link } from 'react-router-dom';
-import { Box, Flex, Heading, Text } from '@radix-ui/themes';
 
 interface Props {
-  backTo?: { to: string; label: string };
   title: string;
+  subtitle?: ReactNode;
   badges?: ReactNode;
   meta?: ReactNode;
   actions?: ReactNode;
 }
 
-export default function PageHeader({ backTo, title, badges, meta, actions }: Props) {
+/** Renders a list of plain-text meta facts, each as its own stamped `.meta-tag` chip — the
+ * traveler-card idiom (routing-card facts sit in their own boxes, not run together as prose). */
+export function MetaItems({ items }: { items: string[] }) {
   return (
-    <Flex justify="between" align="start" gap="4" mb="4" wrap="wrap">
-      <Box>
-        {backTo && (
-          <Text size="2" mb="1" as="div">
-            <Link to={backTo.to}>← {backTo.label}</Link>
-          </Text>
-        )}
-        <Heading size="5">{title}</Heading>
-        {(badges || meta) && (
-          <Flex gap="2" mt="2" align="center" wrap="wrap">
-            {badges}
-            {meta && (
-              <Text size="2" color="gray">
-                {meta}
-              </Text>
-            )}
-          </Flex>
-        )}
-      </Box>
-      {actions && <Flex gap="2">{actions}</Flex>}
-    </Flex>
+    <>
+      {items.map((text, i) => (
+        <span key={i} className="meta-tag">
+          {text}
+        </span>
+      ))}
+    </>
+  );
+}
+
+export default function PageHeader({ title, subtitle, badges, meta, actions }: Props) {
+  return (
+    <section className="feature-head">
+      <div>
+        <div className="feature-meta">
+          {badges}
+          {meta}
+        </div>
+        <h1>{title}</h1>
+        {subtitle && <p className="subtitle">{subtitle}</p>}
+      </div>
+      {actions && <div className="top-actions">{actions}</div>}
+    </section>
   );
 }

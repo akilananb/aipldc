@@ -1,6 +1,7 @@
 package ai.pdlc.agents;
 
 import ai.pdlc.agents.grill.GrillAgent;
+import ai.pdlc.agents.grill.GrillSkills;
 import ai.pdlc.agents.po.PoAgent;
 import ai.pdlc.agents.quality.QualityAgent;
 import ai.pdlc.agents.release.ReleaseAgent;
@@ -70,7 +71,7 @@ class AgentSpringWiringTest {
     @Test
     void springContainerConstructsPromptTemplatesAndAllFourAgentsViaConstructorInjection() {
         try (AnnotationConfigApplicationContext ctx = new AnnotationConfigApplicationContext()) {
-            ctx.register(TestBeans.class, PromptTemplates.class, GrillAgent.class, PoAgent.class, ReviewAgent.class, ReleaseAgent.class, QualityAgent.class);
+            ctx.register(TestBeans.class, PromptTemplates.class, GrillSkills.class, GrillAgent.class, PoAgent.class, ReviewAgent.class, ReleaseAgent.class, QualityAgent.class);
             ctx.refresh();
 
             assertThat(ctx.getBean(PromptTemplates.class)).isNotNull();

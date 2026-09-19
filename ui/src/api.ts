@@ -1,5 +1,5 @@
 import { getIdentity } from './identity';
-import type { AgentRun, ArtifactVersion, BoardComment, Comment, CommentIntent, DemoStatus, GrillQuestions, ItemDetail, ItemSummary, QualityReport, ReleaseDocument, SpecDocs } from './types';
+import type { AgentRun, ArtifactVersion, BoardComment, Comment, CommentIntent, DemoStatus, GrillQuestions, ItemDetail, ItemSummary, QualityReport, ReleaseDocument, ScenarioReview, SpecDocs } from './types';
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8081';
 
@@ -128,6 +128,13 @@ export const api = {
     });
   },
 
+  reviewScenario(id: string, version: number, scenario: string, status: 'meets' | 'not-reviewed'): Promise<ScenarioReview> {
+    return request<ScenarioReview>(
+      `/api/artifacts/${encodeURIComponent(id)}/versions/${version}/scenarios/${encodeURIComponent(scenario)}/review`,
+      { method: 'PUT', body: JSON.stringify({ status }) },
+    );
+  },
+
   prApprove(id: string, note: string): Promise<unknown> {
     return request<unknown>(`/api/items/${encodeURIComponent(id)}/pr/approve`, {
       method: 'POST',
@@ -175,6 +182,12 @@ export const api = {
 
   parkGrillQuestion(id: string, questionId: string): Promise<void> {
     return request<void>(`/api/items/${encodeURIComponent(id)}/grill/${encodeURIComponent(questionId)}/park`, {
+      method: 'POST',
+    });
+  },
+
+  proceedGrill(id: string): Promise<void> {
+    return request<void>(`/api/items/${encodeURIComponent(id)}/grill/proceed`, {
       method: 'POST',
     });
   },

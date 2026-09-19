@@ -16,7 +16,11 @@ COPY control-plane/pom.xml control-plane/pom.xml
 COPY core/src core/src
 COPY adapters/src adapters/src
 COPY agents/src agents/src
-
+# Pinned grill-me/grilling skills (ADAPTIVE_GRILL_PLAN.md) — packaged via agents/pom.xml's
+# .agents/skills Maven resource; the runtime still receives only the packaged JAR.
+COPY .agents/skills/grill-me/SKILL.md .agents/skills/grill-me/SKILL.md
+COPY .agents/skills/grilling/SKILL.md .agents/skills/grilling/SKILL.md
+COPY .agents/skills/LICENSE.mattpocock .agents/skills/LICENSE.mattpocock
 RUN mvn -q -pl agents -am package -DskipTests
 
 FROM eclipse-temurin:21-jre

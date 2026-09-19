@@ -3,6 +3,7 @@ package ai.pdlc.controlplane.web;
 import ai.pdlc.controlplane.temporal.BuildTaskService;
 import ai.pdlc.controlplane.web.dto.ClaimRequest;
 import ai.pdlc.controlplane.web.dto.FailRequest;
+import ai.pdlc.controlplane.web.dto.PlanResultRequest;
 import ai.pdlc.core.workflow.BuildResult;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -23,10 +24,10 @@ import java.util.UUID;
 /**
  * The standalone build agent's only boundary to control-plane — {@code POST /claim} for a task,
  * {@code POST /{id}/heartbeat} while working it, {@code POST /{id}/result} or {@code
- * POST /{id}/fail} to finish. No Temporal client on the agent side; every call here is a thin
- * wrapper over {@link BuildTaskService}, which owns the {@code build_tasks} rows and resolves the
- * parked Temporal activity. Auth: a single shared secret ({@code X-Agent-Token}), optional -
- * matches the pilot's {@code X-User} header-trust model.
+ * POST /{id}/plan-result} or {@code POST /{id}/fail} to finish. No Temporal client on the agent
+ * side; every call here is a thin wrapper over {@link BuildTaskService}, which owns the {@code
+ * build_tasks} rows and resolves the parked Temporal activity. Auth: a single shared secret
+ * ({@code X-Agent-Token}), optional - matches the pilot's {@code X-User} header-trust model.
  */
 @RestController
 @RequestMapping("/api/build-tasks")
@@ -78,6 +79,13 @@ public class BuildTasksController {
     public ResponseEntity<Void> result(@PathVariable UUID id, @RequestBody BuildResult result, HttpServletRequest httpRequest) {
         checkAuth(httpRequest);
         service.complete(id, result);
+        return ResponseEntity.ok().build();
+    }
+
+    @PostMapping("/{id}/plan-result")
+    public ResponseEntity<Void> planResult(@PathVariable UUID id, @RequestBody PlanResultRequest request, HttpServletRequest httpRequest) {
+        checkAuth(httpRequest);
+        service.completePlan(id, request);
         return ResponseEntity.ok().build();
     }
 

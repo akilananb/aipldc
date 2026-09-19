@@ -3,13 +3,14 @@ import { toast } from 'sonner';
 import { api, errorMessage, type AddCommentBody } from '../api';
 import { useIdentity } from '../identity';
 import { GATE_ROLES } from '../gates';
-import type { Comment, GateState } from '../types';
+import type { Comment, GateState, ScenarioReview } from '../types';
 
 export interface ReviewActions {
   approve: UseMutationResult<unknown, Error, string>;
   requestChanges: UseMutationResult<unknown, Error, void>;
   approveAgentResult: UseMutationResult<void, Error, string>;
   addComment: UseMutationResult<Comment, Error, AddCommentBody>;
+  reviewScenario: UseMutationResult<ScenarioReview, Error, { version: number; scenario: string; status: 'meets' | 'not-reviewed' }>;
   prApprove: UseMutationResult<unknown, Error, string>;
   prRequestChanges: UseMutationResult<unknown, Error, void>;
   releaseRequestChanges: UseMutationResult<unknown, Error, void>;
@@ -72,6 +73,16 @@ export function useReviewActions(
     onError: (e) => toast.error(errorMessage(e)),
   });
 
+  const reviewScenario = useMutation({
+    mutationFn: ({ version, scenario, status }: { version: number; scenario: string; status: 'meets' | 'not-reviewed' }) =>
+      api.reviewScenario(storyId!, version, scenario, status),
+    onSuccess: (_, { status }) => {
+      void queryClient.invalidateQueries({ queryKey: ['artifact', storyId] });
+      toast.success(status === 'meets' ? 'Scenario marked as meeting criteria' : 'Scenario review cleared');
+    },
+    onError: (e) => toast.error(errorMessage(e)),
+  });
+
   const prApprove = useMutation({
     mutationFn: (note: string) => api.prApprove(storyId!, note),
     onSuccess: () => {
@@ -122,6 +133,7 @@ export function useReviewActions(
     requestChanges,
     approveAgentResult,
     addComment,
+    reviewScenario,
     prApprove,
     prRequestChanges,
     releaseRequestChanges,

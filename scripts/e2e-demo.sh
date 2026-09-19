@@ -51,11 +51,19 @@ RESOLVED_ANSWER="$(jq -r '.live.resolvedAnswer' "$FIXTURE")"
   echo "error: $FIXTURE has no .live.resolvedAnswer" >&2; exit 1
 }
 
-# Answer every OPEN grill question from the resolved brief. Never park, never skip; if a question
-# cannot be answered it stays open and we fail loudly rather than erasing a blocker.
+# Answer every OPEN grill question from the resolved brief; the reserved intake-confirmation
+# question (evidence "grill:confirmation") gets a literal "confirm" instead, never the brief's
+# answer. Adaptive intake may post several rounds (a dependent follow-up, then the confirmation) -
+# this loop re-fetches and re-answers each new round until /grill reports resolved. Never
+# park/skip; if a question cannot be answered it stays open and we fail loudly rather than erasing
+# a blocker. The deadline is checked on every iteration, not only while no question is open.
 answer_open_questions() {
-  local deadline=$((SECONDS + 120)) grill_json open_ids qid
+  local deadline=$((SECONDS + 120)) grill_json open_ids qid evidence answer
   while true; do
+    if [ "$SECONDS" -ge "$deadline" ]; then
+      log "FAIL: grill questions never resolved; last state: $(curl -s "$BASE/api/items/$FEATURE_ID/grill" || true)"
+      return 1
+    fi
     grill_json="$(curl -s "$BASE/api/items/$FEATURE_ID/grill" || true)"
     if printf '%s' "$grill_json" | jq -e '.resolved == true' >/dev/null 2>&1; then
       log "    OK: all grill questions resolved"
@@ -63,18 +71,21 @@ answer_open_questions() {
     fi
     open_ids="$(printf '%s' "$grill_json" | jq -r '.questions[]? | select(.status == "open") | .id' 2>/dev/null || true)"
     if [ -z "$open_ids" ]; then
-      if [ "$SECONDS" -ge "$deadline" ]; then
-        log "FAIL: grill questions never resolved; last state: $grill_json"
-        return 1
-      fi
       sleep 3
       continue
     fi
     for qid in $open_ids; do
-      log "    answering $qid from the resolved brief"
+      evidence="$(printf '%s' "$grill_json" | jq -r --arg q "$qid" '.questions[] | select(.id == $q) | .evidence')"
+      if [ "$evidence" = "grill:confirmation" ]; then
+        log "    confirming shared understanding ($qid)"
+        answer="confirm"
+      else
+        log "    answering $qid from the resolved brief"
+        answer="$RESOLVED_ANSWER"
+      fi
       if ! api -X POST "$BASE/api/items/$FEATURE_ID/grill/$qid/answer" \
           -H "X-User: $PO_USER" -H 'X-Role: PO' -H 'Content-Type: application/json' \
-          -d "$(jq -n --arg a "$RESOLVED_ANSWER" '{text: $a}')" >/dev/null 2>&1; then
+          -d "$(jq -n --arg a "$answer" '{text: $a}')" >/dev/null 2>&1; then
         # The question may have been resolved between our read and this POST (benign race); only
         # fail if it is genuinely still open.
         if curl -s "$BASE/api/items/$FEATURE_ID/grill" | jq -e --arg q "$qid" \

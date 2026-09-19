@@ -1,5 +1,7 @@
 package ai.pdlc.core.workflow;
 
+import ai.pdlc.core.domain.PlanResult;
+import ai.pdlc.core.domain.PoHandoff;
 import ai.pdlc.core.domain.Task;
 import ai.pdlc.core.domain.WorkItemRef;
 import io.temporal.activity.ActivityInterface;
@@ -26,4 +28,10 @@ public interface BuildActivities {
      * @param feedback reviewer/human/verifier lines a fix round must address; empty on a first attempt */
     @ActivityMethod(name = "runTask")
     BuildResult runTask(WorkItemRef story, Task task, String branch, String baseBranch, List<String> feedback);
+
+    /** Plan step: parks like runTask; the build-worker runs the coding agent read-only in a
+     * detached worktree of the default branch and posts back {@code .pdlc/plan.json} (see
+     * build-worker/src/planTask.ts). */
+    @ActivityMethod(name = "planTasks")
+    PlanResult planTasks(WorkItemRef story, PoHandoff po);
 }

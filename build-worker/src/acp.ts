@@ -83,10 +83,11 @@ export function runAcpSession(cwd: string, prompt: string, timeoutMs: number, ag
   return promise;
 }
 
-export function buildTaskPrompt(template: string, taskId: string, title: string, scenario: string, touches: string[], testPath: string, testFileExists: boolean, canWriteTestPath: boolean, feedback: string[]): string {
+export function buildTaskPrompt(template: string, taskId: string, title: string, description: string, scenario: string, touches: string[], testPath: string, testFileExists: boolean, canWriteTestPath: boolean, feedback: string[]): string {
   const view = {
     taskId,
     title,
+    description,
     scenario,
     touches: touches.join(', '),
     testPath,
@@ -97,4 +98,10 @@ export function buildTaskPrompt(template: string, taskId: string, title: string,
     feedback,
   };
   return Mustache.render(template, view);
+}
+
+/** Renders the planning agent's prompt - see templates/plan-tasks.mustache for the full contract
+ * (JSON shape, field rules) the agent must satisfy in `outputPath`. */
+export function planTasksPrompt(template: string, view: { change: string; scenarios: string[]; areas: string; nfr: string[]; outputPath: string; feedback: string[] }): string {
+  return Mustache.render(template, { ...view, hasNfr: view.nfr.length > 0, hasFeedback: view.feedback.length > 0 });
 }

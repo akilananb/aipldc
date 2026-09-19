@@ -3,10 +3,10 @@ package ai.pdlc.core.workflow;
 import ai.pdlc.core.domain.AgentMentionRequest;
 import ai.pdlc.core.domain.Comment;
 import ai.pdlc.core.domain.GrillHandoff;
+import ai.pdlc.core.domain.GrillRound;
 import ai.pdlc.core.domain.MonitorHandoff;
 import ai.pdlc.core.domain.QualityReport;
 import ai.pdlc.core.domain.MonitorRule;
-import ai.pdlc.core.domain.PlanHandoff;
 import ai.pdlc.core.domain.PoHandoff;
 import ai.pdlc.core.domain.ReleaseHandoff;
 import ai.pdlc.core.domain.ReviewHandoff;
@@ -36,6 +36,14 @@ public interface AgentActivities {
     @ActivityMethod
     GrillHandoff grillEvaluate(WorkItemRef item, GrillHandoff previous, List<BoardCommentEvent> newComments);
 
+    /** One adaptive-intake reasoning round (ADAPTIVE_GRILL_PLAN.md step 3). {@code previous ==
+     * null} starts intake; otherwise every question in {@code previous} must already be resolved
+     * (answered/parked) — the caller folds human answers via {@link #grillEvaluate} first. Returns
+     * only the newly-appended OPEN questions (or none, with a nonblank completion summary) — never
+     * re-generates or overwrites prior history. */
+    @ActivityMethod
+    GrillRound grillNextRound(WorkItemRef item, GrillHandoff previous);
+
     /** Drafts the story + spec delta from the resolved grill handoff. Returns one {@link StoryDraft}
      * per distinct actor/factor when the PO agent splits the feature into multiple stories
      * (single-actor features return a singleton list). When {@code allowFollowUps}, the agent may
@@ -44,20 +52,18 @@ public interface AgentActivities {
     @ActivityMethod
     PoDraftResult poDraft(WorkItemRef item, GrillHandoff grill, boolean allowFollowUps);
 
-    /** Revises only the lines the open comments target; re-runs INVEST/DoR; replies to every comment. */
+    /** Revises the current story to address the submitted feedback (every explicitly-posted
+     * comment, not just blocking ones), retaining the resolved intake context ({@code grill},
+     * possibly {@code null} for an already-queued three-argument activity input) so an
+     * unrelated-content revision cannot regress DoR/parked-scope coverage; re-runs INVEST/DoR. */
     @ActivityMethod
-    StoryDraft poRevise(WorkItemRef item, PoHandoff previous, List<Comment> openComments);
+    StoryDraft poRevise(WorkItemRef item, PoHandoff previous, List<Comment> openComments, GrillHandoff grill);
 
-    /** Evaluates one story/task draft's INVEST/clarity/testability quality (playbook: quality
-     * agent). {@code subjectKind} is {@code "story"} or {@code "task"}; a story verdict hard-blocks
-     * gate 1, a task verdict is advisory only. */
+    /** Evaluates a story draft's INVEST/clarity/testability quality (playbook: quality agent).
+     * {@code subjectKind} is always {@code "story"} (task plan checks are deterministic — see
+     * {@link ai.pdlc.core.plan.PlanChecks} — not LLM-evaluated); the verdict hard-blocks gate 1. */
     @ActivityMethod
     QualityReport evaluateQuality(WorkItemRef item, String subjectKind, String contentMd);
-
-    /** Deterministic task breakdown from the approved story's spec delta — one task per
-     * ADDED/MODIFIED scenario, sequenced into waves by file-conflict/dependency order. */
-    @ActivityMethod
-    PlanHandoff planTasks(WorkItemRef story, PoHandoff po);
 
     /** Reviews the accumulated story branch diff once the build loop finishes every wave:
      * traceability (scenario → test → code) plus findings: blocker/should/nit. */

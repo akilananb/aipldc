@@ -14,15 +14,17 @@ class InvestValidatorTest {
         String story = """
                 # Export orders
                 Feature: #4412 · Change: openspec/changes/export-orders-csv · Area: orders
-                As a sales admin
-                I want to export orders
-                So that I can share data
 
-                ## Acceptance criteria
+                ## Story
+                As a sales admin,
+                I want to export the grid,
+                So that I can share data.
+
+                ## Acceptance Criteria
                 Scenario: export
-                  GIVEN the user has filtered the grid
-                  WHEN  the user clicks Export
-                  THEN  the export works well
+                  Given the user has filtered the grid
+                  When  the user clicks Export
+                  Then  the export works well
                 """;
         assertThat(InvestValidator.testable(story)).isFalse();
         assertThat(InvestValidator.validate(story).get("T")).isEqualTo("fail");
@@ -33,15 +35,17 @@ class InvestValidatorTest {
         String story = """
                 # Export orders
                 Feature: #4412 · Change: openspec/changes/export-orders-csv · Area: orders
-                As a sales admin
-                I want to export orders
-                So that I can share data
 
-                ## Acceptance criteria
+                ## Story
+                As a sales admin,
+                I want to export the grid,
+                So that I can share data.
+
+                ## Acceptance Criteria
                 Scenario: export
-                  GIVEN the user has filtered the grid to 500 rows
-                  WHEN  the user clicks Export CSV
-                  THEN  a CSV file downloads with exactly 500 rows
+                  Given the user has filtered the grid to 500 rows
+                  When  the user clicks Export CSV
+                  Then  a CSV file downloads with exactly 500 rows
                 """;
         assertThat(InvestValidator.testable(story)).isTrue();
         assertThat(InvestValidator.validate(story).get("T")).isEqualTo("pass");
@@ -59,15 +63,17 @@ class InvestValidatorTest {
         String story = """
                 # Export orders
                 Feature: #4412 · Change: openspec/changes/export-orders-csv · Area: orders
-                As a sales admin
-                I want to export orders
-                So that I can share data
 
-                ## Acceptance criteria
+                ## Story
+                As a sales admin,
+                I want to export the grid,
+                So that I can share data.
+
+                ## Acceptance Criteria
                 Scenario: export
-                  GIVEN the user has filtered the grid
-                  WHEN  the user clicks Export CSV
-                  THEN  a CSV file downloads
+                  Given the user has filtered the grid
+                  When  the user clicks Export CSV
+                  Then  a CSV file downloads
 
                 ## Dependencies
                 - use the CsvExporter class
@@ -80,15 +86,17 @@ class InvestValidatorTest {
         String story = """
                 # Export orders
                 Feature: #4412 · Change: openspec/changes/export-orders-csv · Area: orders
-                As a sales admin
-                I want to export orders
-                So that I can share data
 
-                ## Acceptance criteria
+                ## Story
+                As a sales admin,
+                I want to export the grid,
+                So that I can share data.
+
+                ## Acceptance Criteria
                 Scenario: export
-                  GIVEN the user has filtered the grid
-                  WHEN  the user clicks Export CSV
-                  THEN  a CSV file downloads
+                  Given the user has filtered the grid
+                  When  the user clicks Export CSV
+                  Then  a CSV file downloads
 
                 ## Dependencies
                 - blocked on feature #4413

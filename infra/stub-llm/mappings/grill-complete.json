@@ -1,0 +1,39 @@
+{
+  "priority": 2,
+  "request": {
+    "method": "POST",
+    "urlPath": "/v1/chat/completions",
+    "bodyPatterns": [
+      {
+        "contains": "[agent:grill]"
+      }
+    ]
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "jsonBody": {
+      "id": "chatcmpl-stub",
+      "object": "chat.completion",
+      "created": 1750000000,
+      "model": "stub/grill",
+      "choices": [
+        {
+          "index": 0,
+          "message": {
+            "role": "assistant",
+            "content": "{\"type_decision\": \"story\", \"questions\": [], \"constraints_hit\": [], \"summary\": \"Export the current filtered orders view as CSV, restricted to sales/admin roles, with visible grid columns, audited and rate-limited (10/hour, 20/hour for admin) per docs/constraints.md#data-classification, reusing the existing streaming endpoint, up to 50k rows within 5 seconds.\"}"
+          },
+          "finish_reason": "stop"
+        }
+      ],
+      "usage": {
+        "prompt_tokens": 20,
+        "completion_tokens": 40,
+        "total_tokens": 60
+      }
+    }
+  }
+}

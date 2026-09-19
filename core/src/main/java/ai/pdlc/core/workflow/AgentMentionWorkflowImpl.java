@@ -9,9 +9,10 @@ import io.temporal.workflow.Workflow;
 import java.time.Duration;
 
 /**
- * {@link AgentMentionWorkflow} implementation. Bounded retries on the LLM call (unlike {@link
- * FeatureWorkflowImpl}'s default unlimited retry) so a persistent failure lands the comment in
- * {@code failed} instead of retrying forever.
+ * {@link AgentMentionWorkflow} implementation. Bounded retries on the LLM call so a persistent
+ * failure lands the comment in {@code failed} instead of retrying forever — the same bounded-retry
+ * convention {@link FeatureWorkflowImpl#AGENT_ACTIVITY_OPTIONS} now follows for its agent/LLM
+ * calls.
  */
 public class AgentMentionWorkflowImpl implements AgentMentionWorkflow {
 

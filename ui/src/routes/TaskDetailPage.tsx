@@ -1,20 +1,22 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Badge, Box, Flex, Tabs, Text } from '@radix-ui/themes';
+import { Box, Tabs, Text } from '@radix-ui/themes';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
 import { api, errorMessage } from '../api';
 import type { CommentIntent, DocApproval, ItemDetail } from '../types';
-import { extendLineTarget, formatLineTarget, parseLineTarget } from '../ui-utils';
-import PageHeader from '../components/PageHeader';
+import { extendLineTarget, formatLineTarget, parseLineTarget, parseStoryDoc } from '../ui-utils';
+import PageHeader, { MetaItems } from '../components/PageHeader';
 import StatusBadge from '../components/StatusBadge';
 import AgentActivityBadge from '../components/AgentActivityBadge';
 import DemoSnapshotBadge from '../components/DemoSnapshotBadge';
 import ErrorCallout from '../components/ErrorCallout';
-import Panel from '../components/Panel';
+import Surface from '../components/Surface';
+import ViewHead from '../components/ViewHead';
 import { useReviewActions } from '../review/useReviewActions';
-import GatePanel from '../review/GatePanel';
+import ReviewBar from '../review/ReviewBar';
 import CommentPanel from '../review/CommentPanel';
 import PreviewTab from '../review/PreviewTab';
 import ReviewMdTab from '../review/ReviewMdTab';
@@ -25,10 +27,10 @@ interface Props {
   item: ItemDetail;
 }
 
-function ApprovalBanner({ approvals }: { approvals: DocApproval[] }) {
+function ApprovalPills({ approvals }: { approvals: DocApproval[] }) {
   const hasSquadLead = approvals.some((a) => a.role === 'SquadLead');
   if (!hasSquadLead) {
-    return <Badge color="amber">awaiting gate-1 approval</Badge>;
+    return <span className="pill review">awaiting gate-1 approval</span>;
   }
 
   // Highest-version approval per role, SquadLead first.
@@ -46,18 +48,19 @@ function ApprovalBanner({ approvals }: { approvals: DocApproval[] }) {
   });
 
   return (
-    <Flex gap="2" wrap="wrap">
+    <>
       {ordered.map((a) => (
-        <Badge key={a.role} color="green">
-          approved by {a.who} ({a.role}) · v{a.version} · {new Date(a.at).toLocaleString()}
-        </Badge>
+        <span key={a.role} className="pill pass">
+          approved by {a.who} ({a.role}) · v{a.version}
+        </span>
       ))}
-    </Flex>
+    </>
   );
 }
 
 export default function TaskDetailPage({ item }: Props) {
   const [draftTarget, setDraftTarget] = useState<string | null>(null);
+  const [tab, setTab] = useState('brief');
 
   const specDocsQuery = useQuery({
     queryKey: ['spec-docs', item.id],
@@ -97,108 +100,129 @@ export default function TaskDetailPage({ item }: Props) {
 
   const readOnly = item.snapshot != null || (story != null && story.snapshot != null);
 
+  const storyDoc = useMemo(
+    () => parseStoryDoc(storyArtifactQuery.data?.storyMarkdown ?? ''),
+    [storyArtifactQuery.data?.storyMarkdown],
+  );
+  const commentBlocks = useMemo(() => {
+    const result: { label: string; target: string }[] = [];
+    if (storyDoc.story) result.push({ label: 'User story', target: formatLineTarget(storyDoc.story.start, storyDoc.story.end) });
+    if (storyDoc.contextStart != null && storyDoc.contextEnd != null) {
+      result.push({ label: 'Context & constraints', target: formatLineTarget(storyDoc.contextStart, storyDoc.contextEnd) });
+    }
+    storyDoc.scenarios.forEach((s, i) => {
+      result.push({ label: `Scenario ${i + 1}: ${s.name}`, target: formatLineTarget(s.start, s.end) });
+    });
+    return result;
+  }, [storyDoc]);
+
   return (
     <Box>
       <PageHeader
-        backTo={docs ? { to: `/items/${docs.storyId}`, label: `Story: ${docs.storyTitle}` } : { to: '/', label: 'Items' }}
         title={item.title}
         badges={
           <>
-            <Badge color="gray">task</Badge>
+            <span className="pill">TASK</span>
             <StatusBadge state={item.canonicalState} />
             <AgentActivityBadge run={item.activeRun} />
             {item.snapshot && <DemoSnapshotBadge snapshot={item.snapshot} />}
+            {docs ? <ApprovalPills approvals={docs.approvals} /> : <span className="pill review">awaiting gate-1 approval</span>}
           </>
         }
-        meta={`board ${item.boardId} · profile ${item.profile}`}
+        meta={<MetaItems items={[`board ${item.boardId}`, `profile ${item.profile}`]} />}
+        subtitle={
+          docs ? (
+            <>
+              Task of story: <Link to={`/items/${docs.storyId}`}>{docs.storyTitle}</Link>
+            </>
+          ) : undefined
+        }
       />
 
-      <Box mb="4">
-        <Panel>{docs ? <ApprovalBanner approvals={docs.approvals} /> : <Badge color="amber">awaiting gate-1 approval</Badge>}</Panel>
-      </Box>
+      {storyId && story && <ReviewBar item={story} actions={actions} />}
 
-      <Box mb="4">
-        <Panel title="Context">
+      <Surface
+        value={tab}
+        onValueChange={setTab}
+        tabs={[
+          { value: 'brief', label: 'Brief' },
+          { value: 'story', label: 'Parent story' },
+          { value: 'spec', label: 'Design spec' },
+          { value: 'tasks', label: 'Tasks plan' },
+          { value: 'quality', label: 'Checks' },
+          { value: 'activity', label: 'Activity' },
+        ]}
+        inspector={
+          tab === 'story' ? (
+            <CommentPanel
+              comments={currentComments}
+              draftTarget={draftTarget}
+              onDraftTarget={setDraftTarget}
+              onAddComment={(body: { target: string; text: string; intent: CommentIntent; blocking: boolean }) =>
+                actions.addComment.mutate(body)
+              }
+              submitting={actions.addComment.isPending}
+              onApproveAgentResult={(commentId) => actions.approveAgentResult.mutate(commentId)}
+              approvingAgentResult={actions.approveAgentResult.isPending}
+              canApproveAgentResult={actions.g1RoleAllowed}
+              readOnly={readOnly}
+              blocks={commentBlocks}
+            />
+          ) : undefined
+        }
+      >
+        <Tabs.Content value="brief">
+          <ViewHead title="Task brief" />
           <Box className="review-md">
             <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>{item.description}</Markdown>
           </Box>
-        </Panel>
-      </Box>
+        </Tabs.Content>
 
-      {storyId && story && (
-        <Box mb="4">
-          <GatePanel item={story} actions={actions} />
-        </Box>
-      )}
-
-      <Tabs.Root defaultValue="story">
-        <Tabs.List>
-          <Tabs.Trigger value="story">Story & comments</Tabs.Trigger>
-          <Tabs.Trigger value="spec">Design spec</Tabs.Trigger>
-          <Tabs.Trigger value="tasks">Tasks plan</Tabs.Trigger>
-          <Tabs.Trigger value="quality">Quality</Tabs.Trigger>
-          <Tabs.Trigger value="activity">Activity</Tabs.Trigger>
-        </Tabs.List>
-
-        <Box pt="4">
-          <Tabs.Content value="story">
-            {(docsLoading || storyItemQuery.isLoading || storyArtifactQuery.isLoading) && (
-              <Text color="gray">Loading documents…</Text>
-            )}
-            {specDocsQuery.isError && <ErrorCallout title="Failed to load documents" error={specDocsQuery.error} />}
-            {storyArtifactQuery.isError && (
-              <ErrorCallout title="Failed to load artifact" error={storyArtifactQuery.error} />
-            )}
-            {storyArtifactQuery.data && (
-              <div className="review-layout">
-                <Box style={{ minWidth: 0 }}>
-                  <PreviewTab
-                    markdown={storyArtifactQuery.data.storyMarkdown}
-                    onLineSelect={(line, shift) => setDraftTarget((prev) => extendLineTarget(prev, line, shift))}
-                    onRangeSelect={(start, end) => setDraftTarget(formatLineTarget(start, end))}
-                    selectedRange={parseLineTarget(draftTarget)}
-                  />
-                </Box>
-                <div className="review-sidebar">
-                  <CommentPanel
-                    comments={currentComments}
-                    draftTarget={draftTarget}
-                    onDraftTarget={setDraftTarget}
-                    onAddComment={(body: { target: string; text: string; intent: CommentIntent; blocking: boolean }) =>
-                      actions.addComment.mutate(body)
-                    }
-                    submitting={actions.addComment.isPending}
-                    onApproveAgentResult={(commentId) => actions.approveAgentResult.mutate(commentId)}
-                    approvingAgentResult={actions.approveAgentResult.isPending}
-                    canApproveAgentResult={actions.g1RoleAllowed}
-                    readOnly={readOnly}
-                  />
-                </div>
-              </div>
-            )}
-          </Tabs.Content>
-          <Tabs.Content value="spec">
-            <ReviewMdTab
-              loading={docsLoading}
-              error={specDocsQuery.isError ? errorMessage(specDocsQuery.error) : null}
-              content={docs?.specMd ?? null}
+        <Tabs.Content value="story">
+          {(docsLoading || storyItemQuery.isLoading || storyArtifactQuery.isLoading) && (
+            <Text color="gray">Loading documents…</Text>
+          )}
+          {specDocsQuery.isError && <ErrorCallout title="Failed to load documents" error={specDocsQuery.error} />}
+          {storyArtifactQuery.isError && (
+            <ErrorCallout title="Failed to load artifact" error={storyArtifactQuery.error} />
+          )}
+          {storyArtifactQuery.data && (
+            <PreviewTab
+              markdown={storyArtifactQuery.data.storyMarkdown}
+              reviews={storyArtifactQuery.data.scenarioReviews}
+              canReview={actions.g1RoleAllowed && !readOnly}
+              reviewing={actions.reviewScenario.isPending ? (actions.reviewScenario.variables?.scenario ?? null) : null}
+              onReviewScenario={(scenario, status) =>
+                actions.reviewScenario.mutate({ version: latestVersion, scenario, status })
+              }
+              onLineSelect={(line, shift) => setDraftTarget((prev) => extendLineTarget(prev, line, shift))}
+              onRangeSelect={(start, end) => setDraftTarget(formatLineTarget(start, end))}
+              selectedRange={parseLineTarget(draftTarget)}
             />
-          </Tabs.Content>
-          <Tabs.Content value="tasks">
-            <ReviewMdTab
-              loading={docsLoading}
-              error={specDocsQuery.isError ? errorMessage(specDocsQuery.error) : null}
-              content={docs?.tasksMd ?? null}
-            />
-          </Tabs.Content>
-          <Tabs.Content value="quality">
-            <QualityTab id={item.id} />
-          </Tabs.Content>
-          <Tabs.Content value="activity">
-            <ActivityTab id={item.id} snapshot={readOnly} />
-          </Tabs.Content>
-        </Box>
-      </Tabs.Root>
+          )}
+        </Tabs.Content>
+
+        <Tabs.Content value="spec">
+          <ReviewMdTab
+            loading={docsLoading}
+            error={specDocsQuery.isError ? errorMessage(specDocsQuery.error) : null}
+            content={docs?.specMd ?? null}
+          />
+        </Tabs.Content>
+        <Tabs.Content value="tasks">
+          <ReviewMdTab
+            loading={docsLoading}
+            error={specDocsQuery.isError ? errorMessage(specDocsQuery.error) : null}
+            content={docs?.tasksMd ?? null}
+          />
+        </Tabs.Content>
+        <Tabs.Content value="quality">
+          <QualityTab id={item.id} label="Checks" />
+        </Tabs.Content>
+        <Tabs.Content value="activity">
+          <ActivityTab id={item.id} snapshot={readOnly} />
+        </Tabs.Content>
+      </Surface>
     </Box>
   );
 }

@@ -1,0 +1,42 @@
+{
+  "priority": 1,
+  "request": {
+    "method": "POST",
+    "urlPath": "/v1/chat/completions",
+    "bodyPatterns": [
+      {
+        "contains": "[agent:grill]"
+      },
+      {
+        "contains": "[grill-next-id:q7]"
+      }
+    ]
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "jsonBody": {
+      "id": "chatcmpl-stub",
+      "object": "chat.completion",
+      "created": 1750000000,
+      "model": "stub/grill",
+      "choices": [
+        {
+          "index": 0,
+          "message": {
+            "role": "assistant",
+            "content": "{\"type_decision\": \"story\", \"questions\": [{\"category\": \"nfr\", \"question\": \"Now that admin can export up to 50k rows, should admin get a higher rate limit than the standard 10/hour?\", \"recommendation\": \"Allow admin 20 exports/hour, others stay at 10/hour.\", \"evidence\": \"assumption-check\"}], \"constraints_hit\": [], \"summary\": \"\"}"
+          },
+          "finish_reason": "stop"
+        }
+      ],
+      "usage": {
+        "prompt_tokens": 20,
+        "completion_tokens": 40,
+        "total_tokens": 60
+      }
+    }
+  }
+}

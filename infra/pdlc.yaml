@@ -34,12 +34,12 @@ profiles:
       gateway: https://openrouter.ai/api/v1
       # prompts_dir: /app/prompts   # optional: directory of *.mustache files overriding the bundled prompt templates (mount it into the agents container)
       roles:
-        grill: { model: anthropic/claude-sonnet-5, budget_tokens: 60000 }
-        po:    { model: anthropic/claude-sonnet-5, budget_tokens: 40000 }
-        review: { model: anthropic/claude-sonnet-5, budget_tokens: 30000 }
-        release: { model: anthropic/claude-sonnet-5, budget_tokens: 30000 }
-        mention: { model: anthropic/claude-sonnet-5, budget_tokens: 20000 }
-        quality: { model: anthropic/claude-sonnet-5, budget_tokens: 20000 }
+        grill: { model: sonnet }
+        po:    { model: sonnet, budget_tokens: 40000 }
+        review: { model: sonnet, budget_tokens: 30000 }
+        release: { model: sonnet, budget_tokens: 30000 }
+        mention: { model: sonnet, budget_tokens: 20000 }
+        quality: { model: sonnet, budget_tokens: 20000 }
     gates:
       G1: { roles: [PO, SquadLead], sod: true }
       G2: { roles: [FSDeveloper, QA], sod: true }
@@ -80,7 +80,7 @@ profiles:
       gateway: http://litellm:4000/v1
       # prompts_dir: /app/prompts   # optional: directory of *.mustache files overriding the bundled prompt templates (mount it into the agents container)
       roles:
-        grill: { model: anthropic/claude-sonnet, budget_tokens: 60000 }
+        grill: { model: anthropic/claude-sonnet, budget_tokens: 8000 }
         po:    { model: anthropic/claude-sonnet, budget_tokens: 40000 }
         review: { model: anthropic/claude-sonnet, budget_tokens: 30000 }
         release: { model: anthropic/claude-sonnet, budget_tokens: 30000 }

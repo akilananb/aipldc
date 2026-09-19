@@ -7,7 +7,7 @@ import path from 'node:path';
 import { ApiClient } from './client';
 import type { AgentConfig } from './config';
 import type { BuildResult, ClaimedTask } from './types';
-import { handleClaim, type BuildRunner } from './worker';
+import { handleClaim, type BuildRunner, type PlanRunner } from './worker';
 
 interface RecordedRequest {
   method: string;
@@ -57,10 +57,12 @@ function claimFixture(id: string): ClaimedTask {
     id,
     attempt: 1,
     payload: {
+      kind: 'build',
       story: { profile: 'local', boardId: '4414' },
       task: {
         id: 'T1',
         title: 'Add CSV export',
+        description: 'brief',
         area: 'orders',
         scenario: 'export-csv',
         touches: ['src/export.js'],
@@ -149,7 +151,8 @@ test('handleClaim heartbeats while the runner works, posts its result, and sends
       return posted;
     };
 
-    await handleClaim(client, claimed, runner);
+    const unusedPlanRunner: PlanRunner = async () => { throw new Error('unexpected plan claim'); };
+    await handleClaim(client, claimed, { build: runner, plan: unusedPlanRunner });
 
     assert.ok(heartbeatCount >= 1, 'expected at least one heartbeat while the runner worked');
     const resultReq = requests.find((r) => r.url === '/api/build-tasks/task-1/result');
@@ -214,7 +217,8 @@ test('handleClaim aborts the runner and posts nothing when a heartbeat comes bac
       return promise;
     };
 
-    await handleClaim(client, claimed, runner);
+    const unusedPlanRunner: PlanRunner = async () => { throw new Error('unexpected plan claim'); };
+    await handleClaim(client, claimed, { build: runner, plan: unusedPlanRunner });
 
     assert.equal(sawAbort, true);
     assert.equal(requests.some((r) => r.url === '/api/build-tasks/task-2/result'), false);

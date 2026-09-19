@@ -1,15 +1,16 @@
 import { useState, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { MapPin } from 'lucide-react';
-import { Avatar, Badge, Box, Button, Card, Checkbox, Flex, Heading, IconButton, Select, Text, TextArea } from '@radix-ui/themes';
+import { Avatar, Badge, Box, Button, Checkbox, Flex, Select, Text, TextArea } from '@radix-ui/themes';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
 import Collapsible from '../components/Collapsible';
 import type { Comment, CommentIntent } from '../types';
 import type { AddCommentBody } from '../api';
-import { intentBadgeColor, findMentionToken } from '../ui-utils';
+import { findMentionToken, parseLineTarget } from '../ui-utils';
 import type { MentionToken } from '../ui-utils';
+import { useComposeRequest } from '../composer';
 
 interface Props {
   comments: Comment[];
@@ -21,6 +22,7 @@ interface Props {
   approvingAgentResult: boolean;
   canApproveAgentResult: boolean;
   readOnly: boolean;
+  blocks: { label: string; target: string }[];
 }
 
 const INTENTS: CommentIntent[] = ['change', 'question', 'note'];
@@ -34,6 +36,12 @@ const MENTION_AGENTS: { name: string; description: string }[] = [
   { name: 'qa', description: 'testability, coverage gaps, risk scenarios' },
   { name: 'dev', description: 'implementation & code questions, reads the repo' },
 ];
+
+const INTENT_PILL: Record<CommentIntent, string> = {
+  change: 'pill review',
+  question: 'pill info',
+  note: 'pill',
+};
 
 function groupByTarget(comments: Comment[]): { target: string; comments: Comment[] }[] {
   const map = new Map<string, Comment[]>();
@@ -55,6 +63,7 @@ export default function CommentPanel({
   approvingAgentResult,
   canApproveAgentResult,
   readOnly,
+  blocks,
 }: Props) {
   const [text, setText] = useState('');
   const [intent, setIntent] = useState<CommentIntent>('note');
@@ -63,6 +72,7 @@ export default function CommentPanel({
   const [mention, setMention] = useState<MentionToken | null>(null);
   const [highlight, setHighlight] = useState(0);
   const [dropdownRect, setDropdownRect] = useState<{ top: number; left: number; width: number } | null>(null);
+  const composeRequest = useComposeRequest();
 
   const suggestions = mention
     ? MENTION_AGENTS.filter((a) => a.name.startsWith(mention.query.toLowerCase()))
@@ -82,9 +92,8 @@ export default function CommentPanel({
     });
   }
 
-  // Dropdown renders in a portal (escapes ancestor overflow/contain clipping — e.g. Radix
-  // Card's `contain: paint`, the sidebar's `overflow: auto`), so its position is tracked in
-  // viewport coordinates and re-synced on any scroll (capture, to catch inner scroll
+  // Dropdown renders in a portal (escapes ancestor overflow/contain clipping), so its position is
+  // tracked in viewport coordinates and re-synced on any scroll (capture, to catch inner scroll
   // containers) or resize while it's open.
   useEffect(() => {
     if (!mention) {
@@ -105,6 +114,15 @@ export default function CommentPanel({
       window.removeEventListener('resize', sync);
     };
   }, [mention]);
+
+  // ⌘K "Ask an agent" / header "Ask agents" — prefill (never clobber a draft in progress) and
+  // focus the composer.
+  useEffect(() => {
+    if (composeRequest.seq === 0 || readOnly) return;
+    setText((t) => (t.trim() ? t : composeRequest.text));
+    requestAnimationFrame(() => textareaRef.current?.focus());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [composeRequest.seq]);
 
   function acceptSuggestion(name: string) {
     const el = textareaRef.current;
@@ -129,40 +147,46 @@ export default function CommentPanel({
   }
 
   const grouped = groupByTarget(comments);
+  const anchorRange = parseLineTarget(draftTarget);
+  const anchorLabel = anchorRange
+    ? `Line ${anchorRange.start}${anchorRange.end > anchorRange.start ? `–${anchorRange.end}` : ''}`
+    : draftTarget;
+  const anchorItems =
+    draftTarget && !blocks.some((b) => b.target === draftTarget)
+      ? [...blocks, { label: anchorLabel ?? draftTarget, target: draftTarget }]
+      : blocks;
 
   return (
-    <Box>
-      <Heading size="3" mb="3">
-        Comments
-      </Heading>
+    <div>
+      <h2>Review comments</h2>
+      <p className="inspector-sub">Anchor feedback to an exact story block.</p>
+
+      <div className="anchor">
+        <span className="anchor-label">Anchor to</span>
+        <Flex align="center" justify="between" gap="2">
+          <Select.Root value={draftTarget ?? ''} onValueChange={(v) => onDraftTarget(v || null)} size="2">
+            <Select.Trigger className="anchor-select" placeholder="Select a story block" style={{ flex: 1 }} />
+            <Select.Content>
+              {anchorItems.map((b) => (
+                <Select.Item key={b.target} value={b.target}>
+                  {b.label}
+                </Select.Item>
+              ))}
+            </Select.Content>
+          </Select.Root>
+          {draftTarget && (
+            <button type="button" className="icon-btn" style={{ minHeight: 'auto', width: 22, height: 22, padding: 0 }} aria-label="Clear anchor" onClick={() => onDraftTarget(null)}>
+              ×
+            </button>
+          )}
+        </Flex>
+      </div>
 
       {!readOnly && (
-        <Card size="2" mb="4">
-        <Flex direction="column" gap="2">
-          <Flex align="center" gap="2" wrap="wrap">
-            <Text size="2" color="gray">
-              Anchored to
-            </Text>
-            {draftTarget ? (
-              <>
-                <Badge color="indigo" variant="soft">
-                  <MapPin size={12} />
-                  {draftTarget}
-                </Badge>
-                <IconButton variant="ghost" size="1" aria-label="Clear anchor" onClick={() => onDraftTarget(null)}>
-                  ×
-                </IconButton>
-              </>
-            ) : (
-              <Text size="2" color="gray">
-                click a block in Preview to anchor a comment
-              </Text>
-            )}
-          </Flex>
-
+        <div className="composer">
           <TextArea
             ref={textareaRef}
-            placeholder="Write a comment… (@analyst, @architect, @qa or @dev to request an agent analysis)"
+            placeholder="Write a comment… Use @ to ask an agent"
             value={text}
             onChange={(e) => {
               setText(e.target.value);
@@ -191,7 +215,8 @@ export default function CommentPanel({
           {mentionOpen &&
             dropdownRect &&
             createPortal(
-              <Box
+              <div
+                className="mentions"
                 style={{
                   position: 'fixed',
                   top: dropdownRect.top,
@@ -199,93 +224,82 @@ export default function CommentPanel({
                   marginTop: 4,
                   zIndex: 1000,
                   minWidth: Math.max(260, dropdownRect.width),
-                  background: 'var(--color-panel-solid)',
-                  border: '1px solid var(--gray-a5)',
-                  borderRadius: 6,
-                  boxShadow: 'var(--shadow-3)',
-                  overflow: 'hidden',
                 }}
               >
                 {suggestions.map((a, i) => (
-                  <Flex
+                  <button
                     key={a.name}
-                    align="center"
-                    gap="2"
-                    style={{
-                      padding: '6px 10px',
-                      cursor: 'pointer',
-                      background: i === highlight ? 'var(--accent-a3)' : undefined,
-                    }}
+                    type="button"
+                    className="mention"
+                    style={i === highlight ? { background: 'var(--s2)' } : undefined}
                     onMouseEnter={() => setHighlight(i)}
                     onMouseDown={(e) => e.preventDefault()}
                     onClick={() => acceptSuggestion(a.name)}
                   >
-                    <Text size="2" weight="bold">
-                      @{a.name}
-                    </Text>
-                    <Text size="1" color="gray">
-                      {a.description}
-                    </Text>
-                  </Flex>
+                    <strong>@{a.name}</strong>
+                    <span>{a.description}</span>
+                  </button>
                 ))}
-              </Box>,
+              </div>,
               document.querySelector('.radix-themes') ?? document.body,
             )}
 
-          <Flex align="center" gap="3" wrap="wrap">
-            <Select.Root value={intent} onValueChange={(v) => setIntent(v as CommentIntent)}>
+          <div className="composer-tools">
+            <Select.Root value={intent} onValueChange={(v) => setIntent(v as CommentIntent)} size="1">
               <Select.Trigger />
               <Select.Content>
                 {INTENTS.map((i) => (
                   <Select.Item key={i} value={i}>
-                    {i}
+                    {i[0].toUpperCase() + i.slice(1)}
                   </Select.Item>
                 ))}
               </Select.Content>
             </Select.Root>
 
-            <Text as="label" size="2" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <label className="blocking">
               <Checkbox checked={blocking} onCheckedChange={(c) => setBlocking(c === true)} />
               Blocking
-            </Text>
+            </label>
 
-            <Button disabled={!draftTarget || !text.trim() || submitting} onClick={submit} loading={submitting}>
+            <Button
+              size="1"
+              style={{ marginLeft: 'auto' }}
+              disabled={!draftTarget || !text.trim() || submitting}
+              onClick={submit}
+              loading={submitting}
+            >
               Add comment
             </Button>
-          </Flex>
-        </Flex>
-      </Card>
+          </div>
+        </div>
       )}
 
-      <Flex direction="column" gap="3">
+      <div id="threads">
         {comments.length === 0 && (
           <Text size="2" color="gray">
             No comments on this version.
           </Text>
         )}
         {grouped.map((g) => (
-          <Box key={g.target}>
-            <Flex align="center" gap="2" mb="1">
-              <Button variant="ghost" size="1" color="gray" onClick={() => onDraftTarget(g.target)}>
-                {g.target}
-              </Button>
-            </Flex>
-            <Flex direction="column" gap="2">
-              {g.comments.map((c) => (
-                <CommentCard
-                  key={c.id}
-                  comment={c}
-                  onApproveAgentResult={onApproveAgentResult}
-                  approvingAgentResult={approvingAgentResult}
-                  canApproveAgentResult={canApproveAgentResult}
-                  readOnly={readOnly}
-                />
-              ))}
-            </Flex>
+          <Box key={g.target} mt="3">
+            <button type="button" className="comment-anchor" onClick={() => onDraftTarget(g.target)} title={g.target}>
+              <MapPin size={12} />
+              <span className="comment-anchor-label">{g.target}</span>
+            </button>
+            {g.comments.map((c) => (
+              <CommentCard
+                key={c.id}
+                comment={c}
+                onApproveAgentResult={onApproveAgentResult}
+                approvingAgentResult={approvingAgentResult}
+                canApproveAgentResult={canApproveAgentResult}
+                readOnly={readOnly}
+              />
+            ))}
           </Box>
         ))}
-      </Flex>
-    </Box>
+      </div>
+    </div>
   );
 }
 
@@ -319,39 +333,30 @@ function CommentCard({
   readOnly: boolean;
 }) {
   const resolved = comment.resolvedInVersion != null;
+  const stateModifier = resolved ? ' thread--resolved' : comment.blocking ? ' thread--blocking' : '';
   return (
-    <Card size="2">
-      <Flex justify="between" align="center" gap="2">
-        <Flex align="center" gap="2" wrap="wrap">
-          <Avatar size="1" radius="full" fallback={comment.by[0]?.toUpperCase() ?? '?'} />
-          <Text size="2" weight="bold">
-            {comment.by}
-          </Text>
-          <Badge color="gray" variant="soft">
-            {comment.role}
-          </Badge>
-          <Badge color={intentBadgeColor(comment.intent)}>{comment.intent}</Badge>
-          {comment.blocking && <Badge color="red">blocking</Badge>}
-          {resolved && <Badge color="green">resolved v{comment.resolvedInVersion}</Badge>}
-          {comment.drifted && <Badge color="amber">drifted</Badge>}
-        </Flex>
-        <Text size="1" color="gray">
-          v{comment.version}
-        </Text>
-      </Flex>
-      <Text size="2" mt="2" as="p">
-        {comment.text}
-      </Text>
+    <div className={`thread${stateModifier}`}>
+      <div className="thread-head">
+        <Avatar size="1" radius="full" fallback={comment.by[0]?.toUpperCase() ?? '?'} />
+        <strong>{comment.by}</strong>
+        <span className="pill">{comment.role}</span>
+        <span className={INTENT_PILL[comment.intent]}>{comment.intent}</span>
+        {comment.blocking && !resolved && <span className="pill fail">blocking</span>}
+        {resolved && <span className="pill pass">resolved v{comment.resolvedInVersion}</span>}
+        {comment.drifted && <span className="pill review">drifted</span>}
+        <time>v{comment.version}</time>
+      </div>
+      <p>{comment.text}</p>
       {comment.agentReply && (
-        <Card variant="surface" mt="2">
+        <div className="sidecard" style={{ marginTop: '.5rem' }}>
           <Text size="1" color="gray" weight="bold" as="p">
             agent reply
           </Text>
           <Text size="2">{comment.agentReply}</Text>
-        </Card>
+        </div>
       )}
       {comment.agentName && (
-        <Card variant="surface" mt="2">
+        <div className="sidecard" style={{ marginTop: '.5rem' }}>
           {comment.agentResultStatus === 'running' && <Badge color="gray">@{comment.agentName} analyzing…</Badge>}
           {comment.agentResultStatus === 'failed' && (
             <Flex direction="column" gap="1">
@@ -387,13 +392,13 @@ function CommentCard({
           {comment.agentResultStatus === 'approved' && (
             <Flex direction="column" gap="2">
               <Badge color="green">
-                @{comment.agentName} · approved by {comment.agentResultApprovedBy}
+                @{comment.agentName} approved by {comment.agentResultApprovedBy}
               </Badge>
               <AgentMarkdown content={comment.agentResultMd ?? ''} />
             </Flex>
           )}
-        </Card>
+        </div>
       )}
-    </Card>
+    </div>
   );
 }

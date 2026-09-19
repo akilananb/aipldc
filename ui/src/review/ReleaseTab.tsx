@@ -1,6 +1,6 @@
-import { PackageOpen } from 'lucide-react';
+import { Check, History, PackageOpen, ShieldCheck, X } from 'lucide-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Badge, Box, Button, Card, Flex, Heading, Text, Tooltip } from '@radix-ui/themes';
+import { Box, Button, Flex, Text, Tooltip } from '@radix-ui/themes';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
@@ -59,24 +59,19 @@ export default function ReleaseTab({ id, readOnly }: Props) {
   }
 
   return (
-    <Flex direction="column" gap="3">
+    <div className="release-grid">
       {docs.map((doc) => {
         const canSign = identity.role === doc.checkerRole;
         return (
-          <Card key={doc.docId} size="2">
-            <Flex justify="between" align="center" mb="2" wrap="wrap" gap="2">
-              <Heading size="3">{doc.title}</Heading>
-              <Flex align="center" gap="2">
-                <Badge color="gray" variant="soft">
-                  {doc.checkerRole}
-                </Badge>
-                {doc.signed ? (
-                  <Badge color="green">Signed</Badge>
-                ) : (
-                  <Badge color="amber">Awaiting {doc.checkerRole}</Badge>
-                )}
-              </Flex>
-            </Flex>
+          <div key={doc.docId} className="release-card">
+            <h3>
+              {doc.title}{' '}
+              <span className={`pill ${doc.signed ? 'pass' : 'review'}`}>{doc.signed ? 'Signed' : `Awaiting ${doc.checkerRole}`}</span>
+            </h3>
+            <div className="check-row">
+              {doc.signed ? <Check size={14} /> : <X size={14} style={{ color: 'var(--dim)' }} />}
+              {doc.checkerRole} signature
+            </div>
             <Box className="review-md">
               <Collapsible maxHeight={300} defaultCollapsed>
                 <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>{doc.content}</Markdown>
@@ -100,9 +95,23 @@ export default function ReleaseTab({ id, readOnly }: Props) {
                 )}
               </Flex>
             )}
-          </Card>
+          </div>
         );
       })}
-    </Flex>
+      <div className="release-card">
+        <h3>Invalidation policy</h3>
+        <p style={{ color: 'var(--muted)', fontSize: '.76rem' }}>
+          Any request for changes clears all signatures so reviewers always sign the same immutable release pack.
+        </p>
+        <div className="check-row">
+          <ShieldCheck size={14} />
+          Deploy only after all four signatures
+        </div>
+        <div className="check-row">
+          <History size={14} />
+          Monitor agent evaluates once after deploy
+        </div>
+      </div>
+    </div>
   );
 }

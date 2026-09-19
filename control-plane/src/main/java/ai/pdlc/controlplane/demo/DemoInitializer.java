@@ -548,7 +548,7 @@ public class DemoInitializer implements ApplicationRunner {
                 .map(q -> new GrillQuestionDto(q.id(), q.askedBy(), q.category(), q.question(), q.evidence(),
                         q.status(), q.answer(), q.answeredBy()))
                 .toList();
-        return new GrillQuestionsDto(grill.resolved(), questions);
+        return new GrillQuestionsDto(grill.resolved(), 0, questions);
     }
 
     private String writeJson(Object value) {

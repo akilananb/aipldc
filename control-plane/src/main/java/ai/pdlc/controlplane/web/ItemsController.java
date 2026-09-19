@@ -258,15 +258,20 @@ public class ItemsController {
         java.util.Optional<ai.pdlc.controlplane.demo.DemoSnapshotEntity> snap = demoSnapshots.find(feature.id());
         if (snap.isPresent()) {
             String json = snap.get().grillJson();
-            return json == null ? new GrillQuestionsDto(true, List.of()) : readJson(json, GrillQuestionsDto.class);
+            return json == null ? new GrillQuestionsDto(true, 0, List.of()) : readJson(json, GrillQuestionsDto.class);
         }
+        FeatureWorkflow stub = workflowStubs.featureWorkflow(new WorkItemRef(feature.profile(), feature.boardId()));
         GrillHandoff grill;
+        ReviewState state;
+        int rounds;
         try {
-            grill = workflowStubs.featureWorkflow(new WorkItemRef(feature.profile(), feature.boardId())).grill();
+            grill = stub.grill();
+            state = stub.state();
+            rounds = stub.grillRounds();
         } catch (RuntimeException notRunning) {
             throw new NotFoundException("No running workflow for item " + id);
         }
-        return GrillQuestionsDto.from(grill);
+        return GrillQuestionsDto.from(grill, state.stage(), rounds);
     }
 
     @PostMapping("/{id}/grill/{questionId}/answer")
@@ -282,6 +287,46 @@ public class ItemsController {
     @PostMapping("/{id}/grill/{questionId}/park")
     public ResponseEntity<Void> parkGrillQuestion(@PathVariable UUID id, @PathVariable String questionId, HttpServletRequest httpRequest) {
         submitGrillReply(id, questionId, "park", httpRequest);
+        return ResponseEntity.noContent().build();
+    }
+
+    /** Reviewer proceeds past adaptive intake once at least two grill rounds have been posted
+     * (enforced again, authoritatively, by {@link ai.pdlc.core.workflow.FeatureWorkflow#grillRounds()}
+     * inside the workflow itself): parks every remaining open question and hands off to the PO
+     * agent. Posts a plain audit comment (no {@code <id>:} marker, so it never triggers a
+     * commentAdded fold) and signals {@code proceedToStory} directly. */
+    @PostMapping("/{id}/grill/proceed")
+    public ResponseEntity<Void> proceedGrill(@PathVariable UUID id, HttpServletRequest httpRequest) {
+        demoSnapshots.requireWritable(id);
+        Identity identity = identityResolver.resolve(httpRequest);
+        WorkItemEntity row = requireItem(id);
+        WorkItemEntity feature = clarificationOwner(row);
+
+        WorkItemRef featureRef = new WorkItemRef(feature.profile(), feature.boardId());
+        FeatureWorkflow stub = workflowStubs.featureWorkflow(featureRef);
+        GrillHandoff grill;
+        int rounds;
+        try {
+            grill = stub.grill();
+            rounds = stub.grillRounds();
+        } catch (RuntimeException notRunning) {
+            throw new NotFoundException("No running workflow for item " + id);
+        }
+        if (grill == null) {
+            throw new ConflictException("Questions not posted yet");
+        }
+        if (rounds < 2) {
+            throw new ConflictException("Proceed is available after two grill rounds");
+        }
+
+        var gate1 = pdlcConfig.profile(row.profile()).gate("G1");
+        if (!gate1.roles().contains(identity.role())) {
+            throw new ForbiddenException("Role " + identity.role() + " cannot proceed intake");
+        }
+
+        WorkItemRef itemRef = new WorkItemRef(row.profile(), row.boardId());
+        board.addComment(itemRef, "Proceeding to story drafting; remaining open questions parked.", identity.user());
+        stub.proceedToStory(identity.user());
         return ResponseEntity.noContent().build();
     }
 

@@ -32,6 +32,14 @@ public interface FeatureWorkflow {
     @SignalMethod
     void commentAdded(BoardCommentEvent e);
 
+    /** Reviewer signal: park every remaining open grill question (answering the reserved
+     * confirmation question, if still open, with {@code proceed}) and proceed to story drafting;
+     * honored only once at least two grill rounds have been posted during adaptive intake
+     * (ADAPTIVE_GRILL_PLAN.md step 4a) — a signal received earlier is retained and takes effect
+     * once the second round is posted. */
+    @SignalMethod
+    void proceedToStory(String by);
+
     @QueryMethod
     ReviewState state();
 
@@ -39,4 +47,8 @@ public interface FeatureWorkflow {
      * grill evaluation. */
     @QueryMethod
     GrillHandoff grill();
+
+    /** Grill frontier rounds posted so far during adaptive intake; 0 before the first. */
+    @QueryMethod
+    int grillRounds();
 }

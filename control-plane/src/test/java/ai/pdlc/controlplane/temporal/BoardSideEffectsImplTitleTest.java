@@ -19,11 +19,11 @@ class BoardSideEffectsImplTitleTest {
         String story = """
                 # Export the filtered orders view to CSV
 
-                ## Acceptance criteria
+                ## Acceptance Criteria
                 Scenario: export-under-limit
-                  GIVEN a filtered view
-                  WHEN the user exports
-                  THEN a CSV downloads
+                  Given a filtered view
+                  When the user exports
+                  Then a CSV downloads
                 """;
 
         assertThat(BoardSideEffectsImpl.firstHeadingOrDefault(story, "Untitled story"))
@@ -33,13 +33,16 @@ class BoardSideEffectsImplTitleTest {
     @Test
     void firstHeadingOrDefaultFallsBackWhenOnlyStructuralHeadingsArePresent() {
         String story = """
-                ## Acceptance criteria
-                Scenario: export-under-limit
-                  GIVEN a filtered view
-                  WHEN the user exports
-                  THEN a CSV downloads
+                ## Goals
+                - Let sales admins export filtered orders
 
-                ## Out of scope
+                ## Acceptance Criteria
+                Scenario: export-under-limit
+                  Given a filtered view
+                  When the user exports
+                  Then a CSV downloads
+
+                ### Out of Scope
                 - bulk export
                 """;
 
@@ -74,16 +77,16 @@ class BoardSideEffectsImplTitleTest {
 
     @Test
     void taskTitleOrDefaultPassesThroughANonBlankTitle() {
-        Task task = new Task("T1", "Implement \"export-under-limit\"", "orders", "export-under-limit",
+        Task task = new Task("T1", "Rate limit on /export", "brief", "orders", "export-under-limit",
                 List.of("orders-service/export"), "orders-service/export.spec.ts",
                 new Task.TaskBudget(6, 120_000L, Duration.ofMinutes(10)), List.of());
 
-        assertThat(BoardSideEffectsImpl.taskTitleOrDefault(task)).isEqualTo("Implement \"export-under-limit\"");
+        assertThat(BoardSideEffectsImpl.taskTitleOrDefault(task)).isEqualTo("Rate limit on /export");
     }
 
     @Test
     void taskTitleOrDefaultFallsBackToTaskIdWhenTitleIsBlank() {
-        Task task = new Task("T1", "   ", "orders", "export-under-limit",
+        Task task = new Task("T1", "   ", "brief", "orders", "export-under-limit",
                 List.of("orders-service/export"), "orders-service/export.spec.ts",
                 new Task.TaskBudget(6, 120_000L, Duration.ofMinutes(10)), List.of());
 
@@ -91,14 +94,13 @@ class BoardSideEffectsImplTitleTest {
     }
 
     @Test
-    void taskTitleOrDefaultFallsBackWhenScenarioIsBlank() {
-        // The real PlanAgent failure mode: title is deterministically "Implement \"<scenario>\"",
-        // so a blank scenario yields the non-blank-but-uninformative literal Implement "" - a
-        // title.isBlank() check alone would never catch this.
-        Task task = new Task("T1", "Implement \"\"", "orders", "  ",
+    void taskTitleOrDefaultIgnoresABlankScenarioWhenTitleIsNonBlank() {
+        // The title is agent-written and independent of the scenario name, so a blank scenario
+        // (a separate plan-validation concern, not this guard's) never triggers the fallback.
+        Task task = new Task("T1", "Rate limit on /export", "brief", "orders", "  ",
                 List.of("orders-service/export"), "orders-service/export.spec.ts",
                 new Task.TaskBudget(6, 120_000L, Duration.ofMinutes(10)), List.of());
 
-        assertThat(BoardSideEffectsImpl.taskTitleOrDefault(task)).isEqualTo("Task T1");
+        assertThat(BoardSideEffectsImpl.taskTitleOrDefault(task)).isEqualTo("Rate limit on /export");
     }
 }

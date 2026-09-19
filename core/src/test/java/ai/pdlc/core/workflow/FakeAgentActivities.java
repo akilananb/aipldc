@@ -4,10 +4,10 @@ import ai.pdlc.core.domain.AgentMentionRequest;
 import ai.pdlc.core.domain.Comment;
 import ai.pdlc.core.domain.GrillHandoff;
 import ai.pdlc.core.domain.GrillQuestion;
+import ai.pdlc.core.domain.GrillRound;
 import ai.pdlc.core.domain.Handoff;
 import ai.pdlc.core.domain.MonitorHandoff;
 import ai.pdlc.core.domain.MonitorRule;
-import ai.pdlc.core.domain.PlanHandoff;
 import ai.pdlc.core.domain.PoHandoff;
 import ai.pdlc.core.domain.QualityReport;
 import ai.pdlc.core.domain.ReleaseDocument;
@@ -18,7 +18,6 @@ import ai.pdlc.core.domain.RolloutPlan;
 import ai.pdlc.core.domain.Task;
 import ai.pdlc.core.domain.WorkItemRef;
 
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -36,6 +35,8 @@ class FakeAgentActivities implements AgentActivities {
 
     final List<WorkItemRef> grillCalls = new CopyOnWriteArrayList<>();
     final List<WorkItemRef> reviseCalls = new CopyOnWriteArrayList<>();
+    final List<List<Comment>> reviseComments = new CopyOnWriteArrayList<>();
+    final List<GrillHandoff> reviseGrillHandoffs = new CopyOnWriteArrayList<>();
     final List<String> qualityCalls = new CopyOnWriteArrayList<>();
     boolean startWithOpenQuestion = false;
     boolean returnBlockerFinding = false;
@@ -46,6 +47,16 @@ class FakeAgentActivities implements AgentActivities {
      * follow-up question ({@code po1}, {@code po2}, …) instead of drafting. */
     int poFollowUpRounds = 0;
     final List<Boolean> poDraftCalls = new CopyOnWriteArrayList<>();
+    final List<String> qualityContents = new CopyOnWriteArrayList<>();
+    /** Optional test-owned latches to hold {@link #poRevise} open for a race test: counted down on
+     * entry, then awaited before returning, when non-null. Always release in a {@code finally} -
+     * never rely on a timeout to unblock the activity thread. */
+    java.util.concurrent.CountDownLatch reviseStarted;
+    java.util.concurrent.CountDownLatch reviseRelease;
+    /** Optional test-owned latch that holds every {@link #grillNextRound} call with a non-null
+     * {@code previous} (i.e. every round after the first) open until counted down — lets a test
+     * observe {@code grill()} between the last fold and the next posted round. */
+    java.util.concurrent.CountDownLatch nextRoundRelease;
     private boolean storyQualityFailedOnce = false;
 
     @Override
@@ -78,6 +89,60 @@ class FakeAgentActivities implements AgentActivities {
         return new GrillHandoff(envelope, previous.typeDecision(), updated, previous.parked(), previous.constraintsHit());
     }
 
+    final List<WorkItemRef> nextRoundCalls = new CopyOnWriteArrayList<>();
+    /** Configurable adaptive-round frontiers, consumed in order (after the initial
+     * {@code startWithOpenQuestion} round, if any); each entry is the batch of NEW questions for
+     * that round — ids are auto-assigned via {@link GrillQuestion#nextGrillId}, mirroring the real
+     * agent's contract, so tests only specify category/question/evidence. Exhausted (or empty, by
+     * default) => an empty frontier plus {@link #nextRoundSummary}, matching a real completed
+     * interview — most tests need only send the one resulting confirmation reply. */
+    final List<List<GrillQuestion>> nextRoundFrontiers = new CopyOnWriteArrayList<>();
+    String nextRoundSummary = "All decisions settled.";
+    private int nextRoundCallIndex = 0;
+
+    @Override
+    public GrillRound grillNextRound(WorkItemRef item, GrillHandoff previous) {
+        nextRoundCalls.add(item);
+        if (previous != null && !previous.allQuestionsResolved()) {
+            throw new IllegalStateException("grillNextRound called with unresolved previous for " + item);
+        }
+        if (previous != null && nextRoundRelease != null) {
+            try {
+                nextRoundRelease.await();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("interrupted while holding grillNextRound", e);
+            }
+        }
+        List<GrillQuestion> history = previous == null ? new ArrayList<>() : new ArrayList<>(previous.questions());
+        Handoff envelope = previous != null ? previous.envelope()
+                : new Handoff("grill-agent", "po-agent", item.boardId(),
+                        ai.pdlc.core.domain.CanonicalState.NEEDS_CLARIFICATION, List.of("ado:" + item.boardId()), 0.8, List.of(), List.of());
+        String typeDecision = previous != null ? previous.typeDecision() : "story";
+        List<String> parked = previous == null ? List.of() : previous.parked();
+        List<String> constraintsHit = previous == null ? List.of() : previous.constraintsHit();
+
+        int callIndex = nextRoundCallIndex++;
+        List<GrillQuestion> newBatch = null;
+        if (callIndex == 0 && startWithOpenQuestion) {
+            newBatch = List.of(new GrillQuestion(null, GrillQuestion.Category.SCOPE, "Which orders?", "evidence", GrillQuestion.Status.OPEN, null, null));
+        } else {
+            int frontierIndex = startWithOpenQuestion ? callIndex - 1 : callIndex;
+            if (frontierIndex >= 0 && frontierIndex < nextRoundFrontiers.size()) {
+                newBatch = nextRoundFrontiers.get(frontierIndex);
+            }
+        }
+
+        if (newBatch != null && !newBatch.isEmpty()) {
+            for (GrillQuestion q : newBatch) {
+                String id = GrillQuestion.nextGrillId(history);
+                history.add(new GrillQuestion(id, q.category(), q.question(), q.evidence(), GrillQuestion.Status.OPEN, null, null));
+            }
+            return new GrillRound(new GrillHandoff(envelope, typeDecision, history, parked, constraintsHit), null);
+        }
+        return new GrillRound(new GrillHandoff(envelope, typeDecision, history, parked, constraintsHit), nextRoundSummary);
+    }
+
     @Override
     public PoDraftResult poDraft(WorkItemRef item, GrillHandoff grill, boolean allowFollowUps) {
         poDraftCalls.add(allowFollowUps);
@@ -102,31 +167,35 @@ class FakeAgentActivities implements AgentActivities {
         return new PoDraftResult(drafts, List.of());
     }
 
+    static final String REVISED_STORY = "# Export the filtered orders view to CSV\n\n## Acceptance criteria\nScenario: rate limit\n  GIVEN 10 exports (20 for admin) in the last hour\n  WHEN the 11th export happens\n  THEN the next returns 429\n";
+
     @Override
-    public StoryDraft poRevise(WorkItemRef item, PoHandoff previous, List<Comment> openComments) {
+    public StoryDraft poRevise(WorkItemRef item, PoHandoff previous, List<Comment> openComments, GrillHandoff grill) {
         reviseCalls.add(item);
-        String story = "# Export the filtered orders view to CSV\n\n## Acceptance criteria\nScenario: rate limit\n  GIVEN 10 exports (20 for admin) in the last hour\n  WHEN the 11th export happens\n  THEN the next returns 429\n";
-        return new StoryDraft(previous, story, java.util.Map.of("specs/orders/spec.md", "ADDED rate-limit requirement now has two thresholds"));
+        reviseComments.add(openComments);
+        reviseGrillHandoffs.add(grill);
+        if (reviseStarted != null) {
+            reviseStarted.countDown();
+        }
+        if (reviseRelease != null) {
+            try {
+                reviseRelease.await();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
+        return new StoryDraft(previous, REVISED_STORY, java.util.Map.of("specs/orders/spec.md", "ADDED rate-limit requirement now has two thresholds"));
     }
 
     @Override
     public QualityReport evaluateQuality(WorkItemRef item, String subjectKind, String contentMd) {
         qualityCalls.add(subjectKind + ":" + item.boardId());
+        qualityContents.add(contentMd);
         if ("story".equals(subjectKind) && failStoryQualityOnce && !storyQualityFailedOnce) {
             storyQualityFailedOnce = true;
             return new QualityReport("story", false, 40, List.of("missing NFR"), "VERDICT: FAIL");
         }
         return new QualityReport(subjectKind, true, 90, List.of(), "VERDICT: PASS");
-    }
-
-    @Override
-    public PlanHandoff planTasks(WorkItemRef story, PoHandoff po) {
-        Handoff envelope = new Handoff("plan-agent", "build-worker", story.boardId(),
-                ai.pdlc.core.domain.CanonicalState.PLANNED, List.of(), 0.9, List.of(), List.of());
-        Task t1 = new Task("T1", "Implement rate-limit", "orders-service/export", "rate-limit",
-                List.of("src/export.js"), "test/export.test.js",
-                new Task.TaskBudget(6, 120_000L, Duration.ofMinutes(10)), List.of());
-        return new PlanHandoff(envelope, List.of(t1), List.of(List.of("T1")));
     }
 
     @Override

@@ -1,29 +1,26 @@
-import { Fragment, useMemo, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Fragment, useEffect, useMemo, useState } from 'react';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ChevronDown, ChevronRight, Inbox, Search } from 'lucide-react';
-import { Badge, Box, Button, Flex, Heading, IconButton, SegmentedControl, Skeleton, Table, Text, TextField } from '@radix-ui/themes';
+import { Badge, Box, Button, Flex, IconButton, Skeleton, Table, Tabs, Text, TextField } from '@radix-ui/themes';
 import { toast } from 'sonner';
 import { api, errorMessage } from '../api';
 import type { ItemSummary } from '../types';
 import { useIdentity } from '../identity';
-import { GATE_ROLES } from '../gates';
 import ErrorCallout from '../components/ErrorCallout';
 import EmptyState from '../components/EmptyState';
 import StatusBadge from '../components/StatusBadge';
 import AgentActivityBadge from '../components/AgentActivityBadge';
 import RelativeTime from '../components/RelativeTime';
 import DemoSnapshotBadge from '../components/DemoSnapshotBadge';
-import { stateBadgeColor } from '../ui-utils';
+import PageHeader from '../components/PageHeader';
+import Surface from '../components/Surface';
+import ViewHead from '../components/ViewHead';
+import { needsAttention, statePillVariant } from '../ui-utils';
 import QualityIcon from '../components/QualityIcon';
 
 type KindFilter = 'all' | 'feature' | 'story';
-
-const ATTENTION_GATE: Record<string, keyof typeof GATE_ROLES> = {
-  'awaiting-G1': 'G1',
-  'awaiting-G2': 'G2',
-  'awaiting-G3': 'G3',
-};
+type View = 'items' | 'running' | 'attention';
 
 type Row = { item: ItemSummary; children: ItemSummary[] };
 type StageGroup = {
@@ -40,6 +37,9 @@ export default function ItemListPage() {
   const identity = useIdentity();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const [params] = useSearchParams();
+  const view: View = params.get('view') === 'running' ? 'running' : params.get('view') === 'attention' ? 'attention' : 'items';
+
   const itemsQuery = useQuery({
     queryKey: ['items'],
     queryFn: api.listItems,
@@ -62,6 +62,10 @@ export default function ItemListPage() {
     onError: (error) => toast.error(errorMessage(error)),
   });
 
+  useEffect(() => {
+    document.title = 'Work items · eLoop.ai';
+  }, []);
+
   const [search, setSearch] = useState('');
   const [kindFilter, setKindFilter] = useState<KindFilter>('all');
   const [activeStates, setActiveStates] = useState<Set<string>>(new Set());
@@ -83,9 +87,11 @@ export default function ItemListPage() {
       if (kindFilter !== 'all' && item.kind !== kindFilter) return false;
       if (activeStates.size > 0 && !activeStates.has(item.canonicalState)) return false;
       if (needle && !item.title.toLowerCase().includes(needle) && !item.boardId.toLowerCase().includes(needle)) return false;
+      if (view === 'running' && item.activeRun == null) return false;
+      if (view === 'attention' && !(item.snapshot == null && needsAttention(item.canonicalState, identity.role))) return false;
       return true;
     });
-  }, [topLevelItems, kindFilter, activeStates, search]);
+  }, [topLevelItems, kindFilter, activeStates, search, view, identity.role]);
 
   // The total stage count for "Step N of M" must come from the FULL unfiltered catalog, never
   // from the currently-filtered stageGroups.length - otherwise a state/search filter that hides
@@ -192,150 +198,169 @@ export default function ItemListPage() {
     });
   }
 
-  function needsAttention(canonicalState: string): boolean {
-    const gate = ATTENTION_GATE[canonicalState];
-    return gate != null && GATE_ROLES[gate].includes(identity.role);
-  }
-
   const demoEnabled = demoStatusQuery.data?.enabled ?? false;
   const liveItem = demoEnabled
     ? (itemsQuery.data ?? []).find((i) => i.id === demoStatusQuery.data?.liveItemId)
     : undefined;
   const liveIsNew = liveItem == null || liveItem.canonicalState === 'new';
 
+  const title = view === 'running' ? 'Agent runs' : view === 'attention' ? 'Needs your review' : 'Work items';
+  const subtitle =
+    view === 'running'
+      ? 'Items with an agent currently working.'
+      : view === 'attention'
+        ? `Items waiting on a gate that ${identity.role} checks.`
+        : 'Guided walkthrough stages plus the live demo you can run yourself.';
+
   return (
     <Box>
-      <Flex justify="between" align="center" mb="4" gap="3" wrap="wrap">
-        <Heading size="4">Work items</Heading>
-      </Flex>
+      <PageHeader
+        title={title}
+        subtitle={subtitle}
+        badges={<span className="pill">WORKSPACE</span>}
+        actions={
+          <TextField.Root
+            placeholder="Search by title…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            style={{ width: 260 }}
+          >
+            <TextField.Slot>
+              <Search size={14} />
+            </TextField.Slot>
+          </TextField.Root>
+        }
+      />
 
-      <Flex gap="3" mb="4" align="center" wrap="wrap">
-        <TextField.Root
-          placeholder="Search by title…"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          style={{ width: 260 }}
-        >
-          <TextField.Slot>
-            <Search size={14} />
-          </TextField.Slot>
-        </TextField.Root>
-
-        <SegmentedControl.Root value={kindFilter} onValueChange={(v) => setKindFilter(v as KindFilter)}>
-          <SegmentedControl.Item value="all">All</SegmentedControl.Item>
-          <SegmentedControl.Item value="feature">Features</SegmentedControl.Item>
-          <SegmentedControl.Item value="story">Stories</SegmentedControl.Item>
-        </SegmentedControl.Root>
-
-        <Flex gap="2" wrap="wrap">
-          {distinctStates.map((state) => (
-            <Badge
-              key={state}
-              color={activeStates.has(state) ? stateBadgeColor(state) : 'gray'}
-              variant={activeStates.has(state) ? 'solid' : 'soft'}
-              style={{ cursor: 'pointer' }}
-              onClick={() => toggleState(state)}
-            >
-              {state}
-            </Badge>
-          ))}
-        </Flex>
-      </Flex>
-
-      {itemsQuery.isLoading && (
-        <Flex direction="column" gap="2">
-          {Array.from({ length: 5 }).map((_, i) => (
-            <Skeleton key={i} height="32px" />
-          ))}
-        </Flex>
-      )}
-
-      {itemsQuery.isError && <ErrorCallout title="Failed to load items" error={itemsQuery.error} />}
-
-      {itemsQuery.isSuccess && filteredItems.length === 0 && (
-        <EmptyState
-          icon={<Inbox size={28} />}
-          title="No work items"
-          hint="Items appear here when a feature is created on the board."
-        />
-      )}
-
-      {itemsQuery.isSuccess && filteredItems.length > 0 && kindFilter !== 'all' && (
-        <Table.Root variant="surface">
-          <Table.Header>{tableHeader()}</Table.Header>
-          <Table.Body>
-            {flatRows.map(({ item, children }) => {
-              const collapsed = collapsedFeatures.has(item.boardId);
-              return (
-                <Fragment key={item.id}>
-                  {renderRow(item, { hasChildren: children.length > 0, collapsed })}
-                  {children.length > 0 && !collapsed && children.map((child) => renderRow(child, { indent: true }))}
-                </Fragment>
-              );
-            })}
-          </Table.Body>
-        </Table.Root>
-      )}
-
-      {itemsQuery.isSuccess && filteredItems.length > 0 && kindFilter === 'all' && (
-        <Flex direction="column" gap="5">
-          {stageGroups.length > 0 && (
-            <Box>
-              <Heading size="3" mb="2">
-                Guided walkthrough — {totalStageCount} frozen stages (read-only)
-              </Heading>
-              <Table.Root variant="surface">
-                <Table.Header>{tableHeader()}</Table.Header>
-                <Table.Body>
-                  {stageGroups.map((group) => (
-                    <Fragment key={group.key}>
-                      {renderStageHeader(group)}
-                      {renderRow(group.primary, {
-                        indent: true,
-                        hasChildren: group.secondary.length > 0,
-                        collapsed: !expandedStages.has(group.key),
-                        onToggle: () => toggleStageExpanded(group.key),
-                        compactBadge: true,
-                      })}
-                      {expandedStages.has(group.key) &&
-                        group.secondary.map((item) => renderRow(item, { indent: true, subIndent: true, compactBadge: true }))}
-                    </Fragment>
-                  ))}
-                </Table.Body>
-              </Table.Root>
-            </Box>
-          )}
-
-          {liveRows.length > 0 && (
-            <Box>
-              <Heading size="3" mb="2">
-                Live demo — run this one yourself
-              </Heading>
-              <Table.Root variant="surface">
-                <Table.Header>{tableHeader()}</Table.Header>
-                <Table.Body>
-                  {liveRows.map(({ item, children }) => {
-                    const collapsed = collapsedFeatures.has(item.boardId);
-                    const isPinnedLive = item.id === liveItem?.id;
-                    return (
-                      <Fragment key={item.id}>
-                        {renderRow(item, {
-                          hasChildren: children.length > 0,
-                          collapsed,
-                          liveAction: isPinnedLive,
-                        })}
-                        {children.length > 0 && !collapsed && children.map((child) => renderRow(child, { indent: true }))}
-                      </Fragment>
-                    );
-                  })}
-                </Table.Body>
-              </Table.Root>
-            </Box>
-          )}
-        </Flex>
-      )}
+      <Surface
+        value={kindFilter}
+        onValueChange={(v) => setKindFilter(v as KindFilter)}
+        tabs={[
+          { value: 'all', label: 'All' },
+          { value: 'feature', label: 'Features' },
+          { value: 'story', label: 'Stories' },
+        ]}
+      >
+        <Tabs.Content value={kindFilter}>{renderBody()}</Tabs.Content>
+      </Surface>
     </Box>
   );
+
+  function renderBody() {
+    return (
+      <Box>
+        {distinctStates.length > 0 && (
+          <Flex gap="2" mb="4" wrap="wrap">
+            {distinctStates.map((state) => {
+              const active = activeStates.has(state);
+              const variant = statePillVariant(state);
+              return (
+                <span
+                  key={state}
+                  className={`pill${active && variant ? ` ${variant}` : ''}`}
+                  role="button"
+                  tabIndex={0}
+                  style={{ cursor: 'pointer', opacity: active ? 1 : 0.6 }}
+                  onClick={() => toggleState(state)}
+                >
+                  {state}
+                </span>
+              );
+            })}
+          </Flex>
+        )}
+
+        {itemsQuery.isLoading && (
+          <Flex direction="column" gap="2">
+            {Array.from({ length: 5 }).map((_, i) => (
+              <Skeleton key={i} height="32px" />
+            ))}
+          </Flex>
+        )}
+
+        {itemsQuery.isError && <ErrorCallout title="Failed to load items" error={itemsQuery.error} />}
+
+        {itemsQuery.isSuccess && filteredItems.length === 0 && (
+          <EmptyState
+            icon={<Inbox size={28} />}
+            title="No work items"
+            hint="Items appear here when a feature is created on the board."
+          />
+        )}
+
+        {itemsQuery.isSuccess && filteredItems.length > 0 && kindFilter !== 'all' && (
+          <Table.Root variant="ghost" size="1">
+            <Table.Header>{tableHeader()}</Table.Header>
+            <Table.Body>
+              {flatRows.map(({ item, children }) => {
+                const collapsed = collapsedFeatures.has(item.boardId);
+                return (
+                  <Fragment key={item.id}>
+                    {renderRow(item, { hasChildren: children.length > 0, collapsed })}
+                    {children.length > 0 && !collapsed && children.map((child) => renderRow(child, { indent: true }))}
+                  </Fragment>
+                );
+              })}
+            </Table.Body>
+          </Table.Root>
+        )}
+
+        {itemsQuery.isSuccess && filteredItems.length > 0 && kindFilter === 'all' && (
+          <Flex direction="column" gap="5">
+            {stageGroups.length > 0 && (
+              <Box>
+                <ViewHead title={`Guided walkthrough — ${totalStageCount} frozen stages (read-only)`} />
+                <Table.Root variant="ghost" size="1">
+                  <Table.Header>{tableHeader()}</Table.Header>
+                  <Table.Body>
+                    {stageGroups.map((group) => (
+                      <Fragment key={group.key}>
+                        {renderStageHeader(group)}
+                        {renderRow(group.primary, {
+                          indent: true,
+                          hasChildren: group.secondary.length > 0,
+                          collapsed: !expandedStages.has(group.key),
+                          onToggle: () => toggleStageExpanded(group.key),
+                          compactBadge: true,
+                        })}
+                        {expandedStages.has(group.key) &&
+                          group.secondary.map((item) => renderRow(item, { indent: true, subIndent: true, compactBadge: true }))}
+                      </Fragment>
+                    ))}
+                  </Table.Body>
+                </Table.Root>
+              </Box>
+            )}
+
+            {liveRows.length > 0 && (
+              <Box>
+                <ViewHead title="Live demo — run this one yourself" />
+                <Table.Root variant="ghost" size="1">
+                  <Table.Header>{tableHeader()}</Table.Header>
+                  <Table.Body>
+                    {liveRows.map(({ item, children }) => {
+                      const collapsed = collapsedFeatures.has(item.boardId);
+                      const isPinnedLive = item.id === liveItem?.id;
+                      return (
+                        <Fragment key={item.id}>
+                          {renderRow(item, {
+                            hasChildren: children.length > 0,
+                            collapsed,
+                            liveAction: isPinnedLive,
+                          })}
+                          {children.length > 0 && !collapsed && children.map((child) => renderRow(child, { indent: true }))}
+                        </Fragment>
+                      );
+                    })}
+                  </Table.Body>
+                </Table.Root>
+              </Box>
+            )}
+          </Flex>
+        )}
+      </Box>
+    );
+  }
 
   function tableHeader() {
     return (
@@ -484,7 +509,7 @@ export default function ItemListPage() {
         <Table.Cell>
           {item.kind === 'story' && <QualityIcon verdict={item.qualityVerdict} />}
         </Table.Cell>
-        <Table.Cell>{item.snapshot == null && needsAttention(item.canonicalState) && <Badge color="amber">needs your review</Badge>}</Table.Cell>
+        <Table.Cell>{item.snapshot == null && needsAttention(item.canonicalState, identity.role) && <span className="pill review">needs your review</span>}</Table.Cell>
         <Table.Cell>
           <RelativeTime iso={item.updatedAt} />
         </Table.Cell>

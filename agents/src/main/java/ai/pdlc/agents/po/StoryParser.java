@@ -8,7 +8,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Deterministic markdown parser for the PO story format (playbook lines 120-149). Extracts the
+ * Deterministic markdown parser for the PO story format (playbook §2 Story format). Extracts the
  * pieces INVEST/DoR and the spec-delta writer need, without any LLM. Used by {@link InvestValidator},
  * {@link DorValidator} and {@link PoAgent}; the story markdown itself is passed through unchanged
  * (line positions matter for the review UI's line anchors).
@@ -18,9 +18,9 @@ public final class StoryParser {
     public record Scenario(String name, List<String> given, List<String> when, List<String> then) {
     }
 
-    private static final Pattern HEADING = Pattern.compile("^##\\s+(.+)$");
+    private static final Pattern HEADING = Pattern.compile("^#{2,3}\\s+(.+)$");
     private static final Pattern SCENARIO = Pattern.compile("^\\s*Scenario:\\s*(.+)$");
-    private static final Pattern KEYWORD_LINE = Pattern.compile("^\\s*(GIVEN|WHEN|THEN|AND)\\s+(.*)$");
+    private static final Pattern KEYWORD_LINE = Pattern.compile("(?i)^\\s*(GIVEN|WHEN|THEN|AND)\\s+(.*)$");
     private static final Pattern BULLET = Pattern.compile("^\\s*-\\s+(.*)$");
 
     private StoryParser() {
@@ -33,6 +33,13 @@ public final class StoryParser {
         List<String> when = new ArrayList<>();
         List<String> then = new ArrayList<>();
         for (String raw : lines(markdown)) {
+            if (HEADING.matcher(raw.trim()).matches()) {
+                if (name != null) {
+                    out.add(new Scenario(name, given, when, then));
+                    name = null;
+                }
+                continue;
+            }
             Matcher s = SCENARIO.matcher(raw);
             if (s.matches()) {
                 if (name != null) {
@@ -79,12 +86,18 @@ public final class StoryParser {
         return scenarios(markdown).stream().flatMap(s -> s.then().stream()).toList();
     }
 
-    /** The content after {@code So that}, or {@code null} if absent. */
-    public static String soThat(String markdown) {
-        for (String raw : lines(markdown)) {
+    /** The {@code So that <outcome>} line of the {@code ## Story} section (As a / I want / So that);
+     * legacy {@code That <outcome>} still accepted. */
+    public static String outcome(String markdown) {
+        for (String raw : sectionText(markdown, "Story")) {
             String trimmed = raw.trim();
-            if (trimmed.toLowerCase().startsWith("so that")) {
-                String rest = trimmed.substring("so that".length()).trim();
+            String prefix = trimmed.toLowerCase().startsWith("so that ") ? "so that "
+                    : trimmed.toLowerCase().startsWith("that ") ? "that " : null;
+            if (prefix != null) {
+                String rest = trimmed.substring(prefix.length()).trim();
+                if (rest.endsWith(".")) {
+                    rest = rest.substring(0, rest.length() - 1).trim();
+                }
                 return rest.isEmpty() ? null : rest;
             }
         }
@@ -98,7 +111,7 @@ public final class StoryParser {
         return m.find() ? m.group(1) : null;
     }
 
-    /** Bullet items under a {@code ## <heading>} section. */
+    /** Bullet items under a {@code ##}/{@code ###} heading section. */
     public static List<String> sectionBullets(String markdown, String heading) {
         List<String> bullets = new ArrayList<>();
         for (String line : sectionText(markdown, heading)) {
@@ -110,7 +123,7 @@ public final class StoryParser {
         return bullets;
     }
 
-    /** Non-empty content lines under a {@code ## <heading>} section, until the next {@code ## } heading. */
+    /** Non-empty content lines under a {@code ##}/{@code ###} heading section, until the next heading at either level. */
     public static List<String> sectionText(String markdown, String heading) {
         List<String> out = new ArrayList<>();
         boolean in = false;
@@ -127,7 +140,7 @@ public final class StoryParser {
         return out;
     }
 
-    /** The whole markdown minus the named {@code ## } sections (used by the N check to exclude NFR). */
+    /** The whole markdown minus the named heading sections (used by the N check to exclude Non-Functional requirements). */
     public static String withoutSections(String markdown, String... headings) {
         StringBuilder out = new StringBuilder();
         boolean skip = false;

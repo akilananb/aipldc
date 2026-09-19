@@ -5,11 +5,13 @@
   "description": "Standalone build agent - polls control-plane's REST API for claimable build tasks (no direct Temporal connection), runs the build loop (docs/agent-playbook.md §4) driving a configurable ACP coding agent against a real git worktree, then the target repo's own verifier, and reports heartbeats/results back over HTTP.",
   "type": "commonjs",
   "bin": {
-    "pdlc-build-agent": "dist/worker.js"
+    "pdlc-build-agent": "dist/worker.js",
+    "pdlc-assist": "dist/assist.js"
   },
   "files": [
     "dist",
-    "templates"
+    "templates",
+    "omp"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",

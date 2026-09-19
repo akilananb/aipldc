@@ -8,7 +8,9 @@
 # story branch -> gate 2 (FSDeveloper + QA approve) -> board state `approved`.
 #
 # Prerequisite: the build-worker host process must be running and polling task queue "build"
-# (ANTHROPIC_OAUTH_TOKEN / TARGET_REPO_PATH set) - this script does not start it.
+# (ANTHROPIC_OAUTH_TOKEN / TARGET_REPO_PATH set) BEFORE gate 1 is approved - the plan step now
+# runs as a claimable build-worker task too (an ACP coding-agent session analyzing the repo), not
+# a deterministic Java planner; this script does not start the worker.
 set -euo pipefail
 
 BASE="${BASE_URL:-http://localhost:8081}"
@@ -53,9 +55,19 @@ RESOLVED_ANSWER="$(jq -r '.live.resolvedAnswer' "$FIXTURE")"
   echo "error: $FIXTURE has no .live.resolvedAnswer" >&2; exit 1
 }
 
+# Answer every OPEN grill question from the resolved brief; the reserved intake-confirmation
+# question (evidence "grill:confirmation") gets a literal "confirm" instead, never the brief's
+# answer. Adaptive intake may post several rounds (a dependent follow-up, then the confirmation) -
+# this loop re-fetches and re-answers each new round until /grill reports resolved. Never
+# park/skip; if a question cannot be answered it stays open and we fail loudly rather than erasing
+# a blocker. The deadline is checked on every iteration, not only while no question is open.
 answer_open_questions() {
-  local deadline=$((SECONDS + 120)) grill_json open_ids qid
+  local deadline=$((SECONDS + 120)) grill_json open_ids qid evidence answer
   while true; do
+    if [ "$SECONDS" -ge "$deadline" ]; then
+      log "FAIL: grill questions never resolved; last state: $(curl -s "$BASE/api/items/$FEATURE_ID/grill" || true)"
+      return 1
+    fi
     grill_json="$(curl -s "$BASE/api/items/$FEATURE_ID/grill" || true)"
     if printf '%s' "$grill_json" | jq -e '.resolved == true' >/dev/null 2>&1; then
       log "    OK: all grill questions resolved"
@@ -63,18 +75,21 @@ answer_open_questions() {
     fi
     open_ids="$(printf '%s' "$grill_json" | jq -r '.questions[]? | select(.status == "open") | .id' 2>/dev/null || true)"
     if [ -z "$open_ids" ]; then
-      if [ "$SECONDS" -ge "$deadline" ]; then
-        log "FAIL: grill questions never resolved; last state: $grill_json"
-        return 1
-      fi
       sleep 3
       continue
     fi
     for qid in $open_ids; do
-      log "    answering $qid from the resolved brief"
+      evidence="$(printf '%s' "$grill_json" | jq -r --arg q "$qid" '.questions[] | select(.id == $q) | .evidence')"
+      if [ "$evidence" = "grill:confirmation" ]; then
+        log "    confirming shared understanding ($qid)"
+        answer="confirm"
+      else
+        log "    answering $qid from the resolved brief"
+        answer="$RESOLVED_ANSWER"
+      fi
       if ! api -X POST "$BASE/api/items/$FEATURE_ID/grill/$qid/answer" \
           -H "X-User: $PO_USER" -H 'X-Role: PO' -H 'Content-Type: application/json' \
-          -d "$(jq -n --arg a "$RESOLVED_ANSWER" '{text: $a}')" >/dev/null 2>&1; then
+          -d "$(jq -n --arg a "$answer" '{text: $a}')" >/dev/null 2>&1; then
         if curl -s "$BASE/api/items/$FEATURE_ID/grill" | jq -e --arg q "$qid" \
             '[.questions[] | select(.id == $q and .status == "open")] | length == 0' >/dev/null 2>&1; then
           log "    $qid already resolved (benign race); continuing"
@@ -129,9 +144,10 @@ poll "gate 1 passed -> approved" 60 bash -c \
   "curl -sf '$BASE/api/items/$STORY_ID' | jq -e 'select(.canonicalState==\"approved\")'" >/dev/null
 log "    OK: gate 1 passed"
 
-# 5. Plan agent runs: tasks.md written, board state -> planned.
-log "5/12 Poll for planned (plan agent ran, tasks.md written)"
-poll "story planned" 60 bash -c \
+# 5. Plan step runs on the build-worker (ACP coding-agent session analyzes the repo and writes
+# .pdlc/plan.json); control-plane validates it and publishes tasks.md; board state -> planned.
+log "5/12 Poll for planned (plan step ran on the build-worker, tasks.md written)"
+poll "story planned" 900 bash -c \
   "curl -sf '$BASE/api/items/$STORY_ID' | jq -e 'select(.canonicalState==\"planned\" or .canonicalState==\"in-progress\" or .canonicalState==\"awaiting-G2\")'" >/dev/null
 log "    OK: planned"
 

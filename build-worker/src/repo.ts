@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import type { AgentConfig } from './config';
-import type { ClaimedTask } from './types';
+import type { ClaimedRepo } from './types';
 import { basicAuthHeader, cloneBare, fetchBranch, pushBranch } from './git';
 
 export interface RepoHandle {
@@ -20,7 +20,7 @@ const remoteHandles = new Map<string, Promise<RepoHandle>>();
  * AgentConfig.repoOverride} (host-level env) wins over the claim payload's repo; otherwise a
  * `local-git` payload provider means control-plane and this agent share a filesystem (the e2e
  * `local` profile), and anything else is a real remote to clone/fetch/push over HTTP(S). */
-export async function resolveRepo(cfg: AgentConfig, payloadRepo: ClaimedTask['payload']['repo']): Promise<RepoHandle> {
+export async function resolveRepo(cfg: AgentConfig, payloadRepo: ClaimedRepo): Promise<RepoHandle> {
   if (cfg.repoOverride?.mode === 'local') {
     return localHandle(cfg.repoOverride.path);
   }

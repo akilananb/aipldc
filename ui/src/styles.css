@@ -216,17 +216,17 @@ kbd,
 }
 
 /* ============================================================================
- * Story document — the one place serif prose is used, distinct from the sans
- * UI around it. This element also carries `.review-md` (for the shared
- * code/pre/syntax-highlight treatment above), so these rules must sit after
- * `.review-md`'s own base font declaration to win the cascade. Heading
- * typography (`.doc-title`, `.criteria-title`) is specialised in PreviewTab.
+ * Story document — the structured Preview tab layout (story card, context
+ * accordion, acceptance-criteria scenarios) below. This element also carries
+ * `.review-md` (for the shared code/pre/syntax-highlight treatment above), so
+ * these rules must sit after `.review-md`'s own base font declaration to win
+ * the cascade.
  * ========================================================================= */
 
 .story-preview {
-  font-size: 16px;
+  font-size: 0.86rem;
   line-height: 1.65;
-  max-width: 70ch;
+  max-width: none;
   color: var(--gray-12);
 }
 
@@ -1182,75 +1182,6 @@ kbd,
   border-radius: 3px;
   background: var(--cyan);
 }
-.block-tag {
-  color: var(--dim);
-  font-size: 0.67rem;
-  font-weight: 750;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-.doc-title {
-  margin: 0.35rem 0 0.45rem;
-  font-size: 1.38rem;
-  letter-spacing: -0.03em;
-}
-.doc-lead {
-  margin: 0;
-  color: var(--muted);
-  font-family: var(--font-serif);
-  font-size: 1rem;
-  line-height: 1.65;
-}
-.criteria-title {
-  margin: 1.25rem 0 0.55rem;
-  padding-top: 1rem;
-  border-top: 1px solid var(--soft);
-  font-size: 0.9rem;
-}
-.scenario {
-  margin: 0.62rem 0;
-  padding: 0.85rem;
-  border: 1px solid var(--line);
-  border-radius: 0.66rem;
-  background: var(--s2);
-  cursor: pointer;
-}
-.scenario:hover {
-  border-color: color-mix(in srgb, var(--cyan) 35%, var(--line));
-}
-.scenario.md-block-selected {
-  border-color: var(--cyan);
-  box-shadow: inset 3px 0 var(--cyan);
-}
-.scenario-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.6rem;
-  margin-bottom: 0.65rem;
-}
-.scenario-head strong {
-  font-size: 0.82rem;
-}
-.scenario-head span {
-  color: var(--dim);
-  font-size: 0.68rem;
-}
-.gwt {
-  display: grid;
-  grid-template-columns: 3.7rem 1fr;
-  gap: 0.35rem 0.55rem;
-  font-size: 0.79rem;
-}
-.gwt b {
-  color: var(--violet);
-  font-size: 0.66rem;
-  letter-spacing: 0.06em;
-  padding-top: 0.12rem;
-}
-.gwt span {
-  color: var(--muted);
-}
 
 .empty {
   min-height: 22rem;
@@ -1836,6 +1767,9 @@ kbd,
   margin-top: 0.25rem;
   font-size: 0.77rem;
 }
+.anchor-select {
+  margin-top: 0.3rem;
+}
 .composer {
   position: relative;
 }
@@ -2124,9 +2058,6 @@ kbd,
   .scorebox {
     min-height: 8rem;
   }
-  .gwt {
-    grid-template-columns: 3.2rem 1fr;
-  }
   .feature-head .top-actions {
     width: 100%;
   }
@@ -2173,4 +2104,282 @@ kbd,
   border: 0;
   box-shadow: none;
   padding: 0.45rem 0.35rem;
+}
+
+/* ============================================================================
+ * Preview tab structured layout — user-story card, context accordion, and the
+ * acceptance-criteria scenario list (PreviewTab.tsx). Rows/steps reuse
+ * `.md-block`/`.md-block-selected` from the story-preview base rules above for
+ * line-anchored comment selection.
+ * ========================================================================= */
+.story-card {
+  padding: 0.85rem 0.95rem 0.95rem;
+  border: 1px solid var(--line);
+  border-radius: 0.6rem;
+  background: var(--s1);
+}
+.story-card h3,
+.ac-head h3 {
+  margin: 0 0 0.6rem;
+  font-size: 0.95rem;
+  font-weight: 700;
+}
+.story-rows,
+.gwt-rows {
+  display: grid;
+  gap: 0.35rem;
+}
+.story-row,
+.gwt-row {
+  display: grid;
+  grid-template-columns: 7.5rem 1fr;
+  gap: 0.5rem;
+  align-items: stretch;
+  margin: 0;
+  padding: 0;
+}
+.story-preview .story-row.md-block,
+.story-preview .gwt-row.md-block,
+.story-preview .ctx-line.md-block {
+  margin: 0;
+}
+.kw-chip {
+  display: flex;
+  align-items: center;
+  padding: 0.45rem 0.8rem;
+  border-radius: 0.4rem;
+  background: var(--s2);
+  color: var(--text);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+.kw-chip.step {
+  color: var(--violet);
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding-left: 1.4rem;
+}
+.row-text {
+  display: flex;
+  align-items: center;
+  padding: 0.45rem 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 0.4rem;
+  background: var(--s1);
+  font-size: 0.86rem;
+  line-height: 1.4;
+}
+.ctx {
+  margin: 0.8rem 0 1.1rem;
+  border: 1px solid var(--line);
+  border-radius: 0.6rem;
+  background: var(--s1);
+}
+.ctx-head {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  width: 100%;
+  padding: 0.7rem 0.95rem;
+  background: none;
+  border: 0;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.9rem;
+  cursor: pointer;
+  text-align: left;
+}
+.ctx-head strong {
+  font-weight: 700;
+}
+.ctx-count {
+  color: var(--muted);
+}
+.ctx-head .chev {
+  margin-left: auto;
+  color: var(--muted);
+  transition: transform 0.15s;
+}
+.ctx-head[aria-expanded='true'] .chev {
+  transform: rotate(90deg);
+}
+.ctx-section {
+  padding: 0 0.95rem 0.6rem;
+}
+.ctx-section h4 {
+  margin: 0.5rem 0 0.3rem;
+  color: var(--muted);
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.ctx-line {
+  padding: 0.3rem 0.5rem;
+  font-size: 0.84rem;
+  line-height: 1.45;
+}
+.ac-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+  margin: 0 0 0.6rem;
+}
+.ac-count {
+  color: var(--muted);
+  font-weight: 500;
+  font-size: 0.86rem;
+}
+.ac-tools {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.ac-search {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 14rem;
+  padding: 0.35rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 0.45rem;
+  background: var(--s1);
+  color: var(--muted);
+}
+.ac-search input {
+  flex: 1;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.84rem;
+  outline: none;
+}
+.ac-empty {
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+.sc {
+  margin: 0 0 0.45rem;
+  border: 1px solid var(--line);
+  border-radius: 0.55rem;
+  background: var(--s1);
+}
+.sc.open {
+  padding-bottom: 0.7rem;
+}
+.sc.md-block-selected {
+  border-color: var(--cyan);
+  box-shadow: inset 3px 0 var(--cyan);
+}
+.sc-head {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.55rem 0.7rem;
+}
+.sc-toggle {
+  display: grid;
+  place-items: center;
+  width: 1.4rem;
+  height: 1.4rem;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+.sc-num {
+  display: grid;
+  place-items: center;
+  width: 1.6rem;
+  height: 1.6rem;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: var(--s2);
+  font-size: 0.74rem;
+  font-weight: 600;
+}
+.sc-title {
+  flex: 1;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.88rem;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+.sc-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.3rem 0.65rem;
+  border: 1px solid var(--line);
+  border-radius: 0.4rem;
+  background: var(--s2);
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.74rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.sc-status.meets {
+  color: var(--green);
+  border-color: color-mix(in srgb, var(--green) 32%, var(--line));
+  background: color-mix(in srgb, var(--green) 8%, var(--s1));
+}
+.sc-status:disabled {
+  cursor: default;
+  opacity: 0.85;
+}
+.gwt-rows {
+  padding: 0.15rem 0.7rem 0 2.75rem;
+}
+
+/* Quality summary sidecard (ReviewPage inspector). */
+.quality-card .score {
+  margin: 0.2rem 0 0.55rem;
+  font-size: 1.35rem;
+  font-weight: 700;
+  color: var(--green);
+}
+.quality-card .score.fail {
+  color: var(--red);
+}
+.quality-card .qrow {
+  display: flex;
+  gap: 1.1rem;
+  font-size: 0.8rem;
+}
+.quality-card .qrow span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+.quality-card .qrow i {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+}
+.quality-card .qrow i.amber {
+  background: var(--amber);
+}
+.quality-card .qrow i.green {
+  background: var(--green);
+}
+.quality-card .qrow i.red {
+  background: var(--red);
+}
+.quality-card .link {
+  margin-left: auto;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
 }

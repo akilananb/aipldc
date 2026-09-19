@@ -1,0 +1,45 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: stub-llm
+  namespace: pdlc
+  labels: {app: stub-llm}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: stub-llm}
+  template:
+    metadata:
+      labels: {app: stub-llm}
+    spec:
+      enableServiceLinks: false
+      containers:
+        - name: stub-llm
+          image: wiremock/wiremock:3.9.1
+          args: ["--global-response-templating", "--disable-banner"]
+          ports:
+            - {containerPort: 8080}
+          # volumeMounts stamped in by the Tiltfile: one subPath mount per mapping file, not a
+          # single directory mount. WireMock 3.x recursively scans subdirectories under
+          # mappings/, and a whole-directory ConfigMap mount is a symlink farm (top-level
+          # per-key symlinks -> ../data/<key> -> a hidden timestamped dir) that WireMock walks
+          # into 3x, tripling every stub. Per-file subPath mounts are plain bind-mounted
+          # regular files with no such tree to walk.
+          volumeMounts: []
+          readinessProbe:
+            tcpSocket: {port: 8080}
+      volumes:
+        - name: mappings
+          configMap: {name: stub-llm-mappings}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: stub-llm
+  namespace: pdlc
+spec:
+  type: LoadBalancer
+  selector: {app: stub-llm}
+  ports:
+    - {port: 4000, targetPort: 8080}

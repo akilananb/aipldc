@@ -6,8 +6,10 @@ import ai.pdlc.core.domain.CanonicalState;
 import ai.pdlc.core.domain.Comment;
 import ai.pdlc.core.domain.GrillHandoff;
 import ai.pdlc.core.domain.GrillQuestion;
+import ai.pdlc.core.domain.GrillRound;
 import ai.pdlc.core.domain.MonitorHandoff;
 import ai.pdlc.core.domain.PlanHandoff;
+import ai.pdlc.core.domain.PlanResult;
 import ai.pdlc.core.domain.PoHandoff;
 import ai.pdlc.core.domain.QualityReport;
 import ai.pdlc.core.domain.ReleaseDocument;
@@ -17,6 +19,7 @@ import ai.pdlc.core.domain.ReviewHandoff;
 import ai.pdlc.core.domain.Task;
 import ai.pdlc.core.domain.WorkItemRef;
 import io.temporal.activity.ActivityOptions;
+import io.temporal.common.RetryOptions;
 import io.temporal.workflow.Async;
 import io.temporal.workflow.Promise;
 import io.temporal.workflow.Workflow;
@@ -25,7 +28,9 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Function;
 
 /**
@@ -77,9 +82,15 @@ public class FeatureWorkflowImpl implements FeatureWorkflow {
      * behavior), so a stuck task can never block the story forever. */
     static final int MAX_HUMAN_INPUT_ROUNDS_PER_TASK = 3;
 
+    /** Bounded retries (like {@link #PLAN_ACTIVITY_OPTIONS}): a persistently failing agent/LLM
+     * call (bad gateway auth, model outage, malformed response) fails the workflow visibly in
+     * Temporal UI instead of retrying forever against the LLM gateway — an unbounded default here
+     * previously let a handful of stuck workflows burn real OpenRouter tokens for 30+ minutes
+     * with no operator signal. */
     private static final ActivityOptions AGENT_ACTIVITY_OPTIONS = ActivityOptions.newBuilder()
             .setTaskQueue(TaskQueues.REASONING)
             .setStartToCloseTimeout(Duration.ofMinutes(10))
+            .setRetryOptions(RetryOptions.newBuilder().setMaximumAttempts(3).build())
             .build();
 
     private static final ActivityOptions BOARD_ACTIVITY_OPTIONS = ActivityOptions.newBuilder()
@@ -95,9 +106,17 @@ public class FeatureWorkflowImpl implements FeatureWorkflow {
             .setHeartbeatTimeout(Duration.ofMinutes(2))
             .build();
 
+    /** Plan step: bounded retries so a persistently invalid plan fails the workflow (visible in
+     * Temporal UI, story stays {@code approved}) rather than looping forever. */
+    private static final ActivityOptions PLAN_ACTIVITY_OPTIONS = ActivityOptions.newBuilder(BUILD_ACTIVITY_OPTIONS)
+            .setRetryOptions(RetryOptions.newBuilder().setMaximumAttempts(3).build())
+            .setSummary("plan")
+            .build();
+
     private final AgentActivities agents = Workflow.newActivityStub(AgentActivities.class, AGENT_ACTIVITY_OPTIONS);
     private final BoardSideEffects board = Workflow.newActivityStub(BoardSideEffects.class, BOARD_ACTIVITY_OPTIONS);
     private final BuildActivities build = Workflow.newActivityStub(BuildActivities.class, BUILD_ACTIVITY_OPTIONS);
+    private final BuildActivities planner = Workflow.newActivityStub(BuildActivities.class, PLAN_ACTIVITY_OPTIONS);
 
     private int version = 1;
     private final Map<String, Approval> approvals = new LinkedHashMap<>();
@@ -111,6 +130,15 @@ public class FeatureWorkflowImpl implements FeatureWorkflow {
     /** Current grill handoff, including any PO agent follow-ups and build-loop {@code h*} human-
      * input questions — exposed via {@link #grill()}. */
     private GrillHandoff grill;
+    /** Frontier rounds posted so far during adaptive intake (ADAPTIVE_GRILL_PLAN.md step 4) — a
+     * confirmation-only publication (no non-confirmation OPEN question) doesn't count; exposed via
+     * {@link #grillRounds()}. */
+    private int grillRoundsPosted = 0;
+    /** Set by {@link #proceedToStory}; honored only inside {@link #adaptiveIntake} once {@link
+     * #grillRoundsPosted} reaches 2 — a signal received earlier is retained and takes effect the
+     * moment the second round is posted. */
+    private boolean proceedRequested = false;
+    private String proceedRequestedBy;
 
     private WorkItemRef storyRef;
     private PoHandoff currentPoHandoff;
@@ -154,9 +182,17 @@ public class FeatureWorkflowImpl implements FeatureWorkflow {
         activeGate = gate1;
 
         // 1. Grill: loop until every question is answered/parked, escalating stale at the 5-day timer.
-        grill = agents.grillEvaluate(item, null, List.of());
-        board.postGrillQuestions(item, grill);
-        awaitClarification(item);
+        // Workflow.getVersion guards a live workflow from being silently reinterpreted mid-interview
+        // (ADAPTIVE_GRILL_PLAN.md step 4): a pre-patch execution's replay takes DEFAULT_VERSION and
+        // keeps the historical three-command sequence; only a new execution takes version 1's
+        // adaptive rounds.
+        if (Workflow.getVersion("adaptive-grill-rounds", Workflow.DEFAULT_VERSION, 1) == Workflow.DEFAULT_VERSION) {
+            grill = agents.grillEvaluate(item, null, List.of());
+            board.postGrillQuestions(item, grill);
+            awaitClarification(item);
+        } else {
+            adaptiveIntake(item);
+        }
 
         // 2-3. Draft the story (or one story per actor/factor - PO agent split); the PO agent may
         // instead ask follow-up questions (id po1, po2, ...) up to MAX_PO_FOLLOW_UP_ROUNDS times,
@@ -214,7 +250,7 @@ public class FeatureWorkflowImpl implements FeatureWorkflow {
                             "quality-agent", "story", "quality", q.findings().get(fi), Comment.Intent.CHANGE,
                             false, version));
                 }
-                StoryDraft revised = agents.poRevise(storyRef, currentPoHandoff, qualityComments);
+                StoryDraft revised = agents.poRevise(storyRef, currentPoHandoff, qualityComments, grill);
                 board.publishRevision(storyRef, version, revised, List.of());
                 currentPoHandoff = revised.handoff();
                 storyMd = revised.storyMarkdown();
@@ -230,22 +266,22 @@ public class FeatureWorkflowImpl implements FeatureWorkflow {
             board.transitionApproved(storyRef, version, 1);
             stage = CanonicalState.APPROVED;
 
-            // 6. Plan: deterministic task breakdown from the spec delta's ADDED/MODIFIED scenarios.
-            PlanHandoff plan = agents.planTasks(storyRef, currentPoHandoff);
+            // 6. Plan: the build-worker's coding agent analyzes the repo and breaks the story into tasks.
+            PlanResult planned = planner.planTasks(storyRef, currentPoHandoff);
+            PlanHandoff plan = planned.plan();
             PublishTasksResult publishedTasks = board.publishTasks(storyRef, plan);
             String defaultBranch = publishedTasks.defaultBranch();
             stage = CanonicalState.PLANNED;
 
-            // Advisory per-task quality pass: the plan agent is deterministic (no revise path), so
-            // a failing task verdict is surfaced in the UI but never blocks the build loop.
+            // Deterministic per-task plan checks (coverage/wave/touches) - advisory, shown on the
+            // task page; computed by the build-worker's plan step, not the quality agent.
             for (Task t : plan.tasks()) {
                 String taskBoardId = publishedTasks.taskBoardIds().get(t.id());
-                if (taskBoardId == null) {
+                QualityReport checks = planned.checksByTaskId().get(t.id());
+                if (taskBoardId == null || checks == null) {
                     continue;
                 }
-                WorkItemRef taskRef = new WorkItemRef(item.profile(), taskBoardId);
-                QualityReport taskQuality = agents.evaluateQuality(taskRef, "task", taskContent(t));
-                board.saveQualityReport(taskRef, 1, taskQuality);
+                board.saveQualityReport(new WorkItemRef(item.profile(), taskBoardId), 1, checks);
             }
 
             // 7. Build loop: omp over ACP, one shared story branch, wave by wave (a wave only starts
@@ -384,18 +420,153 @@ public class FeatureWorkflowImpl implements FeatureWorkflow {
      * escalating to {@code stale} at the 5-day timer (playbook §1 "Stops"); re-entrant so the PO
      * agent's follow-up rounds and the build loop's human-input questions can drive it again. */
     private void awaitClarification(WorkItemRef item) {
+        grill = awaitAnswers(item, grill, false);
+    }
+
+    /** Waits until {@code current}'s questions are all answered/parked, folding batches of human
+     * board comments via {@code grillEvaluate} and escalating to {@code stale} at the 5-day timer
+     * (playbook §1 "Stops"); shared by the historical (PO/human-input) clarification loop and adaptive
+     * intake. Every fold — partial or fully resolved — is published into {@link #grill} immediately,
+     * so {@code grill()} shows each answer the moment it is folded; the wire {@code resolved} flag is
+     * derived from the workflow stage by control-plane ({@code GrillQuestionsDto.from}), never from
+     * {@code grill().allQuestionsResolved()} alone, so a handoff that is briefly fully resolved
+     * between adaptive rounds does not read as a completed interview. When {@code allowProceed} is
+     * {@code true} (adaptive intake only) and a {@link #proceedToStory} signal is retained with
+     * {@link #grillRoundsPosted} at least 2, this returns {@code current} immediately — possibly
+     * still unresolved — without folding or publishing; the caller (adaptiveIntake) owns parking
+     * whatever remains open. */
+    private GrillHandoff awaitAnswers(WorkItemRef item, GrillHandoff current, boolean allowProceed) {
         stage = CanonicalState.NEEDS_CLARIFICATION;
-        while (!grill.allQuestionsResolved()) {
-            boolean gotComments = Workflow.await(STALE_ESCALATION_TIMER, () -> !pendingBoardComments.isEmpty());
+        while (!current.allQuestionsResolved()) {
+            boolean gotComments = Workflow.await(STALE_ESCALATION_TIMER,
+                    () -> !pendingBoardComments.isEmpty() || (allowProceed && proceedRequested && grillRoundsPosted >= 2));
             if (!gotComments) {
                 board.escalateStale(item);
                 stage = CanonicalState.STALE;
-                Workflow.await(() -> !pendingBoardComments.isEmpty());
+                Workflow.await(() -> !pendingBoardComments.isEmpty() || (allowProceed && proceedRequested && grillRoundsPosted >= 2));
+            }
+            if (allowProceed && proceedRequested && grillRoundsPosted >= 2) {
+                return current;
             }
             List<BoardCommentEvent> newComments = List.copyOf(pendingBoardComments);
             pendingBoardComments.clear();
-            grill = agents.grillEvaluate(item, grill, newComments);
+            current = agents.grillEvaluate(item, current, newComments);
+            grill = current;
         }
+        return current;
+    }
+
+    /** Adaptive intake (ADAPTIVE_GRILL_PLAN.md step 4): asks the current independent frontier,
+     * folds human answers, and asks dependent follow-up rounds until the reasoning agent returns
+     * an empty frontier — at which point a deterministic final confirmation question replaces the
+     * usual PO draft handoff. Only an explicit {@code confirm} answer to that reserved question
+     * completes intake; a correction re-enters another round (with a fresh confirmation question
+     * once the frontier is empty again), and parking it is a no-op that leaves it open. No
+     * automatic round-count cap forces completion — every additional round requires a human. */
+    private void adaptiveIntake(WorkItemRef item) {
+        stage = CanonicalState.NEEDS_CLARIFICATION;
+        grill = applyRound(agents.grillNextRound(item, null));
+        board.postGrillRound(item, grill);
+        countGrillRound(grill);
+        while (true) {
+            GrillHandoff resolved = awaitAnswers(item, grill, true);
+            if (proceedRequested && grillRoundsPosted >= 2) {
+                grill = proceedHandoff(resolved, proceedRequestedBy);
+                return;
+            }
+            GrillQuestion confirmation = latestConfirmationQuestion(resolved);
+            if (confirmation != null && confirmation.status() == GrillQuestion.Status.ANSWERED
+                    && isIntakeConfirmation(stripLeadingId(confirmation.id(), confirmation.answer()))) {
+                grill = resolved;
+                return;
+            }
+            grill = applyRound(agents.grillNextRound(item, resolved));
+            board.postGrillRound(item, grill);
+            countGrillRound(grill);
+        }
+    }
+
+    /** Appends the deterministic final confirmation question (evidence {@link
+     * GrillQuestion#INTAKE_CONFIRMATION_EVIDENCE}) when {@code round}'s frontier is empty, instead
+     * of falling through to a PO draft; a nonempty frontier is returned unchanged. IDs are always
+     * freshly allocated, so a corrected-and-regenerated confirmation round gets its own new id. */
+    private static GrillHandoff applyRound(GrillRound round) {
+        GrillHandoff handoff = round.handoff();
+        if (!handoff.openQuestions().isEmpty()) {
+            return handoff;
+        }
+        String confirmId = GrillQuestion.nextGrillId(handoff.questions());
+        GrillQuestion confirmation = new GrillQuestion(confirmId, GrillQuestion.Category.SCOPE,
+                "Confirm shared understanding: " + round.summary()
+                        + "\n\nReply confirm (or agree / yes / ok) to proceed to story drafting, or describe corrections. Parking does not approve intake.",
+                GrillQuestion.INTAKE_CONFIRMATION_EVIDENCE, GrillQuestion.Status.OPEN, null, null);
+        return handoff.withFollowUps(List.of(confirmation));
+    }
+
+    /** The most recently appended reserved confirmation question in {@code handoff}, or {@code
+     * null} if intake hasn't reached an empty frontier yet. */
+    private static GrillQuestion latestConfirmationQuestion(GrillHandoff handoff) {
+        GrillQuestion latest = null;
+        for (GrillQuestion q : handoff.questions()) {
+            if (GrillQuestion.INTAKE_CONFIRMATION_EVIDENCE.equals(q.evidence())) {
+                latest = q;
+            }
+        }
+        return latest;
+    }
+
+    /** Accepted natural-language affirmatives for the adaptive-intake confirmation question, in
+     * addition to the literal {@code confirm} — extend this set only; never regex-match
+     * substrings (a reply like "yes, but change X" must remain a correction, not a confirmation). */
+    private static final Set<String> INTAKE_CONFIRMATION_WORDS = Set.of(
+            "confirm", "confirmed", "agree", "agreed", "yes", "ok", "okay", "approve", "approved", "lgtm", "looks good");
+
+    /** True when {@code answer} (trimmed, case-insensitive, one trailing {@code .}/{@code !}
+     * stripped) is exactly one of {@link #INTAKE_CONFIRMATION_WORDS} — a correction like
+     * {@code "confirm, but change X"} is never treated as a confirmation. */
+    static boolean isIntakeConfirmation(String answer) {
+        if (answer == null) {
+            return false;
+        }
+        String normalized = answer.strip().toLowerCase(Locale.ROOT);
+        while (normalized.endsWith(".") || normalized.endsWith("!")) {
+            normalized = normalized.substring(0, normalized.length() - 1);
+        }
+        return INTAKE_CONFIRMATION_WORDS.contains(normalized);
+    }
+
+    /** Increments {@link #grillRoundsPosted} iff {@code round} has at least one OPEN question that
+     * isn't the reserved confirmation question — a confirmation-only publication is not a round. */
+    private void countGrillRound(GrillHandoff round) {
+        boolean isRealRound = round.openQuestions().stream()
+                .anyMatch(q -> !GrillQuestion.INTAKE_CONFIRMATION_EVIDENCE.equals(q.evidence()));
+        if (isRealRound) {
+            grillRoundsPosted++;
+        }
+    }
+
+    /** A reviewer proceeded past adaptive intake (ADAPTIVE_GRILL_PLAN.md step 4a): the reserved
+     * confirmation question (if still open) is answered {@code proceed}; every other still-OPEN
+     * question is parked (recorded in {@code parked}, surfacing as the story's "Out of scope"
+     * lines) rather than dropped, preserving audit history. Already-resolved questions are kept
+     * as-is. */
+    private static GrillHandoff proceedHandoff(GrillHandoff current, String by) {
+        String answeredBy = by == null ? "human" : by;
+        List<String> parked = new ArrayList<>(current.parked());
+        List<GrillQuestion> updated = new ArrayList<>();
+        for (GrillQuestion q : current.questions()) {
+            if (q.status() != GrillQuestion.Status.OPEN) {
+                updated.add(q);
+            } else if (GrillQuestion.INTAKE_CONFIRMATION_EVIDENCE.equals(q.evidence())) {
+                updated.add(q.withAnswer("proceed", answeredBy));
+            } else {
+                updated.add(q.parked());
+                if (!parked.contains(q.id())) {
+                    parked.add(q.id());
+                }
+            }
+        }
+        return new GrillHandoff(current.envelope(), current.typeDecision(), updated, parked, current.constraintsHit());
     }
 
     // -- build loop: waves, fix rounds, human-input escalations -----------------------------------
@@ -748,18 +919,31 @@ public class FeatureWorkflowImpl implements FeatureWorkflow {
 
     @Override
     public void requestChanges(String by) {
-        version++;
-        approvals.clear();
-        List<Comment> openComments = openBlockingComments();
-        List<String> resolvedIds = openComments.stream().map(Comment::id).toList();
         if (stage == CanonicalState.AWAITING_G1) {
-            StoryDraft revised = agents.poRevise(storyRef, currentPoHandoff, openComments);
+            version++;
+            approvals.clear();
+            // The explicit "Request changes" button submits every comment posted so far - not just
+            // blocking ones (a nonblocking Change/Note comment must still reach the PO agent; only
+            // approval-gating, not revision-eligibility, is blocking-scoped). Snapshot now, before
+            // any activity call, so a comment signal delivered while poRevise/publishRevision/
+            // evaluateQuality are in flight is never silently included or silently dropped.
+            List<Comment> feedback = List.copyOf(comments);
+            List<String> resolvedIds = feedback.stream().map(Comment::id).toList();
+            StoryDraft revised = agents.poRevise(storyRef, currentPoHandoff, feedback, grill);
             board.publishRevision(storyRef, version, revised, resolvedIds);
             currentPoHandoff = revised.handoff();
             QualityReport q = agents.evaluateQuality(storyRef, "story", revised.storyMarkdown());
             board.saveQualityReport(storyRef, version, q);
             qualityPassed = q.passed();
+            // Remove only the snapshot this revision resolved - never the shared comments.clear()
+            // below (skipped via early return), which would also erase a comment that arrived
+            // during the activities above.
+            java.util.Set<String> resolved = java.util.Set.copyOf(resolvedIds);
+            comments.removeIf(c -> resolved.contains(c.id()));
+            return;
         }
+        version++;
+        approvals.clear();
         if (stage == CanonicalState.AWAITING_G2) {
             pendingFixRequest = new FixRequest(by, List.copyOf(comments));
         }
@@ -778,6 +962,12 @@ public class FeatureWorkflowImpl implements FeatureWorkflow {
     }
 
     @Override
+    public void proceedToStory(String by) {
+        proceedRequested = true;
+        proceedRequestedBy = by;
+    }
+
+    @Override
     public ReviewState state() {
         Map<String, Approval> currentApprovals = stage == CanonicalState.AWAITING_G3 ? documentSignatures : approvals;
         return new ReviewState(version, Map.copyOf(currentApprovals), openBlockingComments(), stage,
@@ -787,6 +977,11 @@ public class FeatureWorkflowImpl implements FeatureWorkflow {
     @Override
     public GrillHandoff grill() {
         return grill;
+    }
+
+    @Override
+    public int grillRounds() {
+        return grillRoundsPosted;
     }
 
     private boolean sodAllows(Approval a) {
@@ -802,13 +997,5 @@ public class FeatureWorkflowImpl implements FeatureWorkflow {
             }
         }
         return true;
-    }
-
-    /** Advisory task-quality content: a task has no markdown draft of its own (unlike a story), so
-     * this assembles the same fields {@code BoardSideEffectsImpl#taskDescription} writes to the
-     * board item description, for the quality agent to evaluate. */
-    private static String taskContent(Task t) {
-        return "# " + t.title() + "\n\nScenario: " + t.scenario() + "\nArea: " + t.area()
-                + "\nTouches: " + String.join(", ", t.touches()) + "\nTest: " + t.testPath();
     }
 }

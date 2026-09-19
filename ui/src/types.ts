@@ -29,11 +29,20 @@ export interface Comment {
   agentResultApprovedBy: string | null;
 }
 
+export interface ScenarioReview {
+  scenario: string;
+  status: 'meets' | 'not-reviewed';
+  by: string;
+  role: string;
+  at: string;
+}
+
 export interface ArtifactVersion {
   version: number;
   contentHash: string;
   storyMarkdown: string;
   comments: Comment[];
+  scenarioReviews: ScenarioReview[];
 }
 
 export interface Approval {
@@ -62,6 +71,8 @@ export interface AgentRun {
   startedAt: string;
   finishedAt: string | null;
   traceUrl: string | null;
+  tokens: number | null;
+  iterations: number | null;
 }
 
 export interface DemoSnapshot {
@@ -166,6 +177,7 @@ export interface GrillQuestion {
 
 export interface GrillQuestions {
   resolved: boolean;
+  rounds: number;
   questions: GrillQuestion[];
 }
 

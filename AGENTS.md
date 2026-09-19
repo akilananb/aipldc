@@ -93,7 +93,7 @@ and shows the draft → a PO/SquadLead approves via `POST .../approve-agent-resu
 | `build-worker/src/` | Standalone Node ACP build agent (`worker.ts`, `poller.ts`, `acp.ts`, `buildTask.ts`, `repo.ts`, `verifier.ts`) |
 | `ui/src/routes/` | `ReviewPage.tsx`, `TaskDetailPage.tsx`, item list |
 | `ui/src/review/` | `CommentPanel.tsx`, `PreviewTab`/`SourceTab`/`DiffTab`/`ReviewMdTab`, `GateBadge.tsx` |
-| `infra/` | `docker-compose.yml`, `pdlc.yaml` (runtime config), `stub-llm/` (WireMock) |
+| `infra/` | `Tiltfile`-referenced `k8s/*.yaml`, `pdlc.yaml` (runtime config), `stub-llm/` (WireMock) |
 | `docs/` | Architecture ground truth: `agent-playbook.md`, `orchestration-decision.md`, `tech-stack-architecture.md`, `storyboard.md` |
 | `scripts/` | `e2e-demo.sh` (gate 1), `e2e-demo-phase3.sh` (build+gate 2), `e2e-demo-phase4.sh` (release+gate 3) — runnable, assertion-bearing walkthroughs |
 | `target-repos/orders-service` | Real git checkout used by the `local` profile's `LocalGitRepoAdapter`; `openspec/` inside it is the canonical change-folder shape agents read/write |
@@ -123,14 +123,16 @@ cd build-worker && npm test        # node --test --test-reporter=tap dist/*.test
 cd build-worker && npm start       # node dist/worker.js — requires PDLC_API_URL + BUILD_FILTER_PROFILE env
 ```
 
-**Full stack (Docker Compose, from `infra/`):**
+**Full stack (Tilt + Colima k3s, from repo root):**
 ```bash
-cd infra && docker compose up -d --build control-plane agents ui   # rebuild + redeploy just these 3
-docker compose exec -T postgres psql -U pdlc -d pdlc -c "\d comments"   # inspect schema / verify Flyway applied
+tilt up                                                        # dev loop: live rebuild/redeploy on file change
+tilt ci                                                         # one-shot: build, apply, wait for readiness, exit
+kubectl -n pdlc exec -it deploy/postgres -- psql -U pdlc -d pdlc -c "\d comments"   # inspect schema / verify Flyway applied
 ```
-Services: `postgres` (5432), `temporal` (7233) + `temporal-ui` (8080), `stub-llm` (WireMock,
-4000), `control-plane` (8081), `agents` (8082), `ui` (5173→nginx:80). `build-worker` is **not**
-in docker-compose — run it as a standalone host process per `scripts/e2e-demo-phase3.sh`.
+Services (all reachable on `localhost` via k3s LoadBalancer, forwarded by Colima): `postgres`
+(5432), `temporal` (7233) + `temporal-ui` (8080), `stub-llm` (WireMock, 4000), `control-plane`
+(8081), `agents` (8082), `ui` (5173→nginx:80). `build-worker` is **not** a Kubernetes
+workload — run it as a standalone host process per `scripts/e2e-demo-phase3.sh`.
 
 **End-to-end verification** (no test suite covers cross-service flows — these scripts are the
 closest thing to integration tests):
@@ -210,7 +212,7 @@ scripts/e2e-demo-phase4.sh   # + release pack -> gate 3 -> deploy -> monitor
   vars. **Config-drift is tested**: `control-plane/src/test/java/ai/pdlc/controlplane/config/InfraPdlcYamlTest.java`
   loads this exact file (`../infra/pdlc.yaml`), not a fixture copy.
   If you add a new `agents.roles.<name>` entry, add it to both profiles.
-- `infra/docker-compose.yml` — 6 services; see Development Commands.
+- `Tiltfile` / `infra/k8s/*.yaml` — Kubernetes manifests + Tilt orchestration for the local stack (9 objects); see Development Commands.
 - `control-plane/src/main/resources/db/migration/V*.sql` — Flyway migrations, strictly additive
   (no DOWN scripts); add `V7__*.sql` for new schema, never edit an applied migration.
 - `docs/tech-stack-architecture.md` — most-cited doc from Javadoc (`tech-stack §N`); full stack
@@ -236,11 +238,12 @@ scripts/e2e-demo-phase4.sh   # + release pack -> gate 3 -> deploy -> monitor
   don't invoke `javac`/`java` directly.
 - **UI and build-worker use Node** (not Bun) — `package-lock.json` present in both, install with
   `npm ci`/`npm install`. `ui/Dockerfile` builds with `node:22-alpine`.
-- **Docker Compose** is the standard way to run the full stack locally; `docker compose exec -T
-  postgres psql -U pdlc -d pdlc` is the standard way to inspect the app database directly.
-- The `local` profile's `LocalGitRepoAdapter` and the `agents`/`control-plane` containers all
-  need the **same absolute host path** to `target-repos/orders-service` mounted — see the
-  volume mounts in `infra/docker-compose.yml`.
+- **Tilt on Colima's k3s** is the standard way to run the full stack locally; `kubectl -n pdlc
+  exec -it deploy/postgres -- psql -U pdlc -d pdlc` is the standard way to inspect the app
+  database directly.
+- The `local` profile's `LocalGitRepoAdapter` and the `agents`/`control-plane` pods all need the
+  **same absolute host path** to `target-repos/orders-service` mounted — see the `hostPath`
+  volumes in `infra/k8s/control-plane.yaml`/`infra/k8s/agents.yaml`.
 - `infra/.env` (gitignored; copy `infra/.env.example`) may set `PDLC_LLM_BASE_URL` (overrides
   `agents.gateway`) and `PDLC_LLM_API_KEY` (blank for endpoints without authentication);
   `agents.gateway` is any OpenAI-compatible base URL used verbatim. `BUILD_AGENT_TOKEN` is
@@ -290,6 +293,6 @@ scripts/e2e-demo-phase4.sh   # + release pack -> gate 3 -> deploy -> monitor
 - **UI has zero automated test coverage** — no vitest/jest, no `*.test.tsx` files, no `test`
   script in `ui/package.json`. The only build-time gate is `tsc --noEmit` (strict mode) inside
   `npm run build`. For UI changes, verify manually via `npm run dev` + browser, or against the
-  running `docker compose` stack.
+  running Tilt/Kubernetes stack.
 - **build-worker** uses Node's built-in test runner: `node --test --test-reporter=tap dist/*.test.js`
   (must `npm run build` first — tests run against compiled `dist/`, not `src/` directly).

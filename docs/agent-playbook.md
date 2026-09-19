@@ -109,7 +109,7 @@ handoff:
 
 **Does.**
 1. Drafts the story in the fixed format (below).
-2. Converts every answered acceptance question into at least one scenario; every risk answer into a scenario or NFR; every parked question into an out-of-scope line.
+2. Converts every answered acceptance question into at least one scenario; every risk answer into a scenario or non-functional requirement; every parked question into an out-of-scope line.
 3. Writes the spec delta: only `ADDED` / `MODIFIED` / `REMOVED` requirements that differ from the current spec. Each requirement uses MUST / SHALL / SHOULD / MAY.
 4. Runs the INVEST and DoR validations (below), fixes what it can, lists what it can't.
 5. Creates the User Story work item as a child of the feature, links the change folder, sets state `awaiting-G1`.
@@ -121,24 +121,36 @@ handoff:
 # <verb phrase title>                     e.g. Export the filtered orders view to CSV
 Feature: #4412 · Change: openspec/changes/export-orders-csv · Area: orders
 
-As a <role>
-I want <capability>
-So that <outcome the requester actually said>
+## Goals
+- <high-level goal or objective>
 
-## Acceptance criteria
-Scenario: <name>
-  GIVEN <precondition>
-  WHEN  <action>
-  THEN  <observable result>            (one THEN per scenario; add AND lines, not second THENs)
+### Context
+- <why this problem is relevant and needs to be addressed now>
 
-## NFR
+## Story
+As a <role or actor>,
+I want <capability or action>,
+So that <desired outcome or goal achieved>.
+
+## Requirements
+### Functional requirements
+- <what the system must do>
+
+### Non-Functional requirements
 - performance: 10k rows < 5 s (p95); progress indicator after 2 s
 - security: sales, admin roles only; every export audited (user, filter, row count)
 - limits: 10 exports / user / hour → 429 with Retry-After
 
-## Out of scope
+### Out of Scope
 - scheduled exports (parked q7)
 - XLSX format
+
+## Acceptance Criteria
+Scenario: <name>
+  Given <precondition>
+  When <action>
+  And <further action, optional>
+  Then <observable result>            (one Then per scenario; add And lines, not second Thens)
 
 ## Dependencies
 - streaming endpoint in orders-service (same story, task T1)
@@ -153,8 +165,8 @@ Scenario: <name>
 | Letter | Check the agent runs | If it fails |
 |---|---|---|
 | **I**ndependent | `Dependencies` lists no other *open* story; any listed dependency is a task inside this story or an already-merged change | Splits, or marks `blocked_by` and tells Squad Lead |
-| **N**egotiable | Story describes outcome and constraints, not implementation (no class names, no library choices, no UI pixel specs) unless the constraints file mandates them | Rewrites implementation lines as NFRs or drops them |
-| **V**aluable | "So that" line quotes or paraphrases the requester's stated outcome; at least one scenario is visible to that role | Sends back to grill with a `value` question |
+| **N**egotiable | Story describes outcome and constraints, not implementation (no class names, no library choices, no UI pixel specs) unless the constraints file mandates them | Rewrites implementation lines as non-functional requirements or drops them |
+| **V**aluable | the Story section's `That` line quotes or paraphrases the requester's stated outcome; at least one scenario is visible to that role | Sends back to grill with a `value` question |
 | **E**stimable | Every scenario names concrete data (fields, roles, numbers), and the plan agent's dry-run can produce ≥ 1 task per scenario | Adds an `open decision` for approvers |
 | **S**mall | ≤ 6 scenarios and ≤ 2 code areas touched (from `openspec/config.yaml` path map); dry-run plan ≤ 8 tasks | Proposes a split into two stories with the dependency stated |
 | **T**estable | Every THEN is observable by a test: an HTTP status, a DOM element, a log row, a DB row, a metric. No "works well", "is fast", "user-friendly" | Rewrites with a number or an observable, or asks the PO |
@@ -387,7 +399,7 @@ handoff:
 **Reads.** The story + spec delta, merged PRs and their review summaries, CI results, `docs/release-policy.md` (canary %, soak time, rollback SLO), current on-call, the monitor rule template.
 
 **Does.**
-1. Writes change notes from the story (user-facing, from the "As a / So that" and scenarios — not from commit messages).
+1. Writes change notes from the story (user-facing, from the "Story (As a / I want / So that)" and scenarios — not from commit messages).
 2. Writes the rollout plan: environment order, canary percentage, soak duration, feature flag name, rollback trigger and command.
 3. Derives **monitor rules** from NFRs and risk scenarios (see next agent) and stores them with the release.
 4. Runs pre-release checks: migrations reversible, flag defaults off, config diffs listed, dependency changes listed, spec delta ready to archive.
@@ -399,7 +411,7 @@ handoff:
 
 | Document | Generated from | Checker | Notes |
 |---|---|---|---|
-| Change notes | story "As a / So that" + scenarios | PO | user-facing; never from commit messages |
+| Change notes | story "Story (As a / I want / So that)" + scenarios | PO | user-facing; never from commit messages |
 | Rollout & rollback plan | release policy + flags + migrations | Squad Lead | rollback command dry-run in staging, evidence linked |
 | Monitor rules | NFRs + risk scenarios | QA | thresholds, windows, owners, actions |
 | Test evidence | verifier output, e2e runs, NFR probes | QA | links, not copies |

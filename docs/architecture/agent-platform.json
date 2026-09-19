@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "PDLC Agent Platform Architecture",
+    "quality_profile": "showcase",
+    "output": "agent-platform.html",
+    "repository": { "url": "https://github.com/akilananb/aipldc", "provider": "github", "revision": "5a71a1218a32dc202d560f0db69218d3158367b6" },
+    "views": [
+      { "id": "dispatch-and-trace", "label": "Dispatch and dual audit", "focus": ["temporal", "worker", "agentRunTracer", "runRecorder", "postgres"], "note": "One REASONING-queue activity wraps every agent call in a Langfuse trace and a runs row." },
+      { "id": "agent-to-model", "label": "Agent to model call", "focus": ["domainAgent", "promptTemplates", "embabelAi", "llmGateway"], "note": "Every per-domain agent renders a Mustache prompt, then calls promptRunner() through the injected Ai bean." },
+      { "id": "context-reads", "label": "Best-effort context", "focus": ["domainAgent", "agentContext", "boardRepo"], "note": "AgentContext reads board/repo state through the same hexagonal ports as control-plane, catching and logging on failure." }
+    ]
+  },
+  "components": [
+    { "id": "temporal", "type": "messagebus", "label": "Temporal", "sublabel": "REASONING", "pos": [40, 300], "size": [150, 60], "sources": [{ "path": "core/src/main/java/ai/pdlc/core/workflow/TaskQueues.java" }] },
+    { "id": "langfuse", "type": "external", "label": "Langfuse", "sublabel": "trace export (optional)", "pos": [40, 160], "size": [150, 60], "sources": [{ "path": "agents/src/main/java/ai/pdlc/agents/config/TracingConfig.java" }] },
+    { "id": "worker", "type": "backend", "label": "AgentActivitiesImpl", "sublabel": "reasoning-queue worker", "pos": [260, 300], "size": [160, 64], "sources": [{ "path": "agents/src/main/java/ai/pdlc/agents/activities/AgentActivitiesImpl.java" }, { "path": "agents/src/main/java/ai/pdlc/agents/config/WorkerConfig.java" }] },
+    { "id": "agentRunTracer", "type": "backend", "label": "AgentRunTracer", "sublabel": "pdlc.agent.run span", "pos": [490, 300], "size": [150, 64], "sources": [{ "path": "agents/src/main/java/ai/pdlc/agents/tracing/AgentRunTracer.java" }] },
+    { "id": "runRecorder", "type": "backend", "label": "RunRecorder", "sublabel": "JdbcTemplate, best-effort", "pos": [490, 445], "size": [150, 60], "sources": [{ "path": "agents/src/main/java/ai/pdlc/agents/activities/RunRecorder.java" }] },
+    { "id": "postgres", "type": "database", "label": "Postgres", "sublabel": "runs table", "pos": [490, 570], "size": [150, 60], "sources": [{ "path": "control-plane/src/main/resources/db/migration/V8__runs_live.sql" }] },
+    { "id": "domainAgent", "type": "backend", "label": "Per-domain Agent", "sublabel": "8 per-domain agents", "pos": [710, 300], "size": [170, 64], "sources": [{ "path": "agents/src/main/java/ai/pdlc/agents/release/ReleaseAgent.java" }] },
+    { "id": "promptTemplates", "type": "backend", "label": "PromptTemplates", "sublabel": "Mustache renderer", "pos": [710, 160], "size": [170, 60], "sources": [{ "path": "agents/src/main/java/ai/pdlc/agents/templates/PromptTemplates.java" }] },
+    { "id": "agentContext", "type": "backend", "label": "AgentContext", "sublabel": "static helpers, best-effort", "pos": [710, 445], "size": [170, 60], "sources": [{ "path": "agents/src/main/java/ai/pdlc/agents/activities/AgentContext.java" }] },
+    { "id": "boardRepo", "type": "external", "label": "Board / Repo", "sublabel": "RemoteBoardPort \u00b7 ADO \u00b7 GitHub", "pos": [710, 570], "size": [170, 60], "sources": [{ "path": "core/src/main/java/ai/pdlc/core/port/BoardPort.java" }] },
+    { "id": "embabelAi", "type": "backend", "label": "Embabel Ai", "sublabel": "per-role LlmOptions", "pos": [950, 300], "size": [150, 64], "sources": [{ "path": "agents/src/main/java/ai/pdlc/agents/AgentsApplication.java" }] },
+    { "id": "llmGateway", "type": "cloud", "label": "LLM Gateway", "sublabel": "OpenAI-compatible", "pos": [1170, 300], "size": [150, 60], "sources": [{ "path": "infra/pdlc.yaml" }] }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "agents \u2014 Spring Boot service (:8082)", "wraps": ["worker", "agentRunTracer", "runRecorder", "domainAgent", "promptTemplates", "agentContext", "embabelAi"], "pad": 20 }
+  ],
+  "connections": [
+    { "id": "temporal-to-worker", "from": "temporal", "to": "worker", "label": "dispatch", "variant": "emphasis" },
+    { "id": "worker-to-tracer", "from": "worker", "to": "agentRunTracer", "label": "trace run", "variant": "emphasis" },
+    { "id": "tracer-to-agent", "from": "agentRunTracer", "to": "domainAgent", "label": "invoke", "variant": "emphasis" },
+    { "id": "agent-to-ai", "from": "domainAgent", "to": "embabelAi", "label": "promptRunner()", "variant": "emphasis", "labelDy": -26 },
+    { "id": "ai-to-gateway", "from": "embabelAi", "to": "llmGateway", "label": "chat completion", "variant": "emphasis", "labelDy": -26 },
+    { "id": "tracer-to-runrecorder", "from": "agentRunTracer", "to": "runRecorder", "label": "start/finish", "variant": "dashed", "labelDy": 24 },
+    { "id": "runrecorder-to-postgres", "from": "runRecorder", "to": "postgres" },
+    { "id": "tracer-to-langfuse", "from": "agentRunTracer", "to": "langfuse", "label": "trace export", "variant": "dashed", "fromSide": "top", "toSide": "bottom" },
+    { "id": "agent-to-context", "from": "domainAgent", "to": "agentContext", "label": "context read", "variant": "dashed", "fromSide": "bottom", "toSide": "top", "labelDy": 24 },
+    { "id": "context-to-boardrepo", "from": "agentContext", "to": "boardRepo", "label": "board/repo ports", "labelDy": 24 },
+    { "id": "agent-to-templates", "from": "domainAgent", "to": "promptTemplates", "label": "render prompt", "variant": "dashed" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "Dispatch & audit", "items": ["AgentActivitiesImpl is the sole REASONING-queue worker; also registers FeatureWorkflowImpl + AgentMentionWorkflowImpl", "Every call wrapped in one Langfuse trace (AgentRunTracer) and one runs row (RunRecorder), both best-effort"] },
+    { "dot": "violet", "title": "8 per-domain agents", "items": ["grill \u00b7 po \u00b7 plan \u00b7 quality \u00b7 review \u00b7 release \u00b7 monitor \u00b7 mention, each a plain @Component", "Shared shape: constructor(Ai, PromptTemplates, Profile[, ports]) \u2192 promptRunner() \u2192 Mustache prompt \u2192 generateText/createObject"] },
+    { "dot": "emerald", "title": "Model routing", "items": ["AgentsApplication.applyLlmRoutingFromConfig() auto-collects every agents.roles.*.model from pdlc.yaml at startup", "promptRunner() uses withLlm(LlmOptions.withModel(roleModel)) when a role is configured, else withDefaultLlm()"] }
+  ]
+}

@@ -1,23 +1,14 @@
-import { Avatar, Flex, Select, Text } from '@radix-ui/themes';
+import { Flex, Select, Text } from '@radix-ui/themes';
 import { useQueryClient } from '@tanstack/react-query';
-import { DEMO_IDENTITIES, setIdentity, useIdentity, type Identity } from '../identity';
+import { DEMO_IDENTITIES, setIdentity, useIdentity } from '../identity';
 
-const ROLE_COLOR: Record<string, 'indigo' | 'violet' | 'cyan' | 'orange'> = {
-  PO: 'indigo',
-  SquadLead: 'violet',
-  FSDeveloper: 'cyan',
-  QA: 'orange',
-};
-
-function IdentityAvatar({ identity }: { identity: Identity }) {
-  return (
-    <Avatar
-      size="1"
-      radius="full"
-      fallback={identity.user[0].toUpperCase()}
-      color={ROLE_COLOR[identity.role] ?? 'gray'}
-    />
-  );
+function initials(label: string): string {
+  return label
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((w) => w[0].toUpperCase())
+    .join('');
 }
 
 /**
@@ -37,32 +28,27 @@ export default function IdentitySwitcher() {
   }
 
   return (
-    <Flex align="center" gap="2">
-      <Text size="2" color="gray">
-        Viewing as
-      </Text>
+    <div className="user">
       <Select.Root value={identity.user} onValueChange={onSelect} size="2">
-        <Select.Trigger style={{ minWidth: 190 }}>
+        <Select.Trigger>
           <Flex align="center" gap="2">
-            <IdentityAvatar identity={identity} />
-            <Text>
-              {identity.label} · {identity.role}
-            </Text>
+            <span className="avatar">{initials(identity.label)}</span>
+            <span>{identity.label}</span>
           </Flex>
         </Select.Trigger>
         <Select.Content>
           {DEMO_IDENTITIES.map((i) => (
             <Select.Item key={i.user} value={i.user}>
               <Flex align="center" gap="2">
-                <IdentityAvatar identity={i} />
+                <span className="avatar">{initials(i.label)}</span>
                 <Text>
-                  {i.label} · {i.role}
+                  {i.label} ({i.role})
                 </Text>
               </Flex>
             </Select.Item>
           ))}
         </Select.Content>
       </Select.Root>
-    </Flex>
+    </div>
   );
 }

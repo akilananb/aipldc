@@ -1,0 +1,86 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agents
+  namespace: pdlc
+  labels: {app: agents}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: agents}
+  template:
+    metadata:
+      labels: {app: agents}
+    spec:
+      enableServiceLinks: false
+      initContainers:
+        - name: wait-for-deps
+          image: busybox:1.36
+          command: ["sh", "-c", "until nc -z postgres 5432 && nc -z temporal 7233 && nc -z stub-llm 4000; do echo waiting; sleep 2; done"]
+      containers:
+        - name: agents
+          image: pdlc-pilot/agents
+          env:
+            - {name: SPRING_DATASOURCE_URL, value: "jdbc:postgresql://postgres:5432/pdlc"}
+            - {name: SPRING_DATASOURCE_USERNAME, value: pdlc}
+            - {name: SPRING_DATASOURCE_PASSWORD, value: pdlc}
+            - {name: PDLC_CONFIG_PATH, value: /app/pdlc.yaml}
+            - {name: PDLC_ACTIVE_PROFILE, value: local}
+            - {name: TEMPORAL_TARGET, value: "temporal:7233"}
+            - {name: TEMPORAL_NAMESPACE, value: default}
+            # RemoteBoardPort (agents' own read-only BoardPort for the in-memory provider) reads
+            # control-plane's REST API so grill/PO agents see real title/description/comments across the
+            # process boundary instead of an empty in-process board.
+            - {name: PDLC_CONTROL_PLANE_URL, value: "http://control-plane:8081"}
+            # AgentsApplication.main() derives embabel.agent.platform.models.openai.custom.* (base-url,
+            # models) from pdlc.yaml's agents.gateway/agents.roles.*.model at startup and sets them as
+            # system properties. PDLC_LLM_BASE_URL overrides agents.gateway when non-blank; used
+            # verbatim, include /v1 if the target server expects it. PDLC_LLM_API_KEY blank means an
+            # endpoint that doesn't check authentication. Both come from infra/.env, never hardcoded here.
+            - name: PDLC_LLM_BASE_URL
+              valueFrom: {secretKeyRef: {name: pdlc-env, key: PDLC_LLM_BASE_URL}}
+            - name: PDLC_LLM_API_KEY
+              valueFrom: {secretKeyRef: {name: pdlc-env, key: PDLC_LLM_API_KEY}}
+            # Langfuse tracing (AgentsApplication.applyLangfuseFromEnv derives the OTLP auth header).
+            # No hardcoded defaults for PUBLIC_URL/PROJECT_ID: a Tracer bean and span/trace IDs exist
+            # regardless of LANGFUSE_TRACING_ENABLED (that flag only gates the OTLP exporter, not span
+            # creation — verified empirically, management.tracing.enabled does not remove the Tracer
+            # bean on this stack). Blanking these instead makes AgentRunTracer.traceUrl() null when
+            # disabled (isBlank check on publicUrl/projectId/traceId), so runs.trace_url stays empty
+            # instead of a dead link into a Langfuse that isn't running.
+            - {name: LANGFUSE_OTLP_ENDPOINT, value: "http://langfuse-web:3000/api/public/otel/v1/traces"}
+            - name: LANGFUSE_PUBLIC_KEY
+              valueFrom: {secretKeyRef: {name: pdlc-env, key: LANGFUSE_PUBLIC_KEY}}
+            - name: LANGFUSE_SECRET_KEY
+              valueFrom: {secretKeyRef: {name: pdlc-env, key: LANGFUSE_SECRET_KEY}}
+            - name: LANGFUSE_PUBLIC_URL
+              valueFrom: {secretKeyRef: {name: pdlc-env, key: LANGFUSE_PUBLIC_URL}}
+            - name: LANGFUSE_PROJECT_ID
+              valueFrom: {secretKeyRef: {name: pdlc-env, key: LANGFUSE_PROJECT_ID}}
+          ports:
+            - {containerPort: 8082}
+          volumeMounts:
+            - {name: config, mountPath: /app/pdlc.yaml, subPath: pdlc.yaml, readOnly: true}
+            - {name: runtime, mountPath: /Users/work/Documents/restaurant-runtime}
+          readinessProbe:
+            tcpSocket: {port: 8082}
+            initialDelaySeconds: 15
+            periodSeconds: 5
+            failureThreshold: 60
+      volumes:
+        - name: config
+          configMap: {name: pdlc-config}
+        - name: runtime
+          hostPath: {path: /Users/work/Documents/restaurant-runtime, type: Directory}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: agents
+  namespace: pdlc
+spec:
+  type: LoadBalancer
+  selector: {app: agents}
+  ports:
+    - {port: 8082, targetPort: 8082}

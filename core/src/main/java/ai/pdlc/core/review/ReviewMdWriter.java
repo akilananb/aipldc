@@ -84,6 +84,11 @@ public final class ReviewMdWriter {
                 .formatted(agentName, targetDescription, HM.format(at), approvedBy, markdown);
     }
 
+    /** {@code ### scenario-review · <scenario> · v<version> · meets|not-reviewed · <hh:mm> · by <who>}. */
+    public static String scenarioReviewBlock(String scenario, int version, String status, OffsetDateTime at, String reviewer) {
+        return "\n### scenario-review · %s · v%d · %s · %s · by %s\n".formatted(scenario, version, status, HM.format(at), reviewer);
+    }
+
     /** {@code ## PR opened · branch -> target} with per-task build results and review findings —
      * build-order phase 3, before gate 2. */
     public static String prOpenedBlock(int taskCount, String branch, String target, String prUrl,

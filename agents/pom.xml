@@ -35,11 +35,15 @@
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-opentelemetry</artifactId>
     </dependency>
-
-    <!-- Embabel agent platform (provides the injectable Ai bean + AgentPlatform). -->
     <dependency>
       <groupId>com.embabel.agent</groupId>
       <artifactId>embabel-agent-starter</artifactId>
+    </dependency>
+    <!-- Native skill catalog for the Grill agent's grill-me/grilling interview skills (pinned,
+         packaged from .agents/skills — see the Maven resource below and GrillSkills). -->
+    <dependency>
+      <groupId>com.embabel.agent</groupId>
+      <artifactId>embabel-agent-skills</artifactId>
     </dependency>
     <!-- Custom OpenAI-compatible endpoint support (OPENAI_CUSTOM_BASE_URL/API_KEY/MODELS):
          the documented mechanism for pointing Embabel at stub-llm. Verified from the v1.5.1 jar. -->
@@ -74,8 +78,25 @@
       <scope>test</scope>
     </dependency>
   </dependencies>
-
   <build>
+    <resources>
+      <resource>
+        <directory>src/main/resources</directory>
+      </resource>
+      <!-- Pinned grill-me/grilling skills (see repo-root .agents/skills, installed from the
+           mattpocock/skills commit pinned in ADAPTIVE_GRILL_PLAN.md); packaged verbatim, no
+           filtering, so GrillSkills can extract them to real directories at startup. -->
+      <resource>
+        <directory>${project.basedir}/../.agents/skills</directory>
+        <targetPath>skills</targetPath>
+        <filtering>false</filtering>
+        <includes>
+          <include>grill-me/SKILL.md</include>
+          <include>grilling/SKILL.md</include>
+          <include>LICENSE.mattpocock</include>
+        </includes>
+      </resource>
+    </resources>
     <plugins>
       <plugin>
         <groupId>org.springframework.boot</groupId>

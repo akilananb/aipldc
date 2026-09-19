@@ -26,6 +26,7 @@ class FakeBoardSideEffects implements BoardSideEffects {
     final List<StoryDraft> published = new CopyOnWriteArrayList<>();
     final List<Boolean> queuedFlags = new CopyOnWriteArrayList<>();
     final List<StoryDraft> revisions = new CopyOnWriteArrayList<>();
+    final List<List<String>> revisionResolvedIds = new CopyOnWriteArrayList<>();
     final List<Integer> approvedVersions = new CopyOnWriteArrayList<>();
     final List<WorkItemRef> activatedStories = new CopyOnWriteArrayList<>();
     /** (boardId, version, verdict) tuples captured by {@link #saveQualityReport}. */
@@ -42,6 +43,15 @@ class FakeBoardSideEffects implements BoardSideEffects {
     @Override
     public void postGrillQuestions(WorkItemRef item, GrillHandoff grill) {
         grillQuestionsPosted.add(item);
+    }
+
+    final List<WorkItemRef> grillRoundsPosted = new CopyOnWriteArrayList<>();
+    final List<GrillHandoff> grillRoundHandoffs = new CopyOnWriteArrayList<>();
+
+    @Override
+    public void postGrillRound(WorkItemRef item, GrillHandoff grill) {
+        grillRoundsPosted.add(item);
+        grillRoundHandoffs.add(grill);
     }
 
     @Override
@@ -64,6 +74,7 @@ class FakeBoardSideEffects implements BoardSideEffects {
     @Override
     public PublishResult publishRevision(WorkItemRef story, int newVersion, StoryDraft draft, List<String> resolvedCommentIds) {
         revisions.add(draft);
+        revisionResolvedIds.add(List.copyOf(resolvedCommentIds));
         return new PublishResult(story.boardId(), newVersion, "hash-v" + newVersion);
     }
 

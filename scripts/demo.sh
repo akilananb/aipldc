@@ -2,13 +2,14 @@
 # scripts/demo.sh — scoped startup/reset orchestration for the clean restaurant demo.
 #
 # Subcommands:
-#   up            Preflight git/docker + the seven pinned checkpoint SHAs, ensure the disposable
-#                 /Users/work/Documents/restaurant-runtime clone exists (restaurant-base @ the
-#                 pinned 05-verify-retry-loop SHA), start the primary pdlc-pilot stack, and wait
-#                 for actual demo seeding readiness (GET /api/demo -> enabled:true + liveItemId).
-#   reset --yes   Destroy ONLY the pdlc-pilot (and any old pdlc-restaurant) compose projects'
-#                 volumes, stop demo-targeting build-workers, recreate the runtime clone, then
-#                 run `up`. Requires the literal --yes; anything else is a dry-run.
+#   up            Preflight git/colima/kubectl/tilt + the seven pinned checkpoint SHAs, ensure
+#                 the disposable /Users/work/Documents/restaurant-runtime clone exists
+#                 (restaurant-base @ the pinned 05-verify-retry-loop SHA), start the primary
+#                 pdlc-pilot stack (tilt ci), and wait for actual demo seeding readiness
+#                 (GET /api/demo -> enabled:true + liveItemId).
+#   reset --yes   Destroy ONLY the pdlc namespace (all pods + persistent volumes), stop
+#                 demo-targeting build-workers, recreate the runtime clone, then run `up`.
+#                 Requires the literal --yes; anything else is a dry-run.
 #   start-live    POST /api/demo/live/start (idempotent) and print the live feature's UI URL.
 #   verify        Read-only readiness + catalog-count checks. No mutations, no LLM triggers.
 set -euo pipefail
@@ -17,8 +18,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 CHECKPOINT_REPO="/Users/work/Documents/restaurant-service"
 RUNTIME_DIR="/Users/work/Documents/restaurant-runtime"
-COMPOSE_FILE="$REPO_ROOT/infra/docker-compose.yml"
-OLD_COMPOSE_FILE="$REPO_ROOT/infra/restaurant/docker-compose.yml"
+TILTFILE="$REPO_ROOT/Tiltfile"
+K8S_NAMESPACE="pdlc"
 BASE="${BASE_URL:-http://localhost:8081}"
 UI_BASE="${UI_BASE_URL:-http://localhost:5173}"
 
@@ -41,13 +42,13 @@ usage() {
   cat >&2 <<'EOF'
 Usage: scripts/demo.sh [up|reset --yes|start-live|verify]
 
-  up            Preflight (git, docker compose, the seven pinned checkpoint SHAs),
+  up            Preflight (git, colima, kubectl, tilt, the seven pinned checkpoint SHAs),
                 ensure /Users/work/Documents/restaurant-runtime exists (restaurant-base
-                @ 05-verify-retry-loop), start the primary pdlc-pilot stack, and wait
-                for GET /api/demo to report enabled:true with a non-null liveItemId.
-  reset --yes   Destructive: stop demo build-workers, down --volumes the pdlc-pilot
-                and old pdlc-restaurant compose projects, recreate the runtime clone,
-                then run `up`. Requires the literal --yes; otherwise dry-run.
+                @ 05-verify-retry-loop), start the primary pdlc-pilot stack (tilt ci), and
+                wait for GET /api/demo to report enabled:true with a non-null liveItemId.
+  reset --yes   Destructive: stop demo build-workers, tilt down --delete-namespaces (drops
+                namespace pdlc and all its volumes), recreate the runtime clone, then run
+                `up`. Requires the literal --yes; otherwise dry-run.
   start-live    POST /api/demo/live/start (idempotent) and print the live item's UI URL.
   verify        Read-only readiness + catalog-count checks against the running stack.
 EOF
@@ -55,10 +56,14 @@ EOF
 
 preflight_tools() {
   command -v git >/dev/null 2>&1 || { echo "error: git not found on PATH" >&2; exit 1; }
-  command -v docker >/dev/null 2>&1 || { echo "error: docker not found on PATH" >&2; exit 1; }
-  if ! docker compose version >/dev/null 2>&1; then
-    echo "error: 'docker compose' (v2 plugin) not available" >&2; exit 1
-  fi
+  command -v colima >/dev/null 2>&1 || { echo "error: colima not found on PATH" >&2; exit 1; }
+  command -v kubectl >/dev/null 2>&1 || { echo "error: kubectl not found on PATH (brew install kubectl)" >&2; exit 1; }
+  command -v tilt >/dev/null 2>&1 || { echo "error: tilt not found on PATH (brew install tilt)" >&2; exit 1; }
+  colima status >/dev/null 2>&1 || { echo "error: colima is not running: colima start --kubernetes" >&2; exit 1; }
+  [ "$(kubectl config current-context 2>/dev/null)" = "colima" ] || {
+    echo "error: kube context must be 'colima' (got '$(kubectl config current-context 2>/dev/null || echo <none>)')" >&2; exit 1; }
+  kubectl get nodes >/dev/null 2>&1 || {
+    echo "error: Kubernetes is not enabled in colima: colima kubernetes start" >&2; exit 1; }
 }
 
 preflight_checkpoints() {
@@ -140,11 +145,10 @@ stop_build_workers() {
 
 reset_scope() {
   echo "Reset scope (nothing is deleted until you pass --yes):"
-  echo "  - docker compose project 'pdlc-pilot' ($COMPOSE_FILE): down --volumes --remove-orphans"
-  echo "    (includes the langfuse-* services when that profile is enabled: langfuse-postgres,"
-  echo "     langfuse-clickhouse, langfuse-minio, langfuse-redis - ALL accumulated LLM traces,"
-  echo "     the Langfuse org/project/account and API keys are destroyed and re-initialized fresh)"
-  echo "  - old 'pdlc-restaurant' project ($OLD_COMPOSE_FILE): down --volumes --remove-orphans"
+  echo "  - tilt down --delete-namespaces: drops namespace $K8S_NAMESPACE and all its volumes"
+  echo "    (includes the langfuse-* pods when enabled: langfuse-postgres, langfuse-clickhouse,"
+  echo "     langfuse-minio, langfuse-redis - ALL accumulated LLM traces, the Langfuse"
+  echo "     org/project/account and API keys are destroyed and re-initialized fresh)"
   echo "  - stop build-worker host processes verified to target this demo (never unscoped pkill)"
   echo "  - delete + recreate $RUNTIME_DIR (restaurant-base @ $BASELINE_SHA)"
   echo "Preserved: $CHECKPOINT_REPO, $REPO_ROOT, infra/.env"
@@ -187,8 +191,8 @@ do_up() {
   preflight_tools
   preflight_checkpoints
   ensure_runtime
-  log "starting primary stack: docker compose -f infra/docker-compose.yml up -d --build"
-  ( cd "$REPO_ROOT" && docker compose -f "$COMPOSE_FILE" up -d --build )
+  log "starting primary stack: tilt ci (builds images, applies infra/k8s, waits for readiness)"
+  ( cd "$REPO_ROOT" && tilt ci --file "$TILTFILE" )
   wait_ready
   log "UP COMPLETE: demo enabled and live feature seeded (see GET $BASE/api/demo)"
 }
@@ -203,10 +207,9 @@ do_reset() {
   preflight_checkpoints
   reset_scope
   stop_build_workers
-  log "tearing down pdlc-pilot project"
-  ( cd "$REPO_ROOT" && docker compose -f "$COMPOSE_FILE" --profile '*' down --volumes --remove-orphans )
-  log "tearing down any old pdlc-restaurant project"
-  ( cd "$REPO_ROOT" && docker compose -f "$OLD_COMPOSE_FILE" --profile '*' down --volumes --remove-orphans ) || true
+  log "tearing down namespace $K8S_NAMESPACE: tilt down --delete-namespaces"
+  ( cd "$REPO_ROOT" && tilt down --file "$TILTFILE" --delete-namespaces )
+  kubectl wait --for=delete "namespace/$K8S_NAMESPACE" --timeout=180s >/dev/null 2>&1 || true
   recreate_runtime
   do_up
 }

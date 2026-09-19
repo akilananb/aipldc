@@ -3,19 +3,10 @@ package ai.pdlc.agents.po;
 import ai.pdlc.agents.fixtures.DemoFixtures;
 import org.junit.jupiter.api.Test;
 
-import java.util.List;
-
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** Locks the story layout the e2e demo depends on: line 13 is the rate-limit GIVEN line. */
+/** Locks the revised-story assertions the e2e demo depends on for the {@code po-revise} flow. */
 class StoryLayoutTest {
-
-    @Test
-    void line13IsRateLimitGiven() {
-        List<String> lines = StoryParser.lines(DemoFixtures.story());
-        assertThat(lines).hasSizeGreaterThanOrEqualTo(13);
-        assertThat(lines.get(12)).isEqualTo("  GIVEN 10 exports in the last hour");
-    }
 
     @Test
     void revisedStoryContainsDemoAssertions() {

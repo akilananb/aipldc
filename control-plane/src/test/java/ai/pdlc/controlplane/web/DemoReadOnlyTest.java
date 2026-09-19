@@ -15,6 +15,7 @@ import ai.pdlc.controlplane.persistence.PrRepository;
 import ai.pdlc.controlplane.persistence.QualityReportEntity;
 import ai.pdlc.controlplane.persistence.QualityReportRepository;
 import ai.pdlc.controlplane.persistence.ReleaseDocumentRepository;
+import ai.pdlc.controlplane.persistence.ScenarioReviewRepository;
 import ai.pdlc.controlplane.persistence.ReviewEventEntity;
 import ai.pdlc.controlplane.persistence.ReviewEventRepository;
 import ai.pdlc.controlplane.persistence.RunRepository;
@@ -137,6 +138,8 @@ class DemoReadOnlyTest {
     PrRepository prs;
     @Autowired
     ReleaseDocumentRepository releaseDocuments;
+    @Autowired
+    ScenarioReviewRepository scenarioReviews;
     @Autowired
     DemoSnapshotRepository snapshots;
     @Autowired
@@ -296,7 +299,7 @@ class DemoReadOnlyTest {
 
         ItemsController items = new ItemsController(workItems, artifacts, approvals, qualityReports, runs,
                 board, pdlcConfig, stubs, identityResolver, reviewTrail, repo, demoSnapshots);
-        ArtifactsController arts = new ArtifactsController(workItems, artifacts, comments, repo, reanchorer,
+        ArtifactsController arts = new ArtifactsController(workItems, artifacts, comments, scenarioReviews, repo, reanchorer,
                 reviewTrail, stubs, identityResolver, workflowClient, pdlcConfig, demoSnapshots);
         PrController pr = new PrController(workItems, prs, repo, pdlcConfig, stubs, identityResolver, demoSnapshots);
         ReleaseController release = new ReleaseController(workItems, releaseDocuments, stubs, identityResolver, demoSnapshots);

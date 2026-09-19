@@ -14,6 +14,7 @@ import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -86,9 +87,23 @@ class FeatureWorkflowImplTest {
         throw new AssertionError("condition not met before deadline; last grill=" + wf.grill());
     }
 
+    /** Confirms adaptive intake: waits for the reserved confirmation question (evidence {@link
+     * ai.pdlc.core.domain.GrillQuestion#INTAKE_CONFIRMATION_EVIDENCE}) and replies {@code confirm}
+     * - the one extra step every test needs before gate 1 can proceed, now that intake is
+     * adaptive (ADAPTIVE_GRILL_PLAN.md). */
+    private void confirmIntake(FeatureWorkflow wf) throws InterruptedException {
+        awaitGrill(wf, g -> g != null && g.openQuestions().stream()
+                .anyMatch(q -> ai.pdlc.core.domain.GrillQuestion.INTAKE_CONFIRMATION_EVIDENCE.equals(q.evidence())));
+        String qid = wf.grill().openQuestions().stream()
+                .filter(q -> ai.pdlc.core.domain.GrillQuestion.INTAKE_CONFIRMATION_EVIDENCE.equals(q.evidence()))
+                .findFirst().orElseThrow().id();
+        wf.commentAdded(new BoardCommentEvent(qid + "-confirm", "PO", qid + ": confirm"));
+    }
+
     @Test
     void fullGate1SequenceDraftCommentRevisionTwoDistinctApprovalsCompletes() throws Exception {
         FeatureWorkflow wf = start("4412");
+        confirmIntake(wf);
 
         awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G1);
         assertThat(wf.state().version()).isEqualTo(1);
@@ -112,6 +127,7 @@ class FeatureWorkflowImplTest {
         // review -> PR -> gate 2, reusing the same approve/comment signal surface.
         awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G2);
         assertThat(boardSideEffects.tasksPublished).hasSize(1);
+        assertThat(boardSideEffects.qualityReportsSaved).contains("task-T1:1:passed");
         assertThat(boardSideEffects.inProgressCalls).hasSize(1);
         assertThat(buildActivities.taskIdsRun).containsExactly("T1");
         assertThat(boardSideEffects.prsOpened.get()).isEqualTo(1);
@@ -141,6 +157,7 @@ class FeatureWorkflowImplTest {
     @Test
     void staleVersionApprovalIsIgnored() throws Exception {
         FeatureWorkflow wf = start("4412-stale-version");
+        confirmIntake(wf);
         awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G1);
 
         wf.approve(new Approval("po@acme", "PO", "story", 99, "hash-stale", Instant.now()));
@@ -152,6 +169,7 @@ class FeatureWorkflowImplTest {
     @Test
     void sameIdentityCannotSatisfyGateAsBothCheckers() throws Exception {
         FeatureWorkflow wf = start("4412-same-who");
+        confirmIntake(wf);
         awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G1);
 
         wf.approve(new Approval("x@acme", "PO", "story", 1, "hash-v1", Instant.now()));
@@ -168,6 +186,7 @@ class FeatureWorkflowImplTest {
     @Test
     void approvalWithOpenBlockingCommentDoesNotPassGate() throws Exception {
         FeatureWorkflow wf = start("4412-blocking");
+        confirmIntake(wf);
         awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G1);
 
         wf.comment(new Comment("c1", "qa@acme", "QA", "story", "line:15",
@@ -213,12 +232,14 @@ class FeatureWorkflowImplTest {
         assertThat(boardSideEffects.staleEscalations.get()).isEqualTo(1);
 
         wf.commentAdded(new BoardCommentEvent("board-c1", "PO", "current filtered view"));
+        confirmIntake(wf);
         awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G1);
     }
 
     @Test
     void gate2RejectsGate1RolesAndSameIdentityAsBothCheckers() throws Exception {
         FeatureWorkflow wf = start("4412-gate2-sod");
+        confirmIntake(wf);
         awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G1);
         wf.approve(new Approval("po@acme", "PO", "story", 1, "hash-v1", Instant.now()));
         wf.approve(new Approval("lead@acme", "SquadLead", "story", 1, "hash-v1", Instant.now()));
@@ -244,6 +265,7 @@ class FeatureWorkflowImplTest {
     @Test
     void buildLoopEscalationStillReachesReviewAndGate2() throws Exception {
         FeatureWorkflow wf = start("4412-build-escalation");
+        confirmIntake(wf);
         awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G1);
         wf.approve(new Approval("po@acme", "PO", "story", 1, "hash-v1", Instant.now()));
         wf.approve(new Approval("lead@acme", "SquadLead", "story", 1, "hash-v1", Instant.now()));
@@ -265,6 +287,7 @@ class FeatureWorkflowImplTest {
     void blockerFindingBlocksGate2EvenWithBothApprovals() throws Exception {
         FeatureWorkflow wf = start("4412-blocker-finding");
         agentActivities.returnBlockerFinding = true;
+        confirmIntake(wf);
         awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G1);
         wf.approve(new Approval("po@acme", "PO", "story", 1, "hash-v1", Instant.now()));
         wf.approve(new Approval("lead@acme", "SquadLead", "story", 1, "hash-v1", Instant.now()));
@@ -286,6 +309,7 @@ class FeatureWorkflowImplTest {
     @Test
     void gate3RejectsWrongCheckerRoleAndOnlyPassesWhenEveryDocumentIsSignedByItsOwnRole() throws Exception {
         FeatureWorkflow wf = start("4412-gate3-sod");
+        confirmIntake(wf);
         awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G1);
         wf.approve(new Approval("po@acme", "PO", "story", 1, "hash-v1", Instant.now()));
         wf.approve(new Approval("lead@acme", "SquadLead", "story", 1, "hash-v1", Instant.now()));
@@ -316,6 +340,7 @@ class FeatureWorkflowImplTest {
     @Test
     void gate3RequestChangesClearsEverySignature() throws Exception {
         FeatureWorkflow wf = start("4412-gate3-request-changes");
+        confirmIntake(wf);
         awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G1);
         wf.approve(new Approval("po@acme", "PO", "story", 1, "hash-v1", Instant.now()));
         wf.approve(new Approval("lead@acme", "SquadLead", "story", 1, "hash-v1", Instant.now()));
@@ -347,6 +372,7 @@ class FeatureWorkflowImplTest {
     void monitorTripAfterDeployFilesACard() throws Exception {
         FeatureWorkflow wf = start("4412-monitor-trip");
         agentActivities.returnMonitorTrip = true;
+        confirmIntake(wf);
         awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G1);
         wf.approve(new Approval("po@acme", "PO", "story", 1, "hash-v1", Instant.now()));
         wf.approve(new Approval("lead@acme", "SquadLead", "story", 1, "hash-v1", Instant.now()));
@@ -393,6 +419,7 @@ class FeatureWorkflowImplTest {
                 .build();
         FeatureWorkflow wf = client.newWorkflowStub(FeatureWorkflow.class, options);
         WorkflowClient.start(wf::run, new WorkItemRef("local", "4412-quality-fail"));
+        confirmIntake(wf);
 
         awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G1 && s.version() == 2);
         // version()/stage() flip mid-loop (version++ precedes the poRevise/saveQualityReport calls
@@ -441,6 +468,7 @@ class FeatureWorkflowImplTest {
                 .build();
         FeatureWorkflow wf = client.newWorkflowStub(FeatureWorkflow.class, options);
         WorkflowClient.start(wf::run, new WorkItemRef("local", "4412-multi-story"));
+        confirmIntake(wf);
 
         awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G1);
         assertThat(boardSideEffects.published).hasSize(2);
@@ -492,6 +520,7 @@ class FeatureWorkflowImplTest {
                 .build();
         FeatureWorkflow wf = client.newWorkflowStub(FeatureWorkflow.class, options);
         WorkflowClient.start(wf::run, new WorkItemRef("local", "4412-po-follow-up"));
+        confirmIntake(wf);
 
         awaitGrill(wf, g -> g != null && g.openQuestions().stream().anyMatch(q -> q.id().equals("po1")));
         assertThat(wf.state().stage()).isEqualTo(CanonicalState.NEEDS_CLARIFICATION);
@@ -526,6 +555,7 @@ class FeatureWorkflowImplTest {
                 .build();
         FeatureWorkflow wf = client.newWorkflowStub(FeatureWorkflow.class, options);
         WorkflowClient.start(wf::run, new WorkItemRef("local", "4412-po-follow-up-cap"));
+        confirmIntake(wf);
 
         for (int round = 1; round <= 2; round++) {
             int expected = round;
@@ -540,6 +570,7 @@ class FeatureWorkflowImplTest {
     @Test
     void g2RequestChangesRerunsTargetedTaskWithCommentsAndReReviews() throws Exception {
         FeatureWorkflow wf = start("4412-g2-request-changes");
+        confirmIntake(wf);
         awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G1);
         wf.approve(new Approval("po@acme", "PO", "story", 1, "hash-v1", Instant.now()));
         wf.approve(new Approval("lead@acme", "SquadLead", "story", 1, "hash-v1", Instant.now()));
@@ -574,6 +605,7 @@ class FeatureWorkflowImplTest {
     void reviewBlockerRedVerifierTriggersOneAutoFixRoundThenWaits() throws Exception {
         FeatureWorkflow wf = start("4412-g2-auto-fix");
         buildActivities.redOnce = true;
+        confirmIntake(wf);
         awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G1);
         wf.approve(new Approval("po@acme", "PO", "story", 1, "hash-v1", Instant.now()));
         wf.approve(new Approval("lead@acme", "SquadLead", "story", 1, "hash-v1", Instant.now()));
@@ -596,6 +628,7 @@ class FeatureWorkflowImplTest {
     void buildEscalationAsksHumanRetriesWithAnswer() throws Exception {
         FeatureWorkflow wf = start("4412-human-input-retry");
         buildActivities.escalateOnce = true;
+        confirmIntake(wf);
         awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G1);
         wf.approve(new Approval("po@acme", "PO", "story", 1, "hash-v1", Instant.now()));
         wf.approve(new Approval("lead@acme", "SquadLead", "story", 1, "hash-v1", Instant.now()));
@@ -618,6 +651,7 @@ class FeatureWorkflowImplTest {
     void buildEscalationSkipContinuesToReview() throws Exception {
         FeatureWorkflow wf = start("4412-human-input-skip");
         buildActivities.escalateOnce = true;
+        confirmIntake(wf);
         awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G1);
         wf.approve(new Approval("po@acme", "PO", "story", 1, "hash-v1", Instant.now()));
         wf.approve(new Approval("lead@acme", "SquadLead", "story", 1, "hash-v1", Instant.now()));
@@ -632,6 +666,7 @@ class FeatureWorkflowImplTest {
     @Test
     void g3RequestChangesRedraftsPackAtBumpedVersion() throws Exception {
         FeatureWorkflow wf = start("4412-g3-redraft");
+        confirmIntake(wf);
         awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G1);
         wf.approve(new Approval("po@acme", "PO", "story", 1, "hash-v1", Instant.now()));
         wf.approve(new Approval("lead@acme", "SquadLead", "story", 1, "hash-v1", Instant.now()));
@@ -665,4 +700,286 @@ class FeatureWorkflowImplTest {
         assertThat(wf.state().stage()).isEqualTo(CanonicalState.DONE);
         assertThat(boardSideEffects.deployedReleases).hasSize(1);
     }
+
+    @Test
+    void nonblockingRequestChangesFeedbackReachesRevisionAndIsResolved() throws Exception {
+        FeatureWorkflow wf = start("4412-g1-nonblocking");
+        confirmIntake(wf);
+        awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G1);
+
+        // Nonblocking Change and Note comments - neither shows up in openBlockingComments, but the
+        // explicit Request changes button must still submit both to the PO agent (only approval
+        // gating, not revision-eligibility, is blocking-scoped).
+        wf.comment(new Comment("c1", "lead@acme", "SquadLead", "story", "line:46",
+                "20/hour for admin", Comment.Intent.CHANGE, false, 1));
+        wf.comment(new Comment("c2", "lead@acme", "SquadLead", "story", "scenario:audit",
+                "context note, not a change", Comment.Intent.NOTE, false, 1));
+        assertThat(boardSideEffects.revisions).isEmpty(); // posting comments alone never revises
+
+        wf.requestChanges("lead@acme");
+        awaitState(wf, s -> s.version() == 2 && s.openComments().isEmpty());
+        long deadline = System.currentTimeMillis() + 5000;
+        while ((boardSideEffects.revisions.isEmpty() || boardSideEffects.qualityReportsSaved.stream()
+                .noneMatch(r -> r.endsWith(":2:passed"))) && System.currentTimeMillis() < deadline) {
+            Thread.sleep(20);
+        }
+
+        // Both explicitly-submitted comments reached the PO agent and were resolved - this fails
+        // against the old blocking-only selection, which would pass an empty comment list here.
+        assertThat(agentActivities.reviseComments).hasSize(1);
+        assertThat(agentActivities.reviseComments.get(0)).extracting(Comment::id).containsExactlyInAnyOrder("c1", "c2");
+        assertThat(boardSideEffects.revisionResolvedIds).hasSize(1);
+        assertThat(boardSideEffects.revisionResolvedIds.get(0)).containsExactlyInAnyOrder("c1", "c2");
+        assertThat(boardSideEffects.revisions).hasSize(1);
+        // The revised artifact (not the pre-revision story) is the one quality evaluated.
+        assertThat(agentActivities.qualityContents).contains(FakeAgentActivities.REVISED_STORY);
+    }
+
+    @Test
+    void lateBlockingCommentDuringInFlightRevisionSurvivesAndIsResolvedBySecondRequest() throws Exception {
+        FeatureWorkflow wf = start("4412-g1-race");
+        confirmIntake(wf);
+        awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G1);
+
+        wf.comment(new Comment("c1", "lead@acme", "SquadLead", "story", "line:13",
+                "make it 20/hour for admin", Comment.Intent.CHANGE, true, 1));
+        awaitState(wf, s -> !s.openComments().isEmpty());
+
+        agentActivities.reviseStarted = new CountDownLatch(1);
+        agentActivities.reviseRelease = new CountDownLatch(1);
+        try {
+            wf.requestChanges("lead@acme");
+            assertThat(agentActivities.reviseStarted.await(5, TimeUnit.SECONDS)).isTrue();
+
+            // A fresh blocking comment arrives while the first revision is still in flight.
+            wf.comment(new Comment("c2", "qa@acme", "QA", "story", "line:15",
+                    "also record filter hash", Comment.Intent.CHANGE, true, 2));
+            awaitState(wf, s -> s.openComments().stream().anyMatch(c -> c.id().equals("c2")));
+        } finally {
+            agentActivities.reviseRelease.countDown();
+        }
+
+        awaitState(wf, s -> s.version() == 2 && s.openComments().size() == 1);
+        // Only the original snapshot (c1) was resolved by the in-flight revision.
+        assertThat(boardSideEffects.revisionResolvedIds).hasSize(1);
+        assertThat(boardSideEffects.revisionResolvedIds.get(0)).containsExactly("c1");
+        assertThat(wf.state().openComments()).extracting(Comment::id).containsExactly("c2");
+
+        // The late comment still blocks the gate even after both checkers approve.
+        wf.approve(new Approval("po@acme", "PO", "story", 2, "hash-v2", Instant.now()));
+        wf.approve(new Approval("lead@acme", "SquadLead", "story", 2, "hash-v2", Instant.now()));
+        Thread.sleep(200);
+        assertThat(WorkflowStub.fromTyped(wf).describe().getStatus())
+                .isEqualTo(io.temporal.api.enums.v1.WorkflowExecutionStatus.WORKFLOW_EXECUTION_STATUS_RUNNING);
+
+        // A second explicit Request changes consumes the late comment.
+        wf.requestChanges("qa@acme");
+        awaitState(wf, s -> s.version() == 3 && s.openComments().isEmpty());
+        assertThat(boardSideEffects.revisionResolvedIds).hasSize(2);
+        assertThat(boardSideEffects.revisionResolvedIds.get(1)).containsExactly("c2");
+    }
+
+    @Test
+    void humanRequestChangesRevisionCarriesResolvedGrillContext() throws Exception {
+        FeatureWorkflow wf = start("4412-g1-grill-context");
+        confirmIntake(wf);
+        awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G1);
+
+        wf.comment(new Comment("c1", "lead@acme", "SquadLead", "story", "line:13",
+                "make it 20/hour for admin", Comment.Intent.CHANGE, true, 1));
+        awaitState(wf, s -> !s.openComments().isEmpty());
+        wf.requestChanges("lead@acme");
+        awaitState(wf, s -> s.version() == 2 && s.openComments().isEmpty());
+
+        assertThat(agentActivities.reviseGrillHandoffs).hasSize(1);
+        assertThat(agentActivities.reviseGrillHandoffs.get(0)).isNotNull();
+        assertThat(agentActivities.reviseGrillHandoffs.get(0).questions())
+                .anySatisfy(q -> assertThat(q.status()).isEqualTo(ai.pdlc.core.domain.GrillQuestion.Status.ANSWERED));
+    }
+
+    @Test
+    void qualityAutoRevisionCarriesResolvedGrillContext() throws Exception {
+        testEnv = TestWorkflowEnvironment.newInstance();
+        Worker worker = testEnv.newWorker(TaskQueues.REASONING);
+        worker.registerWorkflowImplementationTypes(FeatureWorkflowImpl.class);
+        agentActivities = new FakeAgentActivities();
+        agentActivities.failStoryQualityOnce = true;
+        worker.registerActivitiesImplementations(agentActivities);
+
+        Worker boardWorker = testEnv.newWorker(TaskQueues.BOARD);
+        boardSideEffects = new FakeBoardSideEffects();
+        boardWorker.registerActivitiesImplementations(boardSideEffects);
+
+        Worker buildWorker = testEnv.newWorker(TaskQueues.BUILD);
+        buildActivities = new FakeBuildActivities();
+        buildWorker.registerActivitiesImplementations(buildActivities);
+
+        testEnv.start();
+
+        WorkflowClient client = testEnv.getWorkflowClient();
+        WorkflowOptions options = WorkflowOptions.newBuilder()
+                .setTaskQueue(TaskQueues.REASONING)
+                .setWorkflowId("feature-local-4412-quality-fail-grill")
+                .build();
+        FeatureWorkflow wf = client.newWorkflowStub(FeatureWorkflow.class, options);
+        WorkflowClient.start(wf::run, new WorkItemRef("local", "4412-quality-fail-grill"));
+        confirmIntake(wf);
+
+        awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G1 && s.version() == 2);
+        long qualityDeadline = System.currentTimeMillis() + 5000;
+        while (boardSideEffects.qualityReportsSaved.size() < 2 && System.currentTimeMillis() < qualityDeadline) {
+            Thread.sleep(20);
+        }
+
+        assertThat(agentActivities.reviseGrillHandoffs).hasSize(1);
+        assertThat(agentActivities.reviseGrillHandoffs.get(0)).isNotNull();
+        assertThat(agentActivities.reviseGrillHandoffs.get(0).questions())
+                .anySatisfy(q -> assertThat(q.status()).isEqualTo(ai.pdlc.core.domain.GrillQuestion.Status.ANSWERED));
+    }
+
+    @Test
+    void agreeCompletesIntakeLikeConfirm() throws Exception {
+        FeatureWorkflow wf = start("4412-agree");
+        awaitGrill(wf, g -> g != null && g.openQuestions().stream()
+                .anyMatch(q -> ai.pdlc.core.domain.GrillQuestion.INTAKE_CONFIRMATION_EVIDENCE.equals(q.evidence())));
+        String qid = wf.grill().openQuestions().stream()
+                .filter(q -> ai.pdlc.core.domain.GrillQuestion.INTAKE_CONFIRMATION_EVIDENCE.equals(q.evidence()))
+                .findFirst().orElseThrow().id();
+        wf.commentAdded(new BoardCommentEvent(qid + "-agree", "PO", qid + ": agree"));
+        awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G1);
+    }
+
+    @Test
+    void proceedIsIgnoredBeforeTwoRounds() throws Exception {
+        testEnv = TestWorkflowEnvironment.newInstance();
+        Worker worker = testEnv.newWorker(TaskQueues.REASONING);
+        worker.registerWorkflowImplementationTypes(FeatureWorkflowImpl.class);
+        agentActivities = new FakeAgentActivities();
+        agentActivities.nextRoundFrontiers.add(java.util.List.of(
+                new ai.pdlc.core.domain.GrillQuestion(null, ai.pdlc.core.domain.GrillQuestion.Category.SCOPE,
+                        "Which regions?", "evidence", ai.pdlc.core.domain.GrillQuestion.Status.OPEN, null, null)));
+        agentActivities.nextRoundFrontiers.add(java.util.List.of(
+                new ai.pdlc.core.domain.GrillQuestion(null, ai.pdlc.core.domain.GrillQuestion.Category.USERS,
+                        "Which roles?", "evidence", ai.pdlc.core.domain.GrillQuestion.Status.OPEN, null, null)));
+        worker.registerActivitiesImplementations(agentActivities);
+
+        Worker boardWorker = testEnv.newWorker(TaskQueues.BOARD);
+        boardSideEffects = new FakeBoardSideEffects();
+        boardWorker.registerActivitiesImplementations(boardSideEffects);
+        testEnv.start();
+
+        WorkflowClient client = testEnv.getWorkflowClient();
+        WorkflowOptions options = WorkflowOptions.newBuilder()
+                .setTaskQueue(TaskQueues.REASONING)
+                .setWorkflowId("feature-local-4412-proceed-before-two")
+                .build();
+        FeatureWorkflow wf = client.newWorkflowStub(FeatureWorkflow.class, options);
+        WorkflowClient.start(wf::run, new WorkItemRef("local", "4412-proceed-before-two"));
+
+        awaitGrill(wf, g -> g != null && g.openQuestions().stream().anyMatch(q -> q.id().equals("q1")));
+        wf.proceedToStory("po@acme");
+        Thread.sleep(300);
+        assertThat(wf.grill().openQuestions()).extracting(ai.pdlc.core.domain.GrillQuestion::id).contains("q1");
+        assertThat(wf.state().stage()).isEqualTo(CanonicalState.NEEDS_CLARIFICATION);
+
+        wf.commentAdded(new BoardCommentEvent("c-q1", "PO", "q1: EU and US"));
+        awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G1);
+        assertThat(wf.grill().questions()).filteredOn(q -> q.id().equals("q2"))
+                .extracting(ai.pdlc.core.domain.GrillQuestion::status)
+                .containsExactly(ai.pdlc.core.domain.GrillQuestion.Status.PARKED);
+        assertThat(wf.grill().parked()).contains("q2");
+        assertThat(wf.grillRounds()).isEqualTo(2);
+    }
+
+    @Test
+    void proceedAfterTwoRoundsParksOpenQuestionsAndDrafts() throws Exception {
+        testEnv = TestWorkflowEnvironment.newInstance();
+        Worker worker = testEnv.newWorker(TaskQueues.REASONING);
+        worker.registerWorkflowImplementationTypes(FeatureWorkflowImpl.class);
+        agentActivities = new FakeAgentActivities();
+        agentActivities.nextRoundFrontiers.add(java.util.List.of(
+                new ai.pdlc.core.domain.GrillQuestion(null, ai.pdlc.core.domain.GrillQuestion.Category.SCOPE,
+                        "Which regions?", "evidence", ai.pdlc.core.domain.GrillQuestion.Status.OPEN, null, null)));
+        agentActivities.nextRoundFrontiers.add(java.util.List.of(
+                new ai.pdlc.core.domain.GrillQuestion(null, ai.pdlc.core.domain.GrillQuestion.Category.USERS,
+                        "Which roles?", "evidence", ai.pdlc.core.domain.GrillQuestion.Status.OPEN, null, null)));
+        worker.registerActivitiesImplementations(agentActivities);
+
+        Worker boardWorker = testEnv.newWorker(TaskQueues.BOARD);
+        boardSideEffects = new FakeBoardSideEffects();
+        boardWorker.registerActivitiesImplementations(boardSideEffects);
+        testEnv.start();
+
+        WorkflowClient client = testEnv.getWorkflowClient();
+        WorkflowOptions options = WorkflowOptions.newBuilder()
+                .setTaskQueue(TaskQueues.REASONING)
+                .setWorkflowId("feature-local-4412-proceed-two-rounds")
+                .build();
+        FeatureWorkflow wf = client.newWorkflowStub(FeatureWorkflow.class, options);
+        WorkflowClient.start(wf::run, new WorkItemRef("local", "4412-proceed-two-rounds"));
+
+        awaitGrill(wf, g -> g != null && g.openQuestions().stream().anyMatch(q -> q.id().equals("q1")));
+        wf.commentAdded(new BoardCommentEvent("c-q1", "PO", "q1: EU and US"));
+        awaitGrill(wf, g -> g != null && g.openQuestions().stream().anyMatch(q -> q.id().equals("q2")));
+
+        wf.proceedToStory("po@acme");
+        awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G1);
+
+        assertThat(wf.grill().questions()).filteredOn(q -> q.id().equals("q2"))
+                .extracting(ai.pdlc.core.domain.GrillQuestion::status)
+                .containsExactly(ai.pdlc.core.domain.GrillQuestion.Status.PARKED);
+        assertThat(wf.grill().parked()).contains("q2");
+        assertThat(agentActivities.poDraftCalls).hasSize(1);
+        assertThat(agentActivities.nextRoundCalls).hasSize(2);
+    }
+
+    /** Regression for the "answered question stays Open until the next round posts" bug: once the
+     * last open question of an adaptive round is folded, {@code grill()} must show it
+     * ANSWERED immediately - not wait for the next {@code grillNextRound} call (which may be slow
+     * or retrying) to publish the fold. Holds {@code grillNextRound}'s second call (the one made
+     * with a non-null, fully-resolved {@code previous}) open via {@link FakeAgentActivities#nextRoundRelease}
+     * so the test can observe {@code grill()} in the gap between the fold and the next round. */
+    @Test
+    void answeredQuestionIsVisibleBeforeNextRoundPosts() throws Exception {
+        testEnv = TestWorkflowEnvironment.newInstance();
+        Worker worker = testEnv.newWorker(TaskQueues.REASONING);
+        worker.registerWorkflowImplementationTypes(FeatureWorkflowImpl.class);
+        agentActivities = new FakeAgentActivities();
+        agentActivities.nextRoundFrontiers.add(java.util.List.of(
+                new ai.pdlc.core.domain.GrillQuestion(null, ai.pdlc.core.domain.GrillQuestion.Category.SCOPE,
+                        "Which regions?", "evidence", ai.pdlc.core.domain.GrillQuestion.Status.OPEN, null, null)));
+        agentActivities.nextRoundRelease = new CountDownLatch(1);
+        worker.registerActivitiesImplementations(agentActivities);
+
+        Worker boardWorker = testEnv.newWorker(TaskQueues.BOARD);
+        boardSideEffects = new FakeBoardSideEffects();
+        boardWorker.registerActivitiesImplementations(boardSideEffects);
+        testEnv.start();
+
+        WorkflowClient client = testEnv.getWorkflowClient();
+        WorkflowOptions options = WorkflowOptions.newBuilder()
+                .setTaskQueue(TaskQueues.REASONING)
+                .setWorkflowId("feature-local-4412-fold-visible")
+                .build();
+        FeatureWorkflow wf = client.newWorkflowStub(FeatureWorkflow.class, options);
+        WorkflowClient.start(wf::run, new WorkItemRef("local", "4412-fold-visible"));
+
+        awaitGrill(wf, g -> g != null && g.openQuestions().stream().anyMatch(q -> q.id().equals("q1")));
+        wf.commentAdded(new BoardCommentEvent("c-q1", "PO", "q1: EU and US"));
+        try {
+            awaitGrill(wf, g -> g != null && g.questions().stream().anyMatch(q -> q.id().equals("q1")
+                    && q.status() == ai.pdlc.core.domain.GrillQuestion.Status.ANSWERED
+                    && "q1: EU and US".equals(q.answer())));
+            assertThat(wf.grill().allQuestionsResolved()).isTrue();
+            assertThat(wf.state().stage()).isEqualTo(CanonicalState.NEEDS_CLARIFICATION);
+            assertThat(agentActivities.nextRoundCalls).hasSize(2);
+        } finally {
+            agentActivities.nextRoundRelease.countDown();
+        }
+
+        confirmIntake(wf);
+        awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G1);
+    }
+
+
 }

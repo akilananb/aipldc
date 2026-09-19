@@ -6,6 +6,8 @@ import ai.pdlc.controlplane.persistence.ArtifactEntity;
 import ai.pdlc.controlplane.persistence.ArtifactRepository;
 import ai.pdlc.controlplane.persistence.CommentEntity;
 import ai.pdlc.controlplane.persistence.CommentRepository;
+import ai.pdlc.controlplane.persistence.ScenarioReviewEntity;
+import ai.pdlc.controlplane.persistence.ScenarioReviewRepository;
 import ai.pdlc.controlplane.persistence.WorkItemEntity;
 import ai.pdlc.controlplane.persistence.WorkItemRepository;
 import ai.pdlc.controlplane.review.AgentMentions;
@@ -15,6 +17,8 @@ import ai.pdlc.controlplane.temporal.WorkflowStubs;
 import ai.pdlc.controlplane.web.dto.ArtifactVersionDto;
 import ai.pdlc.controlplane.web.dto.CommentDto;
 import ai.pdlc.controlplane.web.dto.CommentRequest;
+import ai.pdlc.controlplane.web.dto.ScenarioReviewDto;
+import ai.pdlc.controlplane.web.dto.ScenarioReviewRequest;
 import ai.pdlc.core.config.PdlcConfig;
 import ai.pdlc.core.domain.Anchor;
 import ai.pdlc.core.domain.AgentMentionRequest;
@@ -34,6 +38,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -60,6 +65,7 @@ public class ArtifactsController {
     private final WorkItemRepository workItems;
     private final ArtifactRepository artifacts;
     private final CommentRepository comments;
+    private final ScenarioReviewRepository scenarioReviews;
     private final RepoPort repo;
     private final CommentReanchorer reanchorer;
     private final ReviewTrailService reviewTrail;
@@ -70,13 +76,14 @@ public class ArtifactsController {
     private final ai.pdlc.controlplane.demo.DemoSnapshotService demoSnapshots;
 
     public ArtifactsController(WorkItemRepository workItems, ArtifactRepository artifacts, CommentRepository comments,
-                                RepoPort repo, CommentReanchorer reanchorer, ReviewTrailService reviewTrail,
-                                WorkflowStubs workflowStubs, IdentityResolver identityResolver,
+                                ScenarioReviewRepository scenarioReviews, RepoPort repo, CommentReanchorer reanchorer,
+                                ReviewTrailService reviewTrail, WorkflowStubs workflowStubs, IdentityResolver identityResolver,
                                 WorkflowClient workflowClient, PdlcConfig pdlcConfig,
                                 ai.pdlc.controlplane.demo.DemoSnapshotService demoSnapshots) {
         this.workItems = workItems;
         this.artifacts = artifacts;
         this.comments = comments;
+        this.scenarioReviews = scenarioReviews;
         this.repo = repo;
         this.reanchorer = reanchorer;
         this.reviewTrail = reviewTrail;
@@ -99,13 +106,17 @@ public class ArtifactsController {
         List<CommentDto> commentDtos = comments.findByArtifactIdOrderByCreatedAt(artifact.id()).stream()
                 .map(c -> {
                     CommentReanchorer.Anchored anchored = reanchorer.reanchor(c, lines);
-                    return new CommentDto(c.id(), c.authorSub(), c.role(), targetOf(c, anchored.anchor()), c.text(), c.intent(),
+                    return new CommentDto(c.id(), c.authorSub(), c.role(), targetOf(anchored.anchor()), c.text(), c.intent(),
                             c.blocking(), c.version(), c.resolvedInVersion(), c.agentReply(), anchored.anchor(), anchored.drifted(),
                             c.agentName(), c.agentResultMd(), c.agentResultStatus(), c.agentResultApprovedBy());
                 })
                 .toList();
 
-        return new ArtifactVersionDto(v, artifact.contentHash(), storyMarkdown, commentDtos);
+        List<ScenarioReviewDto> scenarioReviewDtos = scenarioReviews.findByArtifactIdOrderByAt(artifact.id()).stream()
+                .map(r -> new ScenarioReviewDto(r.scenario(), r.status(), r.reviewerSub(), r.role(), r.at()))
+                .toList();
+
+        return new ArtifactVersionDto(v, artifact.contentHash(), storyMarkdown, commentDtos, scenarioReviewDtos);
     }
 
     @PostMapping("/{id}/comments")
@@ -178,12 +189,50 @@ public class ArtifactsController {
         WorkItemRef storyRef = new WorkItemRef(story.profile(), story.boardId());
         Anchor anchor = reanchorer.parseAnchor(comment.anchorJson());
         reviewTrail.appendReviewMd(storyRef, story.specChangePath(),
-                ReviewMdWriter.agentResultBlock(comment.agentName(), targetOf(comment, anchor), OffsetDateTime.now(),
+                ReviewMdWriter.agentResultBlock(comment.agentName(), targetOf(anchor), OffsetDateTime.now(),
                         identity.user(), comment.agentResultMd()));
         reviewTrail.appendReviewEvent(story.id(), "agent-result-approved",
                 Map.of("commentId", commentId.toString(), "agent", comment.agentName(), "approvedBy", identity.user()));
 
         return ResponseEntity.noContent().build();
+    }
+
+    @PutMapping("/{id}/versions/{v}/scenarios/{scenario}/review")
+    public ScenarioReviewDto reviewScenario(@PathVariable UUID id, @PathVariable int v, @PathVariable String scenario,
+                                             @RequestBody ScenarioReviewRequest request, HttpServletRequest httpRequest) {
+        demoSnapshots.requireWritable(id);
+        Identity identity = identityResolver.resolve(httpRequest);
+        WorkItemEntity story = requireItem(id);
+        var gate1 = pdlcConfig.profile(story.profile()).gate("G1");
+        if (!gate1.roles().contains(identity.role())) {
+            throw new ForbiddenException("Role " + identity.role() + " is not a gate 1 checker");
+        }
+
+        String status = request.status();
+        if (!ScenarioReviewEntity.MEETS.equals(status) && !ScenarioReviewEntity.NOT_REVIEWED.equals(status)) {
+            throw new IllegalArgumentException("status must be meets or not-reviewed");
+        }
+
+        ArtifactEntity artifact = artifacts.findByWorkItemIdAndVersion(id, v)
+                .orElseThrow(() -> new NotFoundException("No version " + v + " for item " + id));
+        String storyMarkdown = repo.readFile(artifact.gitRef(), story.specChangePath() + "/proposal.md");
+        boolean scenarioExists = storyMarkdown.lines().anyMatch(line -> line.trim().equals("Scenario: " + scenario));
+        if (!scenarioExists) {
+            throw new NotFoundException("No scenario " + scenario + " in v" + v);
+        }
+
+        ScenarioReviewEntity saved = scenarioReviews.findByArtifactIdAndScenario(artifact.id(), scenario)
+                .map(e -> e.withStatus(status, identity.user(), identity.role()))
+                .orElseGet(() -> ScenarioReviewEntity.newRow(artifact.id(), v, scenario, status, identity.user(), identity.role()));
+        saved = scenarioReviews.save(saved);
+
+        WorkItemRef storyRef = new WorkItemRef(story.profile(), story.boardId());
+        reviewTrail.appendReviewMd(storyRef, story.specChangePath(),
+                ReviewMdWriter.scenarioReviewBlock(scenario, v, status, OffsetDateTime.now(), identity.user()));
+        reviewTrail.appendReviewEvent(story.id(), "scenario-reviewed",
+                Map.of("scenario", scenario, "version", v, "status", status, "by", identity.user()));
+
+        return new ScenarioReviewDto(saved.scenario(), saved.status(), saved.reviewerSub(), saved.role(), saved.at());
     }
 
     private void startMentionWorkflow(WorkItemEntity story, CommentEntity saved, String agentName, CommentRequest request) {
@@ -205,14 +254,24 @@ public class ArtifactsController {
         return workItems.findById(id).orElseThrow(() -> new NotFoundException("No work item " + id));
     }
 
-    private static String targetOf(CommentEntity c, Anchor anchor) {
+    /** Formats a comment's display/regrouping target from its resolved anchor. A line/paragraph
+     * anchor always carries its enclosing {@code scenario} too (drift-detection context for
+     * {@link CommentReanchorer#reanchor} - matching by scenario before falling back to the same
+     * line number), so the anchor's {@code nodeType} - not {@code scenario != null} - is what
+     * distinguishes a genuine scenario/heading-level anchor from a line-anchored comment that
+     * merely sits inside a scenario. Getting this wrong silently drops the line number from every
+     * in-scenario line comment's displayed/grouped target. */
+    static String targetOf(Anchor anchor) {
         if (anchor == null) {
             return "line:0";
         }
         if (anchor.endLine() != null) {
             return "line:" + anchor.line() + "-" + anchor.endLine();
         }
-        return anchor.scenario() != null ? "scenario:" + anchor.scenario() : "line:" + anchor.line();
+        if ("heading".equals(anchor.nodeType()) && anchor.scenario() != null) {
+            return "scenario:" + anchor.scenario();
+        }
+        return "line:" + anchor.line();
     }
 
     private Anchor resolveAnchor(String target, String markdown) {

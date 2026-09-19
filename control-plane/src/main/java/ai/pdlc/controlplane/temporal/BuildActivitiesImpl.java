@@ -1,6 +1,8 @@
 package ai.pdlc.controlplane.temporal;
 
 import ai.pdlc.core.config.Profile;
+import ai.pdlc.core.domain.PlanResult;
+import ai.pdlc.core.domain.PoHandoff;
 import ai.pdlc.core.domain.Task;
 import ai.pdlc.core.domain.WorkItemRef;
 import ai.pdlc.core.workflow.BuildActivities;
@@ -32,6 +34,14 @@ public class BuildActivitiesImpl implements BuildActivities {
     public BuildResult runTask(WorkItemRef story, Task task, String branch, String baseBranch, java.util.List<String> feedback) {
         ActivityExecutionContext ctx = Activity.getExecutionContext();
         service.enqueue(story, task, branch, baseBranch, feedback, activeProfile.repo(), ctx.getInfo().getAttempt(), ctx.getTaskToken());
+        ctx.doNotCompleteOnReturn();
+        return null; // ignored: completed asynchronously via ActivityCompletionClient
+    }
+
+    @Override
+    public PlanResult planTasks(WorkItemRef story, PoHandoff po) {
+        ActivityExecutionContext ctx = Activity.getExecutionContext();
+        service.enqueuePlan(story, po, activeProfile.repo(), ctx.getInfo().getAttempt(), ctx.getTaskToken());
         ctx.doNotCompleteOnReturn();
         return null; // ignored: completed asynchronously via ActivityCompletionClient
     }

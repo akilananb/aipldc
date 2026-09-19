@@ -9,9 +9,8 @@ import java.util.List;
 
 /**
  * Shared fixtures for the deterministic agent tests and (kept in sync with) the stub-llm mappings.
- * The {@code story()} layout is load-bearing: line 13 is the rate-limit {@code GIVEN} line that the
- * e2e demo's {@code line:13} blocking comment targets and the {@code [agent:po-revise]} revision
- * changes to "20 for admin".
+ * The {@code story()} layout is kept in sync with the stub-llm {@code po-draft.json} mapping; the
+ * e2e demo anchors its blocking comment by scenario name, not line number.
  */
 public final class DemoFixtures {
 
@@ -23,31 +22,43 @@ public final class DemoFixtures {
                 # Export the filtered orders view to CSV
                 Feature: #4412 · Change: openspec/changes/export-orders-csv · Area: orders
 
-                As a sales admin
-                I want to export the current filtered orders view to CSV
-                So that I can share order data with external stakeholders
-                ## Acceptance criteria
-                Scenario: export-current-view
-                  GIVEN the sales admin has filtered the orders grid to 500 rows
-                  WHEN  the user clicks Export CSV
-                  THEN  a CSV file downloads with exactly 500 rows
-                Scenario: rate-limit
-                  GIVEN 10 exports in the last hour
-                  WHEN  the user requests an 11th export
-                  THEN  the request returns HTTP 429 with Retry-After
-                Scenario: audit
-                  GIVEN the sales admin exports the filtered view
-                  WHEN  the export completes
-                  THEN  an audit row is written with user, filter hash, and row count
+                ## Goals
+                - Let sales admins share filtered order data without screenshots
 
-                ## NFR
+                ### Context
+                - Sales admins currently copy order data by hand
+
+                ## Story
+                As a sales admin,
+                I want to export exactly the filtered orders view to CSV,
+                So that I can share order data with external stakeholders.
+
+                ## Requirements
+                ### Functional requirements
+                - Export the current filtered orders view to CSV
+
+                ### Non-Functional requirements
                 - performance: 10k rows < 5 s (p95); progress indicator after 2 s
                 - security: sales, admin roles only; every export audited (user, filter hash, row count)
                 - limits: 10 exports / user / hour → 429 with Retry-After
 
-                ## Out of scope
+                ### Out of Scope
                 - scheduled exports (parked q7)
                 - XLSX format
+
+                ## Acceptance Criteria
+                Scenario: export-current-view
+                  Given the sales admin has filtered the orders grid to 500 rows
+                  When  the user clicks Export CSV
+                  Then  a CSV file downloads with exactly 500 rows
+                Scenario: rate-limit
+                  Given 10 exports in the last hour
+                  When  the user requests an 11th export
+                  Then  the request returns HTTP 429 with Retry-After
+                Scenario: audit
+                  Given the sales admin exports the filtered view
+                  When  the export completes
+                  Then  an audit row is written with user, filter hash, and row count
 
                 ## Dependencies
                 - streaming endpoint in orders-service (same story, task T1)
@@ -63,31 +74,43 @@ public final class DemoFixtures {
                 # Export the filtered orders view to CSV
                 Feature: #4412 · Change: openspec/changes/export-orders-csv · Area: orders
 
-                As a sales admin
-                I want to export the current filtered orders view to CSV
-                So that I can share order data with external stakeholders
-                ## Acceptance criteria
-                Scenario: export-current-view
-                  GIVEN the sales admin has filtered the orders grid to 500 rows
-                  WHEN  the user clicks Export CSV
-                  THEN  a CSV file downloads with exactly 500 rows
-                Scenario: rate-limit
-                  GIVEN 20 for admin exports in the last hour
-                  WHEN  the user requests an 11th export
-                  THEN  the request returns HTTP 429 with Retry-After
-                Scenario: audit
-                  GIVEN the sales admin exports the filtered view
-                  WHEN  the export completes
-                  THEN  an audit row is written with user, filter hash, and row count
+                ## Goals
+                - Let sales admins share filtered order data without screenshots
 
-                ## NFR
+                ### Context
+                - Sales admins currently copy order data by hand
+
+                ## Story
+                As a sales admin,
+                I want to export exactly the filtered orders view to CSV,
+                So that I can share order data with external stakeholders.
+
+                ## Requirements
+                ### Functional requirements
+                - Export the current filtered orders view to CSV
+
+                ### Non-Functional requirements
                 - performance: 10k rows < 5 s (p95); progress indicator after 2 s
                 - security: sales, admin roles only; every export audited (user, filter hash, row count)
                 - limits: 20 for admin / user / hour → 429 with Retry-After
 
-                ## Out of scope
+                ### Out of Scope
                 - scheduled exports (parked q7)
                 - XLSX format
+
+                ## Acceptance Criteria
+                Scenario: export-current-view
+                  Given the sales admin has filtered the orders grid to 500 rows
+                  When  the user clicks Export CSV
+                  Then  a CSV file downloads with exactly 500 rows
+                Scenario: rate-limit
+                  Given 20 for admin exports in the last hour
+                  When  the user requests an 11th export
+                  Then  the request returns HTTP 429 with Retry-After
+                Scenario: audit
+                  Given the sales admin exports the filtered view
+                  When  the export completes
+                  Then  an audit row is written with user, filter hash, and row count
 
                 ## Dependencies
                 - streaming endpoint in orders-service (same story, task T1)

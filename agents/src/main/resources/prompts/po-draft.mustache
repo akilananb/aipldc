@@ -2,20 +2,48 @@
 Write the story for feature: {{{title}}}
 Feature description: {{{description}}}
 When your reply is a story (not a "===QUESTIONS===" follow-up below), its first line must be a single "# <short descriptive title for this story>" heading (a concise title for this specific story, not necessarily the literal feature title), followed by a blank line, before any other content.
-Use this EXACT format for acceptance criteria (required for machine parsing - do not use bullets or bold text for the Given/When/Then lines):
+Use this EXACT section layout and heading text (required for machine parsing - keep every heading exactly as written, fill every section, write "- none" for an empty list section, and do not use bullets or bold text for the Scenario/Given/When/And/Then lines):
 
-## Acceptance criteria
+## Goals
+- <high-level goal or objective>
+
+### Context
+- <why this problem is relevant and needs to be addressed now>
+
+## Story
+As a <role or actor>,
+I want <capability or action>,
+So that <desired outcome or goal achieved>.
+
+## Requirements
+### Functional requirements
+- <what the system must do>
+
+### Non-Functional requirements
+- <category>: <measurable constraint, e.g. performance: 10k rows < 5 s (p95)>
+
+### Out of Scope
+- <item specifically excluded from this story>
+
+## Acceptance Criteria
 Scenario: <short-kebab-or-words-scenario-name>
-  GIVEN <precondition>
-  WHEN <action>
-  THEN <observable result>
+  Given <precondition>
+  When <action>
+  And <further action, optional>
+  Then <observable result>
 
 Scenario: <another-scenario-name>
-  GIVEN <precondition>
-  WHEN <action>
-  THEN <observable result>
+  Given <precondition>
+  When <action>
+  Then <observable result>
 
-One scenario per acceptance-criteria bullet in the request; every "Scenario:" line and every GIVEN/WHEN/THEN line must start at the beginning of the line (only leading whitespace before the keyword).
+## Dependencies
+- <task inside this story or an already-merged change, or "none">
+
+## Open decisions for approvers
+- <decision the approvers must make before approving, or "none">
+
+One scenario per acceptance-criteria bullet in the request; every "Scenario:" line and every Given/When/And/Then line must start at the beginning of the line (only leading whitespace before the keyword); exactly one Then per scenario (add And lines, never a second Then).
 If the feature involves MULTIPLE distinct actors/user types (e.g. admin vs customer) or clearly separable factors, write one complete story PER actor/factor, each following the full format above, separated by a line containing exactly:
 ===STORY===
 Write a single story (no separator) when one actor covers the whole feature.

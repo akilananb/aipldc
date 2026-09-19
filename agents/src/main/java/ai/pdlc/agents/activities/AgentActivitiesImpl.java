@@ -3,7 +3,6 @@ package ai.pdlc.agents.activities;
 import ai.pdlc.agents.grill.GrillAgent;
 import ai.pdlc.agents.mention.MentionAgent;
 import ai.pdlc.agents.monitor.MonitorAgent;
-import ai.pdlc.agents.plan.PlanAgent;
 import ai.pdlc.agents.po.PoAgent;
 import ai.pdlc.agents.quality.QualityAgent;
 import ai.pdlc.agents.release.ReleaseAgent;
@@ -12,9 +11,9 @@ import ai.pdlc.agents.tracing.AgentRunTracer;
 import ai.pdlc.core.domain.AgentMentionRequest;
 import ai.pdlc.core.domain.Comment;
 import ai.pdlc.core.domain.GrillHandoff;
+import ai.pdlc.core.domain.GrillRound;
 import ai.pdlc.core.domain.MonitorHandoff;
 import ai.pdlc.core.domain.MonitorRule;
-import ai.pdlc.core.domain.PlanHandoff;
 import ai.pdlc.core.domain.PoHandoff;
 import ai.pdlc.core.domain.QualityReport;
 import ai.pdlc.core.domain.ReleaseHandoff;
@@ -46,7 +45,6 @@ public class AgentActivitiesImpl implements AgentActivities {
 
     private final GrillAgent grillAgent;
     private final PoAgent poAgent;
-    private final PlanAgent planAgent;
     private final ReviewAgent reviewAgent;
     private final ReleaseAgent releaseAgent;
     private final MonitorAgent monitorAgent;
@@ -56,13 +54,12 @@ public class AgentActivitiesImpl implements AgentActivities {
     private final RunRecorder runs;
     private final AgentRunTracer tracer;
 
-    public AgentActivitiesImpl(GrillAgent grillAgent, PoAgent poAgent, PlanAgent planAgent,
+    public AgentActivitiesImpl(GrillAgent grillAgent, PoAgent poAgent,
                                 ReviewAgent reviewAgent, ReleaseAgent releaseAgent, MonitorAgent monitorAgent,
                                 MentionAgent mentionAgent, QualityAgent qualityAgent, MetricsPort metrics, RunRecorder runs,
                                 AgentRunTracer tracer) {
         this.grillAgent = grillAgent;
         this.poAgent = poAgent;
-        this.planAgent = planAgent;
         this.reviewAgent = reviewAgent;
         this.releaseAgent = releaseAgent;
         this.monitorAgent = monitorAgent;
@@ -80,23 +77,23 @@ public class AgentActivitiesImpl implements AgentActivities {
     }
 
     @Override
+    public GrillRound grillNextRound(WorkItemRef item, GrillHandoff previous) {
+        return traced("grill", "round", item, () -> grillAgent.nextRound(item, previous));
+    }
+
+    @Override
     public PoDraftResult poDraft(WorkItemRef item, GrillHandoff grill, boolean allowFollowUps) {
         return traced("po", "draft", item, () -> poAgent.draft(item, grill, allowFollowUps));
     }
 
     @Override
-    public StoryDraft poRevise(WorkItemRef item, PoHandoff previous, List<Comment> openComments) {
-        return traced("po", "revise", item, () -> poAgent.revise(item, previous, openComments));
+    public StoryDraft poRevise(WorkItemRef item, PoHandoff previous, List<Comment> openComments, GrillHandoff grill) {
+        return traced("po", "revise", item, () -> poAgent.revise(item, previous, openComments, grill));
     }
 
     @Override
     public QualityReport evaluateQuality(WorkItemRef item, String subjectKind, String contentMd) {
         return traced("quality", subjectKind, item, () -> qualityAgent.evaluate(subjectKind, contentMd));
-    }
-
-    @Override
-    public PlanHandoff planTasks(WorkItemRef story, PoHandoff po) {
-        return traced("plan", "plan", story, () -> planAgent.plan(story, po));
     }
 
     @Override

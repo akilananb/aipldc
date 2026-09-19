@@ -18,7 +18,7 @@ class ReviewAgentTest {
     private static final Task.TaskBudget BUDGET = new Task.TaskBudget(6, 100_000L, Duration.ofMinutes(10));
 
     private static Task task(String id, String scenario) {
-        return new Task(id, "Implement " + scenario, "orders", scenario, List.of("src/export.js"),
+        return new Task(id, "Implement " + scenario, "brief", "orders", scenario, List.of("src/export.js"),
                 "test/export.test.js", BUDGET, List.of());
     }
 

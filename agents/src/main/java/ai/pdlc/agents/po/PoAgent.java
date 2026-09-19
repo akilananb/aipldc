@@ -61,6 +61,7 @@ public class PoAgent {
     private final BoardPort board;
     private final RepoPort repo;
     private final PromptTemplates templates;
+    private final Profile activeProfile;
     private final String poModel;
 
     public PoAgent(Ai ai, BoardPort board, RepoPort repo, PromptTemplates templates, Profile activeProfile) {
@@ -68,6 +69,7 @@ public class PoAgent {
         this.board = board;
         this.repo = repo;
         this.templates = templates;
+        this.activeProfile = activeProfile;
         var role = activeProfile.agents().roles().get("po");
         this.poModel = role != null ? role.model() : null;
     }
@@ -123,36 +125,61 @@ public class PoAgent {
         return new PoDraftResult(drafts, List.of());
     }
 
-    public StoryDraft revise(WorkItemRef item, PoHandoff previous, List<Comment> comments) {
+    public StoryDraft revise(WorkItemRef item, PoHandoff previous, List<Comment> comments, GrillHandoff grill) {
         List<Map<String, Object>> commentViews = new ArrayList<>();
         for (Comment c : comments) {
-            commentViews.add(Map.of("target", c.target(), "text", c.text()));
+            commentViews.add(Map.of("target", c.target(), "text", c.text(), "intent", c.intent().wireValue()));
         }
 
-        // Best-effort: read the previous story so the LLM has the exact text (unavailable in the
-        // local in-memory profile where the repo is a separate JVM from control-plane's).
-        String previousStory = AgentContext.readFile(repo, "main", (previous.change() == null ? "" : previous.change()) + "/proposal.md");
+        // Baseline: the current published proposal on the configured repo branch (every revision
+        // reads the newest one, so earlier accepted edits are retained - not the hardcoded "main"
+        // the local profile never writes to). Falls back to the board story description (both
+        // publishStory/publishRevision mirror the full story Markdown there) when the repo read is
+        // unavailable; never generates from comments alone.
+        WorkItem storyItem = null;
+        String previousStory = null;
+        if (previous.change() != null && !previous.change().isBlank()) {
+            previousStory = AgentContext.readFile(repo, activeProfile.repo().defaultBranch(), previous.change() + "/proposal.md");
+        }
+        if (previousStory == null || previousStory.isBlank()) {
+            storyItem = AgentContext.readWorkItem(board, item);
+            String description = storyItem == null ? null : storyItem.description();
+            previousStory = description != null && !description.isBlank() ? description : null;
+        }
+        if (previousStory == null) {
+            throw new IllegalStateException("Cannot revise story " + item.boardId() + ": previous story content is unavailable");
+        }
 
         Map<String, Object> view = new HashMap<>();
         view.put("comments", commentViews);
-        if (previousStory != null) {
-            view.put("previousStory", Map.of("story", previousStory));
-        }
-        String prompt = templates.render("po-revise", view);
+        view.put("previousStory", Map.of("story", previousStory));
 
+        // Best-effort supplemental context: the original feature and the resolved intake grill -
+        // supporting context for the model, never a substitute for the current-story baseline above.
+        if (previous.parent() != null && !previous.parent().isBlank()) {
+            WorkItem feature = AgentContext.readWorkItem(board, new WorkItemRef(item.profile(), previous.parent()));
+            if (feature != null) {
+                view.put("feature", Map.of("title", safe(feature.title()), "description", safe(feature.description())));
+            }
+        }
+        if (grill != null) {
+            view.put("grill", grillView(grill));
+        }
+
+        String prompt = templates.render("po-revise", view);
         String revised = promptRunner().generateText(prompt);
         String areaPath = previous.areas().isEmpty() ? null : previous.areas().get(0);
-        // Title fallback: prefer the real title parsed from previousStory when the repo read above
-        // succeeded (most accurate - it's this exact story's actual prior H1); when it didn't
-        // (the common case in the local in-memory profile - see the comment above), the LLM never
-        // saw the previous title and writes from the comments alone, typically emitting no H1 of
-        // its own, so fall back to the story's current board title.
-        String featureTitle = previousStory == null ? null : StoryParser.title(previousStory);
+        // Title fallback: prefer the real title parsed from the baseline (most accurate - it's this
+        // exact story's actual prior H1); the board title (reusing the item already fetched above
+        // when the repo read missed) covers the rare case where the baseline itself has no heading.
+        String featureTitle = StoryParser.title(previousStory);
         if (featureTitle == null) {
-            WorkItem storyItem = AgentContext.readWorkItem(board, item);
+            if (storyItem == null) {
+                storyItem = AgentContext.readWorkItem(board, item);
+            }
             featureTitle = storyItem == null ? null : storyItem.title();
         }
-        return assemble(revised, item, previous.change(), previous.parent(), null, areaPath, featureTitle);
+        return assemble(revised, item, previous.change(), previous.parent(), grill, areaPath, featureTitle);
     }
 
     // -- deterministic ---------------------------------------------------------------------------
@@ -213,7 +240,8 @@ public class PoAgent {
         return String.join("\n", lines);
     }
 
-    /** Every parked question becomes an "Out of scope" line, if not already covered (playbook §2 step 2). */
+    /** Every parked question becomes a {@code ### Out of Scope} bullet, inserted into the existing
+     * section when present (playbook §2 step 2). */
     static String appendOutOfScope(String storyMarkdown, GrillHandoff grill) {
         if (grill == null || grill.parked().isEmpty()) {
             return storyMarkdown;
@@ -222,7 +250,7 @@ public class PoAgent {
         for (GrillQuestion q : grill.questions()) {
             byId.put(q.id(), q);
         }
-        String existingOutOfScope = String.join("\n", StoryParser.sectionBullets(storyMarkdown, "Out of scope")).toLowerCase();
+        String existingOutOfScope = String.join("\n", StoryParser.sectionBullets(storyMarkdown, "Out of Scope")).toLowerCase();
         List<String> additions = new ArrayList<>();
         for (String id : grill.parked()) {
             GrillQuestion q = byId.get(id);
@@ -237,10 +265,30 @@ public class PoAgent {
         if (additions.isEmpty()) {
             return storyMarkdown;
         }
-        StringBuilder sb = new StringBuilder(stripTrailingNewlines(storyMarkdown));
-        if (!storyMarkdown.contains("## Out of scope")) {
-            sb.append("\n\n## Out of scope\n");
+        List<String> lines = new ArrayList<>(StoryParser.lines(storyMarkdown));
+        int h = -1;
+        for (int i = 0; i < lines.size(); i++) {
+            if (lines.get(i).trim().equalsIgnoreCase("### Out of Scope")) {
+                h = i;
+                break;
+            }
         }
+        if (h >= 0) {
+            int insertAt = lines.size();
+            for (int i = h + 1; i < lines.size(); i++) {
+                if (lines.get(i).matches("^#{2,3}\\s+.*")) {
+                    insertAt = i;
+                    break;
+                }
+            }
+            while (insertAt > h + 1 && lines.get(insertAt - 1).isBlank()) {
+                insertAt--;
+            }
+            lines.addAll(insertAt, additions);
+            return String.join("\n", lines) + "\n";
+        }
+        StringBuilder sb = new StringBuilder(stripTrailingNewlines(storyMarkdown));
+        sb.append("\n\n### Out of Scope\n");
         for (String addition : additions) {
             sb.append('\n').append(addition);
         }
@@ -271,7 +319,7 @@ public class PoAgent {
 
     static Map<String, Object> extractNfr(String storyMarkdown) {
         Map<String, Object> out = new LinkedHashMap<>();
-        for (String line : StoryParser.sectionBullets(storyMarkdown, "NFR")) {
+        for (String line : StoryParser.sectionBullets(storyMarkdown, "Non-Functional requirements")) {
             Matcher m = NFR_BULLET.matcher(line);
             if (m.matches()) {
                 out.put(m.group(1).trim(), m.group(2).trim());

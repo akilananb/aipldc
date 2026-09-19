@@ -17,6 +17,10 @@ public record GrillQuestion(
 
     public static final String ASSUMPTION_CHECK = "assumption-check";
 
+    /** Evidence marker reserved for the adaptive-intake final confirmation question
+     * (ADAPTIVE_GRILL_PLAN.md step 4.4) — a model-generated question may never use it. */
+    public static final String INTAKE_CONFIRMATION_EVIDENCE = "grill:confirmation";
+
     /** Id prefix for follow-up questions the PO agent asks — e.g. {@code po1}, {@code po2}. */
     public static final String PO_ID_PREFIX = "po";
 
@@ -38,6 +42,30 @@ public record GrillQuestion(
         public String wireValue() {
             return name().toLowerCase();
         }
+    }
+
+    private static final java.util.regex.Pattern GRILL_ID = java.util.regex.Pattern.compile("(?i)^q(\\d+)$");
+
+    /** Next application-owned {@code qN} id: one more than the highest existing exact {@code q<digits>}
+     * suffix across {@code questions} (PO/human-input ids ignored), starting at {@code q1}. IDs are
+     * never reused, even across parked/answered history, so every question in a handoff keeps a
+     * stable identity across adaptive rounds. */
+    public static String nextGrillId(java.util.List<GrillQuestion> questions) {
+        long max = 0;
+        for (GrillQuestion q : questions) {
+            java.util.regex.Matcher m = GRILL_ID.matcher(q.id());
+            if (m.matches()) {
+                long n = Long.parseLong(m.group(1));
+                if (n > max) {
+                    max = n;
+                }
+            }
+        }
+        long next = max + 1;
+        if (next > Integer.MAX_VALUE) {
+            throw new ArithmeticException("Grill question id counter overflow at " + max);
+        }
+        return "q" + next;
     }
 
     public GrillQuestion withAnswer(String answer, String answeredBy) {
