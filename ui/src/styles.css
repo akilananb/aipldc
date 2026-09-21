@@ -1088,11 +1088,15 @@ kbd,
   border-color: var(--amber);
 }
 
+/* No overflow: hidden here - .inspector needs position:sticky to work at the page-scroll level,
+ * and any overflow value other than visible on an ancestor breaks sticky containment. This used
+ * to clip content to the card's rounded corners; verified no content (Preview/Source/Diff tabs,
+ * desktop and the <=900px stacked layout) actually bleeds past the border without it - every
+ * tab's content already respects .pane's padding or wraps/scrolls within its own element. */
 .surface {
   border: 1px solid var(--line);
   border-radius: var(--r);
   background: var(--s1);
-  overflow: hidden;
 }
 .tabs {
   display: flex;
@@ -1127,16 +1131,25 @@ kbd,
   display: grid;
   grid-template-columns: minmax(0, 1fr) var(--inspect);
   min-height: 39rem;
+  align-items: start;
 }
 .pane {
   min-width: 0;
   padding: 1.15rem 1.2rem 2rem;
 }
+/* Sticks below the 4rem .topbar so review context/comments stay visible while the (often much
+ * taller) story preview/diff/tasks pane scrolls past. Reset to static in the <=900px stacked
+ * layout below, where .content-grid collapses to one column and the inspector is a full-width
+ * section under the pane instead of a side-by-side column. */
 .inspector {
   border-left: 1px solid var(--soft);
   background: color-mix(in srgb, var(--s2) 54%, transparent);
   padding: 1rem;
   min-width: 0;
+  position: sticky;
+  top: 4rem;
+  max-height: calc(100vh - 4rem);
+  overflow-y: auto;
 }
 .view-head {
   display: flex;
@@ -2029,6 +2042,9 @@ kbd,
   .inspector {
     border-left: 0;
     border-top: 1px solid var(--soft);
+    position: static;
+    max-height: none;
+    overflow-y: visible;
   }
   .quality-summary {
     grid-template-columns: 7rem 1fr;
@@ -2137,6 +2153,14 @@ kbd,
   align-items: stretch;
   margin: 0;
   padding: 0;
+}
+/* A row without a matched keyword (e.g. a PO-drafted role clause the strict As-a/As-an regex
+ * didn't recognize, see ui-utils.ts parseStoryRow) renders .row-text with no .kw-chip sibling -
+ * without this, the 7.5rem/1fr grid above auto-places the lone child into the narrow first
+ * column instead of spanning both. */
+.story-row .row-text:only-child,
+.gwt-row .row-text:only-child {
+  grid-column: 1 / -1;
 }
 .story-preview .story-row.md-block,
 .story-preview .gwt-row.md-block,
