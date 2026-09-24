@@ -13,6 +13,8 @@ public final class ToolSpecValidator {
 
     public static final int MAX_TIMEOUT_SECONDS = 120;
     public static final int MAX_RESPONSE_BYTES = 1_000_000;
+    /** Approval waits are bounded: a pending write can hold a run at most 30 days. */
+    public static final int MAX_APPROVAL_MINUTES = 43_200;
     static final Set<String> METHODS = Set.of("GET", "POST", "PUT", "PATCH", "DELETE");
     static final Pattern PATH_PARAM = Pattern.compile("\\{([A-Za-z_][A-Za-z0-9_]*)}");
     /** Tool names the model sees: OpenAI function-name rules. */
@@ -70,6 +72,22 @@ public final class ToolSpecValidator {
         }
         if (spec.maxResponseBytes() == null || spec.maxResponseBytes() < 256 || spec.maxResponseBytes() > MAX_RESPONSE_BYTES) {
             errors.add("maxResponseBytes must be between 256 and " + MAX_RESPONSE_BYTES);
+        }
+        if (spec.idempotency() != null && !ToolSpec.IDEMPOTENCY_HEADER.equals(spec.idempotency())
+                && !ToolSpec.IDEMPOTENCY_NONE.equals(spec.idempotency())) {
+            errors.add("idempotency must be HEADER or NONE");
+        }
+        if (spec.approval() != null) {
+            ToolSpec.Approval a = spec.approval();
+            if (a.escalateAfter() < 1 || a.escalateAfter() > MAX_APPROVAL_MINUTES
+                    || a.expireAfter() < 1 || a.expireAfter() > MAX_APPROVAL_MINUTES) {
+                errors.add("approval minutes must be between 1 and " + MAX_APPROVAL_MINUTES);
+            } else if (a.escalateAfter() > a.expireAfter()) {
+                errors.add("approval.escalateAfterMinutes must not exceed approval.expireAfterMinutes");
+            }
+            if (ToolSpec.READ.equals(spec.effect())) {
+                errors.add("approval settings apply only to WRITE tools");
+            }
         }
         return errors;
     }
