@@ -1,6 +1,6 @@
 # Phase 2 execution spec: governed execution and federation
 
-This spec turns Phase 2 of [configurable-agent-platform.md](configurable-agent-platform.md) into slices, in the same format as [phase-1-execution-spec.md](phase-1-execution-spec.md). **Slices 2.1 and 2.2 are implemented**; slices 2.3–2.8 are specified and not yet built.
+This spec turns Phase 2 of [configurable-agent-platform.md](configurable-agent-platform.md) into slices, in the same format as [phase-1-execution-spec.md](phase-1-execution-spec.md). **Slices 2.1–2.3 are implemented**; slices 2.4–2.8 are specified and not yet built.
 
 **Phase 2 exit evidence** (from the roadmap):
 
@@ -169,6 +169,44 @@ Every call, allowed or denied, is recorded in `platform_tool_calls`: run, attemp
 - **Review:** preview each tool and approve it individually as a `ToolSpec` of kind `mcp`. A fingerprint of the schema and description is versioned; a changed server capability needs re-review before a new version can run.
 - **Execution** goes through the same `ToolExecutor` checks.
 - **Exit:** an approved MCP tool runs. An unapproved or changed tool is refused.
+
+**As built:**
+
+- **Connections.**
+  - An enterprise Admin creates an `MCP_SERVER` connection, and its URL is checked by `EgressPolicy` when saved. It is granted to workspaces like `HTTP_API`.
+  - Auth is `API_KEY` (a static bearer by `kv://` reference), `NONE`, or `OAUTH_CLIENT_CREDENTIALS`: the client id is stored in `connections.oauth_client_id` (V21), and the client secret is held by `kv://` reference.
+  - A tool's connection must be of its kind (`http` → `HTTP_API`, `mcp` → `MCP_SERVER`).
+- **Own client, not the SDK transport.** `adapters/.../mcp/McpHttpClient` is a minimal Streamable-HTTP JSON-RPC client:
+  - `initialize`, paginated `tools/list`, `tools/call`; JSON or SSE; `Mcp-Session-Id`;
+  - the egress guard on every request, no redirects, a hard deadline (including a stalled body), and byte caps.
+  - `McpOAuth` follows RFC 9728 → RFC 8414 → a `client_credentials` token with an RFC 8707 `resource`. Every URL is guarded, the metadata's `resource` must be the server itself, and the token is cached until expiry.
+  - Browser sign-in (authorization code + PKCE) is a **follow-up**: it needs a platform-writable secret store for refresh tokens.
+- **Discovery.** `POST /api/workspaces/{ws}/connections/{id}/mcp-discovery` (AUTHOR; the connection must be granted) runs `McpDiscoveryWorkflow` on `REASONING`, so the credential is used only in the agents worker. Each server tool gets a state:
+  - `NEW`, `APPROVED`, `CHANGED` or `REMOVED`, compared with the workspace's published `kind: mcp` tools;
+  - or `UNSUPPORTED_SCHEMA`, with the reasons.
+- **Approval is the tool lifecycle.** A `kind: mcp` draft pins `mcpTool`, the server's `inputSchema` and `mcpFingerprint` (`McpFingerprint` = canonical hash of name, description, input schema and annotations); publishing it is the approval. The reviewer picks READ or WRITE; `readOnlyHint` is shown only as a suggestion.
+- **Execution** goes through `ToolExecutor`:
+  - All the 2.1/2.2 checks apply, then the server's current listing (cached per run segment) must contain the tool with the pinned fingerprint and an identical schema. Otherwise the call is **DENIED** without calling the tool.
+  - READ runs `tools/call`.
+  - WRITE uses the 2.2 approval and effect-intent path; a known outcome is replayed before the server is contacted. MCP has no idempotency key, so a possibly-sent outcome waits for an operator.
+  - Bearer and OAuth tokens are redacted from results.
+- **Schema subset.** `OutputSchema` now accepts annotation keywords (`title`, `default`, `examples`, `format`, `$schema`) and enforces `additionalProperties`, `minimum`/`maximum`, `minLength`/`maxLength`, `minItems`/`maxItems` and `pattern` (at most 200 characters). Anything else still blocks approval.
+
+**Exit evidence** (live: Postgres 16, a Temporal dev server, control-plane, agents, a stub LLM, and a Python Streamable-HTTP MCP server with an OAuth client-credentials authorization server):
+
+1. **Setup and discovery.**
+   - An `MCP_SERVER` connection to `169.254.169.254` is rejected.
+   - Discovery before the grant gets 409.
+   - Discovery after the grant shows the OAuth flow in the server log (401 → token issued with `resource=…/mcp` → `tools/list`) and lists `lookup_order`, `cancel_order` and `admin_wipe` as NEW.
+2. **Approval in the Studio (Playwright).** `lookup_order` was approved as READ and `cancel_order` as WRITE. Discovery then showed APPROVED/APPROVED/NEW.
+3. **An approved MCP tool runs.** An agent pinning `lookup-order` answered using the server's result (`order 42: shipped, arriving Friday`).
+4. **An unapproved tool is refused.** The model's call to `admin-wipe` was DENIED ("not available to this agent"), and the server received no `tools/call`.
+5. **A changed tool is refused.** The server changed `lookup_order`'s description:
+   - the next call was DENIED ("changed lookup_order since it was reviewed; it needs re-review") with only a `tools/list` on the server;
+   - discovery showed CHANGED;
+   - after "Update draft to server version" → publish v2 in the Studio and an agent re-pin, the call succeeded again.
+6. **An MCP write goes through the approval inbox.** It paused with 0 server calls. The run's starter was refused. After a reviewer approved, exactly one `tools/call cancel_order` went out, and the effect is `SUCCEEDED`.
+7. **No secret leaked.** The client secret and every issued access token appeared 0 times in the control-plane and agents logs, the model requests, the Temporal log, run, trace, message, effect and connection rows, and every run's workflow history.
 
 ## Slice 2.4 — Sandbox runner (Kubernetes Jobs with gVisor)
 

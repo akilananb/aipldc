@@ -9,6 +9,7 @@ import ErrorCallout from '../components/ErrorCallout';
 import RelativeTime from '../components/RelativeTime';
 import type { ToolSpec, Workspace } from '../types';
 import { can, statusVariant } from './workspace';
+import McpDiscoveryPanel from './McpDiscoveryPanel';
 
 const STARTER_TOOL: ToolSpec = {
   description: null,
@@ -42,7 +43,7 @@ export default function ToolsSection({ workspace }: { workspace: Workspace }) {
         <Text size="2" color="gray">
           Granted connections:{' '}
           {connections.length === 0 ? (
-            <span>none - ask an enterprise Admin to grant an HTTP_API connection to {workspace.name}.</span>
+            <span>none - ask an enterprise Admin to grant an HTTP_API or MCP_SERVER connection to {workspace.name}.</span>
           ) : (
             connections.map((c) => (
               <span key={c.id} className="meta-tag" style={{ marginRight: 4 }} title={c.baseUrl}>
@@ -54,6 +55,7 @@ export default function ToolsSection({ workspace }: { workspace: Workspace }) {
         </Text>
         {canAuthor && <NewToolDialog workspaceId={workspace.id} />}
       </Flex>
+      <McpDiscoveryPanel workspaceId={workspace.id} connections={connections} canAuthor={canAuthor} />
       {toolsQuery.isLoading ? (
         <Skeleton height="160px" />
       ) : toolsQuery.isError ? (
@@ -90,8 +92,9 @@ export default function ToolsSection({ workspace }: { workspace: Workspace }) {
                   </Table.RowHeaderCell>
                   <Table.Cell>
                     <code style={{ fontSize: 12 }}>
-                      {t.draftSpec?.method} {t.draftSpec?.connectionId}
-                      {t.draftSpec?.path}
+                      {t.draftSpec?.kind === 'mcp'
+                        ? `MCP ${t.draftSpec.connectionId} · ${t.draftSpec.mcpTool}`
+                        : `${t.draftSpec?.method} ${t.draftSpec?.connectionId}${t.draftSpec?.path}`}
                     </code>
                   </Table.Cell>
                   <Table.Cell>

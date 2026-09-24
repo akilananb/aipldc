@@ -224,7 +224,7 @@ public class ToolExecutor {
         if (approval == null) {
             try {
                 McpHttpClient.CallResult result = session.session().callTool(spec.mcpTool(), args.args());
-                return mcpResult(ctx, call, version, args, spec, session, result, started, null);
+                return mcpResult(ctx, call, version, args, spec, session, result, started, null, null);
             } catch (McpException e) {
                 return failed(ctx, call, version, args, started, e.getMessage());
             }
@@ -237,7 +237,7 @@ public class ToolExecutor {
         tools.markSent(effect.id());
         try {
             McpHttpClient.CallResult result = session.session().callTool(spec.mcpTool(), args.args());
-            return mcpResult(ctx, call, version, args, spec, session, result, started, effect);
+            return mcpResult(ctx, call, version, args, spec, session, result, started, effect, approval.id());
         } catch (McpException e) {
             if (e.maybeSent()) {
                 tools.markUnknown(effect.id());
@@ -253,7 +253,8 @@ public class ToolExecutor {
     }
 
     private Outcome mcpResult(Context ctx, ModelInvoker.ToolCall call, int version, ToolArgs.Parsed args, ToolSpec spec,
-                              McpToolCaller.Session session, McpHttpClient.CallResult result, long started, ToolStore.Effect effect) {
+                              McpToolCaller.Session session, McpHttpClient.CallResult result, long started, ToolStore.Effect effect,
+                              UUID approvalId) {
         String text = redact(result.text(), session.secretToRedact());
         boolean truncated = result.truncated() || text.length() > spec.maxResponseBytes();
         if (text.length() > spec.maxResponseBytes()) {
@@ -266,7 +267,7 @@ public class ToolExecutor {
         }
         long millis = elapsed(started);
         tools.record(new CallRecord(ctx.runId(), ctx.attempt(), ctx.turn(), call.id(), call.name(), version,
-                args.args().toString(), args.hash(), ALLOWED, effect == null ? null : "approved (" + effect.id() + ")", null, millis,
+                args.args().toString(), args.hash(), ALLOWED, approvalId == null ? null : "approved (" + approvalId + ")", null, millis,
                 (long) text.length(), truncated, result.isError() ? "the MCP tool reported an error" : null));
         log.info("Run {} turn {}: mcp tool {} v{} ({}) -> {} in {} ms", ctx.runId(), ctx.turn(), call.name(), version,
                 spec.mcpTool(), result.isError() ? "error" : "ok", millis);

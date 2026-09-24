@@ -17,6 +17,9 @@ type Tab = 'editor' | 'versions';
 const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'];
 
 interface ToolDraft {
+  kind: string;
+  mcpTool: string;
+  mcpFingerprint: string;
   name: string;
   description: string;
   connectionId: string;
@@ -33,6 +36,9 @@ interface ToolDraft {
 
 function toDraft(name: string, spec: ToolSpec | null): ToolDraft {
   return {
+    kind: spec?.kind ?? 'http',
+    mcpTool: spec?.mcpTool ?? '',
+    mcpFingerprint: spec?.mcpFingerprint ?? '',
     name,
     description: spec?.description ?? '',
     connectionId: spec?.connectionId ?? '',
@@ -72,7 +78,7 @@ function toSpec(d: ToolDraft): { ok: true; spec: ToolSpec } | { ok: false; error
   // Write settings are sent only for WRITE tools and only when set, so READ tools keep the 2.1 shape.
   const write = d.effect === 'WRITE';
   const writeSettings: Partial<ToolSpec> = {};
-  if (write && d.idempotency === 'HEADER') writeSettings.idempotency = 'HEADER';
+  if (write && d.idempotency === 'HEADER' && d.kind !== 'mcp') writeSettings.idempotency = 'HEADER';
   if (write && (escalate != null || expire != null)) {
     writeSettings.approval = { escalateAfterMinutes: escalate, expireAfterMinutes: expire };
   }
@@ -80,10 +86,11 @@ function toSpec(d: ToolDraft): { ok: true; spec: ToolSpec } | { ok: false; error
     ok: true,
     spec: {
       description: d.description.trim() === '' ? null : d.description,
-      kind: 'http',
+      kind: d.kind,
       connectionId: d.connectionId === '' ? null : d.connectionId,
-      method: d.method,
-      path: d.path,
+      method: d.kind === 'mcp' ? null : d.method,
+      path: d.kind === 'mcp' ? null : d.path,
+      ...(d.kind === 'mcp' ? { mcpTool: d.mcpTool, mcpFingerprint: d.mcpFingerprint } : {}),
       inputSchema,
       effect: d.effect as ToolSpec['effect'],
       timeoutSeconds: timeout,
@@ -91,6 +98,10 @@ function toSpec(d: ToolDraft): { ok: true; spec: ToolSpec } | { ok: false; error
       ...writeSettings,
     },
   };
+}
+
+function isMcpTool(t: ToolDefinition): boolean {
+  return t.draftSpec?.kind === 'mcp';
 }
 
 function Field({ label, hint, htmlFor, children }: { label: string; hint?: string; htmlFor?: string; children: ReactNode }) {
@@ -199,11 +210,16 @@ export default function ToolEditorPage() {
   if (toolQuery.isLoading || workspacesQuery.isLoading) {
     return <Skeleton height="420px" />;
   }
+  if (tool && !draft && !toolQuery.isError) {
+    // Loaded, but the form is filled from it by an effect on the next render.
+    return <Skeleton height="420px" />;
+  }
   if (toolQuery.isError || !tool || !draft) {
     return <ErrorCallout title="Failed to load tool" error={toolQuery.error ?? 'not found'} />;
   }
 
   const set = <K extends keyof ToolDraft>(key: K, value: ToolDraft[K]) => setDraft({ ...draft, [key]: value });
+  const isMcp = draft.kind === 'mcp';
   const connections = connectionsQuery.data ?? [];
   const versions = versionsQuery.data ?? [];
   const readOnly = !canEdit;
@@ -286,7 +302,7 @@ export default function ToolEditorPage() {
       <PageHeader
         title={tool.draftName}
         subtitle={draft.description || undefined}
-        badges={<span className="pill violet">TOOL</span>}
+        badges={<span className="pill violet">{isMcpTool(tool) ? 'MCP TOOL' : 'TOOL'}</span>}
         meta={
           <MetaItems
             items={[
@@ -355,11 +371,18 @@ export default function ToolEditorPage() {
             </Flex>
             <Flex gap="3" wrap="wrap">
               <Box style={{ flex: '1 1 220px' }}>
-                <Field label="Connection" hint="HTTP_API connections granted to this workspace. The credential never leaves the connection.">
-                  <Select.Root value={draft.connectionId || undefined} disabled={readOnly} onValueChange={(v) => set('connectionId', v)}>
+                <Field
+                  label="Connection"
+                  hint={
+                    isMcp
+                      ? 'The MCP server this tool was discovered on. The credential never leaves the connection.'
+                      : 'HTTP_API connections granted to this workspace. The credential never leaves the connection.'
+                  }
+                >
+                  <Select.Root value={draft.connectionId || undefined} disabled={readOnly || isMcp} onValueChange={(v) => set('connectionId', v)}>
                     <Select.Trigger aria-label="Connection" placeholder="Choose a connection" style={{ width: '100%' }} />
                     <Select.Content>
-                      {connections.map((c) => (
+                      {connections.filter((c) => c.kind === (isMcp ? 'MCP_SERVER' : 'HTTP_API')).map((c) => (
                         <Select.Item key={c.id} value={c.id} disabled={c.status !== 'ACTIVE'}>
                           {c.id} — {c.baseUrl}
                         </Select.Item>
@@ -368,6 +391,17 @@ export default function ToolEditorPage() {
                   </Select.Root>
                 </Field>
               </Box>
+              {isMcp && (
+                <Box style={{ flex: '1 1 240px' }}>
+                  <Field label="Remote MCP tool" hint="Pinned with the fingerprint of the definition that was reviewed. If the server changes it, calls are refused until it is re-reviewed.">
+                    <Flex gap="2" align="center" wrap="wrap">
+                      <code style={{ fontSize: 13 }}>{draft.mcpTool}</code>
+                      {draft.mcpFingerprint && <CopyHash hash={draft.mcpFingerprint.replace(/^sha256:/, '')} />}
+                    </Flex>
+                  </Field>
+                </Box>
+              )}
+              {!isMcp && (
               <Box style={{ flex: '0 1 140px' }}>
                 <Field label="Method">
                   <Select.Root value={draft.method} disabled={readOnly} onValueChange={(v) => set('method', v)}>
@@ -382,8 +416,9 @@ export default function ToolEditorPage() {
                   </Select.Root>
                 </Field>
               </Box>
+              )}
               <Box style={{ flex: '0 1 160px' }}>
-                <Field label="Effect" hint="Only GET is READ. Every WRITE call waits for a reviewer's approval.">
+                <Field label="Effect" hint={isMcp ? "You decide, not the server's hints. Every WRITE call waits for a reviewer's approval." : "Only GET is READ. Every WRITE call waits for a reviewer's approval."}>
                   <Select.Root value={draft.effect} disabled={readOnly} onValueChange={(v) => set('effect', v)}>
                     <Select.Trigger aria-label="Effect" style={{ width: '100%' }} />
                     <Select.Content>
@@ -394,6 +429,7 @@ export default function ToolEditorPage() {
                 </Field>
               </Box>
             </Flex>
+            {!isMcp && (
             <Field
               label="Path"
               htmlFor="tool-path"
@@ -407,6 +443,7 @@ export default function ToolEditorPage() {
                 onChange={(e) => set('path', e.target.value)}
               />
             </Field>
+            )}
             <Flex gap="3" wrap="wrap">
               <Box style={{ flex: '1 1 180px' }}>
                 <Field label="Timeout (seconds)" htmlFor="tool-timeout" hint="1–120, capped by the run's deadline.">
@@ -433,6 +470,7 @@ export default function ToolEditorPage() {
             </Flex>
             {draft.effect === 'WRITE' && (
               <Flex gap="3" wrap="wrap">
+                {!isMcp && (
                 <Box style={{ flex: '1 1 220px' }}>
                   <Field
                     label="Idempotency"
@@ -447,6 +485,7 @@ export default function ToolEditorPage() {
                     </Select.Root>
                   </Field>
                 </Box>
+                )}
                 <Box style={{ flex: '1 1 160px' }}>
                   <Field label="Escalate after (minutes)" htmlFor="tool-escalate" hint="Empty = 60.">
                     <TextField.Root
@@ -474,12 +513,16 @@ export default function ToolEditorPage() {
             <Field
               label="Input schema (JSON)"
               htmlFor="tool-schema"
-              hint="type: object. Declare every path parameter. Supported keywords: type, properties, required, items, enum, description. Undeclared arguments are refused."
+              hint={
+                isMcp
+                  ? "The server's schema as reviewed; it must match the server exactly at call time."
+                  : 'type: object. Declare every path parameter. Undeclared arguments are refused.'
+              }
             >
               <TextArea
                 id="tool-schema"
                 value={draft.inputSchema}
-                disabled={readOnly}
+                disabled={readOnly || isMcp}
                 rows={8}
                 style={{ fontFamily: 'var(--code-font-family, monospace)' }}
                 onChange={(e) => set('inputSchema', e.target.value)}
