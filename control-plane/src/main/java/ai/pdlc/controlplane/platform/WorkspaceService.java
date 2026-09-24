@@ -84,6 +84,12 @@ public class WorkspaceService {
                 .toList();
     }
 
+    /** The PDLC projects this workspace's assets serve (members only). */
+    public List<WorkspaceStore.LinkedProject> projects(String workspaceId, Identity identity) {
+        requireMember(workspaceId, identity);
+        return store.projects(workspaceId);
+    }
+
     @Transactional
     public WorkspaceMemberDto setMember(String workspaceId, String userId, Set<Capability> capabilities, Identity identity) {
         require(workspaceId, identity, Capability.WORKSPACE_ADMIN);

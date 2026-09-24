@@ -2,6 +2,7 @@ package ai.pdlc.controlplane.web;
 
 import ai.pdlc.controlplane.identity.IdentityResolver;
 import ai.pdlc.controlplane.platform.WorkspaceService;
+import ai.pdlc.controlplane.platform.WorkspaceStore;
 import ai.pdlc.controlplane.web.dto.WorkspaceDto;
 import ai.pdlc.controlplane.web.dto.WorkspaceMemberDto;
 import ai.pdlc.controlplane.web.dto.WorkspaceRequest;
@@ -51,6 +52,11 @@ public class WorkspacesController {
     @GetMapping("/{workspaceId}/members")
     public List<WorkspaceMemberDto> members(@PathVariable String workspaceId, HttpServletRequest http) {
         return service.members(workspaceId, identityResolver.resolve(http));
+    }
+
+    @GetMapping("/{workspaceId}/projects")
+    public List<WorkspaceStore.LinkedProject> projects(@PathVariable String workspaceId, HttpServletRequest http) {
+        return service.projects(workspaceId, identityResolver.resolve(http));
     }
 
     /** Replaces the member's capabilities; an empty set removes them from the workspace. */

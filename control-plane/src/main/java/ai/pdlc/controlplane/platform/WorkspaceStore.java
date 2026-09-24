@@ -27,4 +27,12 @@ public interface WorkspaceStore {
 
     /** Replaces the user's capabilities in the workspace (an empty set removes the member). */
     void setMember(String workspaceId, String userId, Set<Capability> capabilities, String grantedBy);
+
+    record LinkedProject(String id, String name) {
+    }
+
+    /** Links a PDLC project to the workspace; a no-op if already linked. */
+    void linkProject(String workspaceId, String projectId, String linkedBy);
+
+    List<LinkedProject> projects(String workspaceId);
 }

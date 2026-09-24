@@ -2,8 +2,7 @@
 
 This spec turns Phase 1 of [configurable-agent-platform.md](configurable-agent-platform.md) into
 slices that can be built one at a time. Each slice ships something usable end to end and has its
-own exit evidence. **Slices 1–5 are implemented**; slice 6 is specified here and is not
-yet built.
+own exit evidence. **All six slices are implemented - Phase 1 is complete.**
 
 **Phase 1 exit evidence** (from the roadmap):
 
@@ -336,12 +335,52 @@ The Studio lives in `ui/src/studio/`. It is reached from **Agent Studio** in the
 - **Keyboard-only:** focus reached every form control. A timeout edit plus Enter on Save saved the draft. This check found the CodeMirror Tab trap, which is now fixed.
 - **390px width:** no horizontal page overflow; the form stacks into one column.
 
-## Slice 6 — PDLC seed import
+## Slice 6 — PDLC seed import (implemented)
 
-- Create a `pdlc` workspace once at startup, recorded in a `platform_imports` row so it never re-runs.
-- Import each bundled/overridden prompt and each `agents.roles` entry as a published AgentDefinition, v1. Existing `projects` rows become that workspace's project config references.
-- Existing `FeatureWorkflow` executions and agents keep their current code paths. This slice only makes the assets visible and editable for the Phase 5 cutover.
-- **Exit:** a fresh database shows the PDLC agents as v1 with hashes. A second boot imports nothing. Editing a PDLC agent in the Studio doesn't change the running legacy pipeline.
+**Shared prompts.**
+
+- The 15 bundled PDLC prompts moved from `agents/src/main/resources/prompts/` to `core/src/main/resources/prompts/`. The classpath path `/prompts/<name>.mustache` is unchanged, so the agents' `PromptTemplates` renders exactly what it did before (the golden `PromptTemplatesTest` passes unchanged).
+- control-plane can now read the same files through `core/.../platform/BundledPrompts`. It checks a readable `prompts_dir` override first, then the bundled prompt, the same order as `PromptTemplates`.
+
+**Import (`control-plane/.../platform/PdlcImportSeeder`, runs after `ProjectSeeder` and `ModelCatalogSeeder`).**
+
+It runs in one transaction, exactly once, guarded by `platform_imports` id `pdlc-package-v1`:
+
+1. Creates workspace `pdlc`.
+2. Imports each bundled prompt as agent `<prompt name>`:
+   - **Prompt:** the prompt text verbatim.
+   - **Variables:** the top-level names it references (`AgentSpecValidator.referencedVariables`), all optional, because the legacy callers pass optional fields.
+   - **Model:** the role's model from `pdlc.yaml`; the role is the name prefix.
+   - **Limits:** `timeoutSeconds` 600 (the legacy activity timeout); `maxOutputTokens` = the role's `budget_tokens`, when set.
+3. Publishes each agent as v1 through `AgentRegistryService.importPublished`, which applies the normal publication rules and hash. Anything that fails publication stays a draft, with the reason recorded.
+4. Links every existing project to `pdlc` in `workspace_projects` (V18; rows cascade away when a project is deleted). `GET /api/workspaces/{ws}/projects` lists them, and the Studio shows them as "Serves projects".
+5. Records what was published, what stayed a draft, where each prompt came from, and the linked projects.
+
+**Workspace admins.**
+
+- On every startup, each user in `PDLC_WORKSPACE_ADMINS` (`pdlc.platform.pdlc-workspace-admins`) gets `WORKSPACE_ADMIN` in `pdlc`. The grant is additive; it never removes anyone.
+- This is needed because a system-created workspace has no creator to administer it.
+- The local k8s manifest sets `admin@acme,lead@acme`. If nothing is configured and the workspace has no members, a WARN says what to set.
+
+**The legacy pipeline is unchanged by construction.** The PDLC agents keep rendering the prompt files through `PromptTemplates` and never read the registry, so publishing a new version in the Studio changes platform runs only. The Phase 5 cutover will route new PDLC work through published versions.
+
+**Known limitation.** The legacy prompts render structured views: lists and booleans driving `{{#docs}}`, `{{#hasBrief}}`, `{{#results}}` and similar. Platform runs pass string inputs, so a Studio test run of an imported agent treats a non-empty string as "true" for a section. The imported agents are faithful, versioned copies for review and editing; structured inputs arrive with typed artifacts in Phase 4.
+
+**Exit evidence:**
+
+| Test | What it proves |
+|---|---|
+| `BundledPromptsTest` (core) | Names match the files; every bundled prompt passes publication once its variables are declared; the override wins; roles come from the name prefix. |
+| `PdlcImportSeederTest` | Every prompt is imported, and publishes v1 unless it fails publication (a role with no model stays a draft, with the reason). Text is verbatim, the hash is correct, `budget_tokens` becomes the token limit, variables are optional. Projects are linked. A second boot is a no-op even after a Studio edit to v2. Admin grants are additive and repeated. An override dir wins. |
+| `PlatformRegistryIntegrationTest` | `workspace_projects` against real Postgres: idempotent linking, cascade on project deletion, member-only reads. |
+| `PromptTemplatesTest` (agents) | The legacy renders are unchanged after the move. |
+
+**Live check** (fresh Postgres, control-plane in dev-headers mode):
+
+- The import published 15 agents at v1 and linked `ado-pilot` and `local`.
+- A Studio-style edit published `grill-questions` v2. The bundled prompt the legacy pipeline renders had the same sha256 before and after, both on disk and inside the agents jar.
+- After a restart, nothing was re-imported (`platform_imports` still had 2 rows) and v2 was kept.
+- The Studio listed the 15 agents with "Serves projects: Payments, Restaurant runtime".
 
 ## Verification commands
 

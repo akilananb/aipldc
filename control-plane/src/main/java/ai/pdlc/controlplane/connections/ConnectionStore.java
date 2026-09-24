@@ -39,4 +39,7 @@ public interface ConnectionStore {
 
     /** Records a one-time import; returns false if it was already recorded. */
     boolean recordImport(String id, String details);
+
+    /** Replaces the details of a recorded import (e.g. once its outcome is known). */
+    void updateImport(String id, String details);
 }
