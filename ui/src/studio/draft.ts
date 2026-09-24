@@ -1,4 +1,4 @@
-import type { AgentSpec, AgentVariable, AgentVersion } from '../types';
+import type { AgentSpec, AgentVariable, AgentVersion, ToolRef } from '../types';
 
 /** Editable form state for an agent draft; converted to/from the wire AgentSpec. */
 export interface Draft {
@@ -12,6 +12,10 @@ export interface Draft {
   maxOutputTokens: string;
   /** Raw JSON text; empty = no output schema. */
   outputSchema: string;
+  tools: ToolRef[];
+  /** Empty = server default. */
+  maxModelTurns: string;
+  maxToolCalls: string;
 }
 
 export function toDraft(name: string, spec: AgentSpec | null): Draft {
@@ -25,6 +29,9 @@ export function toDraft(name: string, spec: AgentSpec | null): Draft {
     timeoutSeconds: spec?.limits?.timeoutSeconds != null ? String(spec.limits.timeoutSeconds) : '',
     maxOutputTokens: spec?.limits?.maxOutputTokens != null ? String(spec.limits.maxOutputTokens) : '',
     outputSchema: spec?.outputSchema ? JSON.stringify(spec.outputSchema, null, 2) : '',
+    tools: spec?.tools ?? [],
+    maxModelTurns: spec?.limits?.maxModelTurns != null ? String(spec.limits.maxModelTurns) : '',
+    maxToolCalls: spec?.limits?.maxToolCalls != null ? String(spec.limits.maxToolCalls) : '',
   };
 }
 
@@ -53,9 +60,16 @@ export function toSpec(d: Draft): SpecResult {
   }
   const timeout = toInt(d.timeoutSeconds);
   const maxTokens = toInt(d.maxOutputTokens);
-  if (Number.isNaN(timeout) || Number.isNaN(maxTokens)) {
+  const maxTurns = toInt(d.maxModelTurns);
+  const maxCalls = toInt(d.maxToolCalls);
+  if ([timeout, maxTokens, maxTurns, maxCalls].some((n) => Number.isNaN(n))) {
     return { ok: false, error: 'Limits must be whole numbers' };
   }
+  // Fields added in Phase 2 are sent only when set, so an agent without tools keeps the exact
+  // Phase 1 shape (and content hash).
+  const limits: NonNullable<AgentSpec['limits']> = { timeoutSeconds: timeout, maxOutputTokens: maxTokens };
+  if (maxTurns != null) limits.maxModelTurns = maxTurns;
+  if (maxCalls != null) limits.maxToolCalls = maxCalls;
   return {
     ok: true,
     spec: {
@@ -68,8 +82,9 @@ export function toSpec(d: Draft): SpecResult {
         required: v.required,
       })),
       model: { model: d.model === '' ? null : d.model, fallbacks: d.fallbacks },
-      limits: { timeoutSeconds: timeout, maxOutputTokens: maxTokens },
+      limits,
       outputSchema,
+      ...(d.tools.length > 0 ? { tools: d.tools } : {}),
     },
   };
 }

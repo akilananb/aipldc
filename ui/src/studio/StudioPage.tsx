@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Bot, Boxes, Plus } from 'lucide-react';
-import { Box, Button, Callout, Dialog, Flex, Select, Skeleton, Table, Text, TextField } from '@radix-ui/themes';
+import { Box, Button, Callout, Dialog, Flex, SegmentedControl, Select, Skeleton, Table, Text, TextField } from '@radix-ui/themes';
 import { toast } from 'sonner';
 import { errorMessage, studio } from '../api';
 import { useIdentity } from '../identity';
@@ -12,6 +12,7 @@ import EmptyState from '../components/EmptyState';
 import RelativeTime from '../components/RelativeTime';
 import type { AgentSpec, Workspace } from '../types';
 import { can, setSelectedWorkspace, statusVariant, useSelectedWorkspaceId, useWorkspaces } from './workspace';
+import ToolsSection from './ToolsSection';
 
 const STARTER_SPEC: AgentSpec = {
   description: null,
@@ -24,9 +25,9 @@ const STARTER_SPEC: AgentSpec = {
 };
 
 /**
- * Agent Studio home (docs/phase-1-execution-spec.md slice 5): pick a workspace, see its agents,
- * create one. Only workspaces the caller belongs to are listed; the enterprise Admin can also
- * create workspaces.
+ * Agent Studio home (docs/phase-1-execution-spec.md slice 5): pick a workspace, see its agents
+ * and tools (Phase 2 slice 2.1), create them. Only workspaces the caller belongs to are listed;
+ * the enterprise Admin can also create workspaces.
  */
 export default function StudioPage() {
   const identity = useIdentity();
@@ -34,6 +35,8 @@ export default function StudioPage() {
   const workspaces = workspacesQuery.data ?? [];
   const storedId = useSelectedWorkspaceId();
   const selected = workspaces.find((w) => w.id === storedId) ?? workspaces.find((w) => w.capabilities.length > 0);
+  const [params, setParams] = useSearchParams();
+  const view = params.get('view') === 'tools' ? 'tools' : 'agents';
 
   useEffect(() => {
     if (selected && selected.id !== storedId) setSelectedWorkspace(selected.id);
@@ -100,7 +103,16 @@ export default function StudioPage() {
   return (
     <Box>
       {header}
-      <AgentList workspace={selected} />
+      <SegmentedControl.Root
+        mb="3"
+        value={view}
+        onValueChange={(v) => setParams(v === 'tools' ? { view: 'tools' } : {}, { replace: true })}
+        aria-label="Show"
+      >
+        <SegmentedControl.Item value="agents">Agents</SegmentedControl.Item>
+        <SegmentedControl.Item value="tools">Tools</SegmentedControl.Item>
+      </SegmentedControl.Root>
+      {view === 'tools' ? <ToolsSection workspace={selected} /> : <AgentList workspace={selected} />}
     </Box>
   );
 }

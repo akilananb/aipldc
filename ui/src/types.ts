@@ -330,8 +330,86 @@ export interface AgentSpec {
   prompt: string | null;
   variables: AgentVariable[] | null;
   model: { model: string | null; fallbacks: string[] | null } | null;
-  limits: { maxOutputTokens: number | null; timeoutSeconds: number | null } | null;
+  limits: {
+    maxOutputTokens: number | null;
+    timeoutSeconds: number | null;
+    /** Tool loop bounds (Phase 2 slice 2.1); omitted = server defaults (8 turns, 16 calls). */
+    maxModelTurns?: number | null;
+    maxToolCalls?: number | null;
+  } | null;
   outputSchema: Record<string, unknown> | null;
+  /** Pinned published tool versions; omitted when the agent uses no tools. */
+  tools?: ToolRef[] | null;
+}
+
+export interface ToolRef {
+  tool: string;
+  version: number;
+}
+
+/** docs/phase-2-execution-spec.md slice 2.1: one HTTP operation against an HTTP_API connection. */
+export interface ToolSpec {
+  description: string | null;
+  kind: string | null;
+  connectionId: string | null;
+  method: string | null;
+  path: string | null;
+  inputSchema: Record<string, unknown> | null;
+  effect: 'READ' | 'WRITE' | null;
+  timeoutSeconds: number | null;
+  maxResponseBytes: number | null;
+}
+
+export interface ToolDefinition {
+  workspaceId: string;
+  id: string;
+  status: 'ACTIVE' | 'RETIRED';
+  draftName: string;
+  draftSpec: ToolSpec | null;
+  draftRevision: number;
+  currentVersion: number | null;
+  latestVersion: number | null;
+  updatedAt: string;
+  updatedBy: string;
+}
+
+export interface ToolVersion {
+  workspaceId: string;
+  toolId: string;
+  version: number;
+  name: string;
+  spec: ToolSpec;
+  contentHash: string;
+  publishedAt: string;
+  publishedBy: string;
+}
+
+/** A connection granted to the workspace (no secret reference is exposed). */
+export interface WorkspaceConnection {
+  id: string;
+  kind: string;
+  authType: string;
+  baseUrl: string;
+  status: string;
+  expiresAt: string | null;
+}
+
+export interface ToolCallRecord {
+  id: number;
+  attempt: number;
+  turn: number;
+  toolId: string;
+  toolVersion: number | null;
+  argsJson: string | null;
+  argsHash: string | null;
+  decision: 'ALLOWED' | 'DENIED';
+  reason: string | null;
+  httpStatus: number | null;
+  durationMs: number | null;
+  responseBytes: number | null;
+  truncated: boolean;
+  error: string | null;
+  createdAt: string;
 }
 
 export interface AgentDefinition {

@@ -73,6 +73,30 @@ Every call, allowed or denied, is recorded in `platform_tool_calls`: run, attemp
 - A destination that redirects to a metadata address is not followed.
 - Revoking the connection during a run denies the next protected call.
 
+**As built (differences from the plan above, and what they mean):**
+
+- **One lifecycle implementation.** `DefinitionStore` + `VersionedDefinitions` hold the draft, publish, rollback and retire rules for both agents and tools. Each kind keeps its own tables (`agent_definitions*`, `tool_definitions*`).
+- **Only the pinned tool id is trusted.** The model calls a tool by its id. Names and descriptions it echoes are never used to authorize anything.
+- **Credential redaction.** If a response body contains the connection's credential verbatim (an API that echoes headers, for example), the executor replaces it with `[REDACTED]` before the model sees it. Encoded forms, such as base64, are not detected.
+- **Spring AI never executes tools.** `OpenAiCompatibleModelInvoker` offers tools as definitions only, and each callback throws if called. A change in Spring AI's defaults therefore can't run a tool outside `ToolExecutor`.
+- **Path parameters.** Values are percent-encoded, including `/`. `.` and `..` are refused. Tool paths may not contain `//`, `..`, a backslash, whitespace, a query or a fragment, so a path cannot escape the connection's base URL.
+- **Known gap: DNS rebinding.** The HTTP client resolves the host again when it connects. A name whose DNS answer changes between the check and the connect is therefore not pinned to the checked addresses. Slice 2.4's egress proxy closes this gap.
+- **Endpoint added: `GET /api/workspaces/{ws}/connections`** (members). It lists the `HTTP_API` connections granted to the workspace, without secret references, so tool authors can choose one.
+- **Configuration.** `pdlc.egress.allowed-private-hosts` (`PDLC_EGRESS_ALLOWED_PRIVATE_HOSTS`) is set on both control-plane and agents, and the two values must match.
+
+**Exit evidence** (live: Postgres 16, a Temporal dev server, control-plane, agents, an OpenAI-compatible stub that emits `tool_calls`, and a recording test API):
+
+- **Policy scenario.** The agent pinned `get-order` (READ), `cancel-order` (WRITE) and `hop`. The model requested three calls:
+  - `get-order` was **ALLOWED** (HTTP 200).
+  - `cancel-order` was **DENIED** ("requires an approval"). The test API received no request for it.
+  - A `get-order` call with an extra `reveal` argument was **DENIED** as an undeclared argument.
+  - The test API's echo of the `Authorization` header reached the model as `Bearer [REDACTED]`.
+- **No secret leaked.** The secret value appeared 0 times in the control-plane and agents logs, the model requests, the Temporal server log, `platform_runs`, `platform_tool_calls` and the run's Temporal history.
+- **Metadata address.** An `HTTP_API` connection to `http://169.254.169.254` is rejected when it is created. A tool whose API answers `302 → http://169.254.169.254/...` records "redirect not followed", and no second request is made.
+- **Revocation mid-run.** The grant was revoked between turns 1 and 2: turn 1 was ALLOWED, and turn 2 was DENIED ("not granted to workspace") with no HTTP request. New runs are then refused at start, with every affected tool named.
+- **Turn limit.** A model that keeps calling tools ends `FAILED`: "tool loop limit reached: maxModelTurns=4 …". The failure is not retried.
+- **Studio (Playwright).** A tool was created, saved, validated and published through the UI. A validation finding appears for an undeclared path parameter. The agent editor shows the pinned tools and the loop limits. The run detail shows the tool-call trace. At phone width there is no horizontal scroll.
+
 ## Slice 2.2 — Write effects and approvals
 
 - **Approval-gated writes.** A `WRITE` call pauses the run: `AgentRunWorkflow` waits on a signal. The approval is tied to (run, tool version, canonical args hash) and to the reviewer's capability.

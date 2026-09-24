@@ -34,6 +34,7 @@ export default function AgentEditorPage() {
   const agentQuery = useQuery({ queryKey: agentKey, queryFn: () => studio.agent(ws, agentId) });
   const versionsQuery = useQuery({ queryKey: [...agentKey, 'versions'], queryFn: () => studio.versions(ws, agentId) });
   const modelsQuery = useQuery({ queryKey: ['platform', 'models'], queryFn: studio.models });
+  const toolsQuery = useQuery({ queryKey: ['studio', ws, 'tools'], queryFn: () => studio.tools(ws) });
 
   const agent = agentQuery.data;
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -267,7 +268,13 @@ export default function AgentEditorPage() {
         inspector={inspector}
       >
         {tab === 'editor' && (
-          <AgentForm draft={draft} onChange={setDraft} models={modelsQuery.data ?? []} readOnly={!canEdit} />
+          <AgentForm
+            draft={draft}
+            onChange={setDraft}
+            models={modelsQuery.data ?? []}
+            tools={toolsQuery.data ?? []}
+            readOnly={!canEdit}
+          />
         )}
         {tab === 'versions' && (
           versionsQuery.isError ? (

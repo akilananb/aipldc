@@ -9,6 +9,7 @@ import ProjectsPage from './routes/ProjectsPage';
 import ReviewPage from './routes/ReviewPage';
 import StudioPage from './studio/StudioPage';
 import AgentEditorPage from './studio/AgentEditorPage';
+import ToolEditorPage from './studio/ToolEditorPage';
 
 export default function App() {
   return (
@@ -21,6 +22,7 @@ export default function App() {
           <Route path="/projects" element={<ProjectsPage />} />
           <Route path="/studio" element={<StudioPage />} />
           <Route path="/studio/:ws/agents/:agentId" element={<AgentEditorPage />} />
+          <Route path="/studio/:ws/tools/:toolId" element={<ToolEditorPage />} />
           <Route
             path="*"
             element={
