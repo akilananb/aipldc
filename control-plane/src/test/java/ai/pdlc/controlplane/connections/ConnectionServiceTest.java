@@ -186,7 +186,7 @@ class ConnectionServiceTest {
                 "kv://x", "https://api.example/mcp", null, null), ADMIN)).hasMessageContaining("oauthClientId must match");
         assertThatThrownBy(() -> service.createConnection(new ConnectionRequest("m3", "HTTP_API", "OAUTH_CLIENT_CREDENTIALS",
                 "kv://x", "https://api.example/v1", null, "c"), ADMIN))
-                .hasMessageContaining("only supported for MCP_SERVER connections");
+                .hasMessageContaining("only supported for MCP_SERVER and A2A_AGENT connections");
         assertThatThrownBy(() -> service.createConnection(new ConnectionRequest("m4", "MCP_SERVER", "API_KEY",
                 "kv://x", "https://api.example/mcp", null, "stray-client"), ADMIN))
                 .hasMessageContaining("oauthClientId applies only to authType OAUTH_CLIENT_CREDENTIALS");
@@ -197,5 +197,20 @@ class ConnectionServiceTest {
                 "https://api.example/mcp", null), ADMIN);
         assertThat(rotated.oauthClientId()).isEqualTo("platform-client");
         assertThat(rotated.secretRef()).isEqualTo("kv://orders-mcp-secret-2");
+    }
+
+    @Test
+    void a2aAgentsAreGrantableOriginsThatPassTheEgressPolicy() {
+        ConnectionDto agent = service.createConnection(new ConnectionRequest("partner-agent", "A2A_AGENT", "OAUTH_CLIENT_CREDENTIALS",
+                "kv://partner-secret", "https://api.example", null, "platform-client"), ADMIN);
+
+        assertThat(agent.kind()).isEqualTo("A2A_AGENT");
+        assertThatThrownBy(() -> service.createConnection(new ConnectionRequest("inner-agent", "A2A_AGENT", "NONE", null,
+                "http://169.254.169.254", null), ADMIN)).hasMessageContaining("169.254.169.254");
+        workspaces.create(new ai.pdlc.controlplane.web.dto.WorkspaceRequest("engineering", "Engineering", java.util.List.of("lead@acme")), ADMIN);
+        service.grant("partner-agent", "engineering", ADMIN);
+        assertThat(service.toolConnectionProblems("partner-agent", "engineering", ConnectionService.A2A_AGENT)).isEmpty();
+        assertThat(service.toolConnectionProblems("partner-agent", "engineering", ConnectionService.MCP_SERVER))
+                .singleElement().asString().contains("not an MCP_SERVER connection");
     }
 }

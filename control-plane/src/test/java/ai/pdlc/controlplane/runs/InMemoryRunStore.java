@@ -61,4 +61,23 @@ class InMemoryRunStore implements RunStore {
     public List<ai.pdlc.controlplane.web.dto.ToolCallDto> toolCalls(UUID runId) {
         return toolCalls.getOrDefault(runId, List.of());
     }
+
+    final Map<UUID, RemoteRow> remotes = new ConcurrentHashMap<>();
+    final List<String> replies = new java.util.concurrent.CopyOnWriteArrayList<>();
+
+    @Override
+    public Optional<RemoteRow> remote(UUID runId) {
+        return Optional.ofNullable(remotes.get(runId));
+    }
+
+    @Override
+    public synchronized Optional<Integer> acceptInput(UUID runId, String text, String by) {
+        RunRow r = rows.get(runId);
+        if (r == null || !"AWAITING_INPUT".equals(r.status())) {
+            return Optional.empty();
+        }
+        withStatus(runId, "QUEUED", null);
+        replies.add(by + ": " + text);
+        return Optional.of(replies.size());
+    }
 }

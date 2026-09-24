@@ -15,12 +15,15 @@ import java.util.Map;
  * decides what is publishable.
  *
  * @param description  human-facing summary shown in the catalog
- * @param runtime      {@code native} only in phase 1; external adapters arrive in phase 2
+ * @param runtime      {@code native} (a model call) or {@code a2a} (delegation to a remote A2A agent,
+ *                     Phase 2 slice 2.5)
  * @param prompt       Mustache template (restricted: no partials, no delimiter changes)
  * @param variables    every top-level template variable the prompt may reference
  * @param model        authorized model binding plus explicitly allowed fallbacks
  * @param limits       generation limits enforced by the runner
  * @param outputSchema optional JSON Schema the typed output must satisfy
+ * @param tools        pinned tool versions (native only, slice 2.1)
+ * @param remote       runtime {@code a2a}: the {@code A2A_AGENT} connection and the remote skill (slice 2.5)
  */
 public record AgentSpec(
         String description,
@@ -30,9 +33,11 @@ public record AgentSpec(
         ModelBinding model,
         Limits limits,
         Map<String, Object> outputSchema,
-        @JsonInclude(JsonInclude.Include.NON_NULL) List<ToolRef> tools) {
+        @JsonInclude(JsonInclude.Include.NON_NULL) List<ToolRef> tools,
+        @JsonInclude(JsonInclude.Include.NON_NULL) Remote remote) {
 
     public static final String RUNTIME_NATIVE = "native";
+    public static final String RUNTIME_A2A = "a2a";
 
     /**
      * Pre-slice-2.1 shape (no tools). Fields added after Phase 1 are omitted from canonical JSON
@@ -40,7 +45,26 @@ public record AgentSpec(
      */
     public AgentSpec(String description, String runtime, String prompt, List<Variable> variables, ModelBinding model,
                      Limits limits, Map<String, Object> outputSchema) {
-        this(description, runtime, prompt, variables, model, limits, outputSchema, null);
+        this(description, runtime, prompt, variables, model, limits, outputSchema, null, null);
+    }
+
+    /** Slice 2.1-2.4 shape (no remote binding); keeps those versions' hashes. */
+    public AgentSpec(String description, String runtime, String prompt, List<Variable> variables, ModelBinding model,
+                     Limits limits, Map<String, Object> outputSchema, List<ToolRef> tools) {
+        this(description, runtime, prompt, variables, model, limits, outputSchema, tools, null);
+    }
+
+    /**
+     * Where an {@code a2a} agent delegates (slice 2.5): the connection supplies the remote agent's
+     * origin and credentials; {@code skill} is the Agent Card skill id the run asks for. The card is
+     * re-read at run time and never trusted for anything but the skill list.
+     */
+    public record Remote(String connectionId, String skill) {
+    }
+
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    public boolean isA2a() {
+        return RUNTIME_A2A.equals(runtime);
     }
 
     /** A pinned, published tool version the agent may call (Phase 2 slice 2.1). */

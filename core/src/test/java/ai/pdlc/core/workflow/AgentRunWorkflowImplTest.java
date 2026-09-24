@@ -168,4 +168,52 @@ class AgentRunWorkflowImplTest {
                 .isInstanceOf(WorkflowFailedException.class);
         assertThat(activities.events).containsExactly("awaiting:a4", "cancelled:a4");
     }
+
+    @Test
+    void aRemoteAgentWaitingForInputResumesWhenAnOperatorReplies() throws Exception {
+        activities.mode = FakeAgentRunActivities.Mode.INPUT_THEN_SUCCEED;
+        AgentRunWorkflow wf = stub("i1");
+        WorkflowClient.start(wf::run, new AgentRunWorkflow.AgentRunInput("i1", 60));
+        assertThat(activities.paused.await(10, TimeUnit.SECONDS)).isTrue();
+
+        testEnv.sleep(Duration.ofDays(2));
+        assertThat(activities.events).containsExactly("input:i1");
+        wf.inputProvided("msg-1");
+
+        assertThat(WorkflowStub.fromTyped(wf).getResult(10, TimeUnit.SECONDS, AgentRunWorkflow.AgentRunOutcome.class).status())
+                .isEqualTo("SUCCEEDED");
+        assertThat(activities.events).containsExactly("input:i1", "succeeded:i1");
+    }
+
+    @Test
+    void withNoReplyTheRemoteTaskIsAbandonedAndTheRunFails() throws Exception {
+        activities.mode = FakeAgentRunActivities.Mode.INPUT_THEN_SUCCEED;
+        AgentRunWorkflow wf = stub("i2");
+        WorkflowClient.start(wf::run, new AgentRunWorkflow.AgentRunInput("i2", 60));
+        assertThat(activities.paused.await(10, TimeUnit.SECONDS)).isTrue();
+
+        testEnv.sleep(AgentRunWorkflowImpl.INPUT_WAIT.plusMinutes(1));
+
+        AgentRunWorkflow.AgentRunOutcome outcome = WorkflowStub.fromTyped(wf)
+                .getResult(10, TimeUnit.SECONDS, AgentRunWorkflow.AgentRunOutcome.class);
+        assertThat(outcome.status()).isEqualTo("FAILED");
+        assertThat(outcome.error()).contains("no reply");
+        assertThat(activities.events).containsExactly("input:i2", "input-expired:i2");
+    }
+
+    @Test
+    void authRequiredWaitsUntilTheRunIsCancelled() throws Exception {
+        activities.mode = FakeAgentRunActivities.Mode.AUTH_REQUIRED;
+        AgentRunWorkflow wf = stub("u1");
+        WorkflowClient.start(wf::run, new AgentRunWorkflow.AgentRunInput("u1", 60));
+        assertThat(activities.paused.await(10, TimeUnit.SECONDS)).isTrue();
+        testEnv.sleep(Duration.ofDays(30));
+        assertThat(activities.events).containsExactly("auth:u1");
+
+        WorkflowStub.fromTyped(wf).cancel();
+
+        assertThatThrownBy(() -> WorkflowStub.fromTyped(wf).getResult(10, TimeUnit.SECONDS, AgentRunWorkflow.AgentRunOutcome.class))
+                .isInstanceOf(WorkflowFailedException.class);
+        assertThat(activities.events).containsExactly("auth:u1", "cancelled:u1");
+    }
 }

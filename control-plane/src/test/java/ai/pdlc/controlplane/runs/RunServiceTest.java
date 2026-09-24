@@ -70,11 +70,17 @@ class RunServiceTest {
         public void signalEffect(String workflowId, String effectId) {
             signals.add("effect|" + workflowId + "|" + effectId);
         }
+
+        @Override
+        public void signalInput(String workflowId, String messageId) {
+            signals.add("input|" + workflowId + "|" + messageId);
+        }
     }
 
     private final InMemoryConnectionStore connections = InMemoryConnectionStore.withModels("gw", "sonnet");
     private final WorkspaceService workspaces = new WorkspaceService(new InMemoryWorkspaceStore());
-    private final AgentRegistryService registry = TestRegistries.over(workspaces, connections).agents();
+    private final TestRegistries.Registries registries = TestRegistries.over(workspaces, connections);
+    private final AgentRegistryService registry = registries.agents();
     private final InMemoryRunStore runs = new InMemoryRunStore();
     private final FakeLauncher launcher = new FakeLauncher();
     private final RunService service = new RunService(runs, launcher, registry, workspaces);
@@ -208,5 +214,52 @@ class RunServiceTest {
         assertThatThrownBy(() -> service.get("engineering", "not-a-uuid", OPERATOR)).isInstanceOf(NotFoundException.class);
         assertThatThrownBy(() -> service.get("engineering", UUID.randomUUID().toString(), OPERATOR))
                 .isInstanceOf(NotFoundException.class);
+    }
+
+    private RunDto startA2aRun() {
+        registries.connections().createConnection(new ai.pdlc.controlplane.web.dto.ConnectionRequest("partner-agent", "A2A_AGENT",
+                "API_KEY", "kv://partner-key", "https://api.example", null), IT);
+        registries.connections().grant("partner-agent", "engineering", IT);
+        AgentSpec spec = new AgentSpec("Delegates", "a2a", "Summarise {{input}}", List.of(new AgentSpec.Variable("input", null, true)),
+                null, new AgentSpec.Limits(null, 120), null, null, new AgentSpec.Remote("partner-agent", "summarise"));
+        AgentDefinitionDto created = registry.create("engineering", new AgentDraftRequest("delegate", "Delegate", spec, null), AUTHOR);
+        registry.publish("engineering", "delegate", created.draftRevision(), LEAD);
+        return service.start("engineering", "delegate", new StartRunRequest(Map.of("input", "Q3"), null), OPERATOR);
+    }
+
+    @Test
+    void anA2aRunPinsItsConnectionAndHasNoModel() {
+        RunDto run = startA2aRun();
+
+        assertThat(run.model()).isNull();
+        assertThat(run.providerModel()).isNull();
+        assertThat(run.connectionId()).isEqualTo("partner-agent");
+        assertThat(launcher.started).containsExactly("agent-run-" + run.id() + "|" + run.id() + "|120");
+
+        registries.connections().revokeGrant("partner-agent", "engineering", IT);
+        assertThatThrownBy(() -> service.start("engineering", "delegate", new StartRunRequest(Map.of("input", "Q3"), null), OPERATOR))
+                .isInstanceOf(ConflictException.class)
+                .hasMessageContaining("connection partner-agent is not granted to workspace engineering");
+    }
+
+    @Test
+    void anOperatorAnswersARemoteAgentOnceAndTheRunResumes() {
+        RunDto run = startA2aRun();
+        UUID id = UUID.fromString(run.id());
+        assertThatThrownBy(() -> service.reply("engineering", run.id(), "EMEA", OPERATOR))
+                .isInstanceOf(ConflictException.class).hasMessageContaining("not waiting for input");
+
+        runs.withStatus(id, "AWAITING_INPUT", null);
+        runs.remotes.put(id, new RunStore.RemoteRow("1.0", "task-1", "ctx-1", "INPUT_REQUIRED", "Which region?", null));
+        assertThat(service.get("engineering", run.id(), OPERATOR).remote().question()).isEqualTo("Which region?");
+        assertThatThrownBy(() -> service.reply("engineering", run.id(), "EMEA", AUTHOR)).isInstanceOf(ForbiddenException.class);
+        assertThatThrownBy(() -> service.reply("engineering", run.id(), " ", OPERATOR)).isInstanceOf(IllegalArgumentException.class);
+
+        RunDto resumed = service.reply("engineering", run.id(), "EMEA", OPERATOR);
+
+        assertThat(resumed.status()).isEqualTo("QUEUED");
+        assertThat(runs.replies).containsExactly("op@acme: EMEA");
+        assertThat(launcher.signals).containsExactly("input|agent-run-" + run.id() + "|" + run.id() + ":1");
+        assertThatThrownBy(() -> service.reply("engineering", run.id(), "APAC", OPERATOR)).isInstanceOf(ConflictException.class);
     }
 }

@@ -26,6 +26,8 @@ public final class AgentSpecValidator {
     public static final int MAX_TOOL_CALLS = 64;
 
     private static final Pattern NAME = Pattern.compile("^[A-Za-z_][A-Za-z0-9_]{0,63}$");
+    private static final Pattern CONNECTION_ID = Pattern.compile("^[a-z0-9][a-z0-9-]{1,39}$");
+    private static final Pattern SKILL = Pattern.compile("^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$");
     private static final Pattern TAG = Pattern.compile("\\{\\{(\\{?)\\s*([#^/&>=!]?)\\s*([^}]*?)\\s*}?}}");
 
     private AgentSpecValidator() {
@@ -41,8 +43,26 @@ public final class AgentSpecValidator {
             errors.add("spec is required");
             return errors;
         }
-        if (!AgentSpec.RUNTIME_NATIVE.equals(spec.runtime())) {
-            errors.add("runtime must be \"" + AgentSpec.RUNTIME_NATIVE + "\"");
+        boolean a2a = spec.isA2a();
+        if (!a2a && !AgentSpec.RUNTIME_NATIVE.equals(spec.runtime())) {
+            errors.add("runtime must be \"" + AgentSpec.RUNTIME_NATIVE + "\" or \"" + AgentSpec.RUNTIME_A2A + "\"");
+        }
+        if (a2a) {
+            AgentSpec.Remote remote = spec.remote();
+            if (remote == null || remote.connectionId() == null || !CONNECTION_ID.matcher(remote.connectionId()).matches()) {
+                errors.add("remote.connectionId must name an A2A_AGENT connection");
+            }
+            if (remote == null || remote.skill() == null || !SKILL.matcher(remote.skill()).matches()) {
+                errors.add("remote.skill must be a skill id from the remote agent's card");
+            }
+            if (spec.model() != null) {
+                errors.add("an a2a agent has no model binding; the remote agent chooses its own");
+            }
+            if (!spec.toolsOrEmpty().isEmpty()) {
+                errors.add("an a2a agent has no tools; the remote agent uses its own");
+            }
+        } else if (spec.remote() != null) {
+            errors.add("remote is only for runtime \"" + AgentSpec.RUNTIME_A2A + "\"");
         }
 
         Set<String> declared = new HashSet<>();
@@ -62,23 +82,8 @@ public final class AgentSpecValidator {
             checkTemplate(spec.prompt(), declared, errors);
         }
 
-        AgentSpec.ModelBinding model = spec.model();
-        if (model == null || model.model() == null || model.model().isBlank()) {
-            errors.add("model.model is required");
-        } else {
-            if (!authorizedModels.contains(model.model())) {
-                errors.add("model \"" + model.model() + "\" is not in the authorized model catalog");
-            }
-            Set<String> seen = new HashSet<>(Set.of(model.model()));
-            if (model.fallbacks() != null) {
-                for (String fallback : model.fallbacks()) {
-                    if (fallback == null || !seen.add(fallback)) {
-                        errors.add("model.fallbacks must be distinct from each other and from model.model");
-                    } else if (!authorizedModels.contains(fallback)) {
-                        errors.add("fallback model \"" + fallback + "\" is not in the authorized model catalog");
-                    }
-                }
-            }
+        if (!a2a) {
+            checkModel(spec.model(), authorizedModels, errors);
         }
 
         AgentSpec.Limits limits = spec.limits();
@@ -113,6 +118,26 @@ public final class AgentSpecValidator {
             errors.addAll(OutputSchema.unsupported(spec.outputSchema()));
         }
         return errors;
+    }
+
+    private static void checkModel(AgentSpec.ModelBinding model, Set<String> authorizedModels, List<String> errors) {
+        if (model == null || model.model() == null || model.model().isBlank()) {
+            errors.add("model.model is required");
+            return;
+        }
+        if (!authorizedModels.contains(model.model())) {
+            errors.add("model \"" + model.model() + "\" is not in the authorized model catalog");
+        }
+        Set<String> seen = new HashSet<>(Set.of(model.model()));
+        if (model.fallbacks() != null) {
+            for (String fallback : model.fallbacks()) {
+                if (fallback == null || !seen.add(fallback)) {
+                    errors.add("model.fallbacks must be distinct from each other and from model.model");
+                } else if (!authorizedModels.contains(fallback)) {
+                    errors.add("fallback model \"" + fallback + "\" is not in the authorized model catalog");
+                }
+            }
+        }
     }
 
     /**

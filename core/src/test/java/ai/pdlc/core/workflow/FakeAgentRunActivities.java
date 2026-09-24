@@ -10,7 +10,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 /** In-process {@link AgentRunActivities} for {@link AgentRunWorkflowImplTest}; behaviour is set per test. */
 class FakeAgentRunActivities implements AgentRunActivities {
 
-    enum Mode { SUCCEED, FAIL_ONCE_THEN_SUCCEED, ALWAYS_FAIL, REJECT, BLOCK, APPROVAL_THEN_SUCCEED, OPERATOR_THEN_SUCCEED }
+    enum Mode { SUCCEED, FAIL_ONCE_THEN_SUCCEED, ALWAYS_FAIL, REJECT, BLOCK, APPROVAL_THEN_SUCCEED, OPERATOR_THEN_SUCCEED, INPUT_THEN_SUCCEED, AUTH_REQUIRED }
 
     volatile Mode mode = Mode.SUCCEED;
     final AtomicInteger invocations = new AtomicInteger();
@@ -55,6 +55,18 @@ class FakeAgentRunActivities implements AgentRunActivities {
                     return AgentRunWorkflow.AgentRunOutcome.needsOperator(runId, "ef-1");
                 }
             }
+            case INPUT_THEN_SUCCEED -> {
+                if (attempt == 1) {
+                    events.add("input:" + runId);
+                    paused.countDown();
+                    return new AgentRunWorkflow.AgentRunOutcome(runId, AgentRunWorkflow.AWAITING_INPUT, null);
+                }
+            }
+            case AUTH_REQUIRED -> {
+                events.add("auth:" + runId);
+                paused.countDown();
+                return new AgentRunWorkflow.AgentRunOutcome(runId, AgentRunWorkflow.AWAITING_AUTH, null);
+            }
             default -> { }
         }
         events.add("succeeded:" + runId);
@@ -75,6 +87,11 @@ class FakeAgentRunActivities implements AgentRunActivities {
     public String escalateApproval(String approvalId) {
         events.add("escalated:" + approvalId);
         return approvalStatusAtEscalation;
+    }
+
+    @Override
+    public void expireInput(String runId) {
+        events.add("input-expired:" + runId);
     }
 
     @Override

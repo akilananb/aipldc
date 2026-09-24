@@ -80,7 +80,7 @@ class AgentSpecValidatorTest {
 
         assertThat(AgentSpecValidator.validate(" ", empty, MODELS)).containsExactly(
                 "name is required",
-                "runtime must be \"native\"",
+                "runtime must be \"native\" or \"a2a\"",
                 "prompt is required",
                 "model.model is required",
                 "limits.timeoutSeconds is required");
@@ -126,5 +126,35 @@ class AgentSpecValidatorTest {
                 "tool \"t1\" is listed more than once",
                 "tool \"t2\" must pin a published version",
                 "tools[].tool is required");
+    }
+
+    static AgentSpec remote(String connectionId, String skill) {
+        AgentSpec v = valid();
+        return new AgentSpec("Delegates", "a2a", "Summarise {{input}}", List.of(new AgentSpec.Variable("input", null, true)),
+                null, v.limits(), null, null, new AgentSpec.Remote(connectionId, skill));
+    }
+
+    @Test
+    void anA2aAgentNamesAConnectionAndSkillAndHasNoModelOrTools() {
+        assertThat(AgentSpecValidator.validate("Delegate", remote("partner-agent", "summarise"), MODELS)).isEmpty();
+
+        AgentSpec bad = new AgentSpec("x", "a2a", "Hi {{input}}", List.of(new AgentSpec.Variable("input", null, true)),
+                new AgentSpec.ModelBinding("sonnet", List.of()), valid().limits(), null,
+                List.of(new AgentSpec.ToolRef("t", 1)), new AgentSpec.Remote("Bad Id", " "));
+        assertThat(AgentSpecValidator.validate("Delegate", bad, MODELS)).containsExactly(
+                "remote.connectionId must name an A2A_AGENT connection",
+                "remote.skill must be a skill id from the remote agent's card",
+                "an a2a agent has no model binding; the remote agent chooses its own",
+                "an a2a agent has no tools; the remote agent uses its own");
+
+        AgentSpec nativeWithRemote = new AgentSpec(valid().description(), "native", valid().prompt(), valid().variables(),
+                valid().model(), valid().limits(), valid().outputSchema(), null, new AgentSpec.Remote("partner-agent", "s"));
+        assertThat(AgentSpecValidator.validate("L", nativeWithRemote, MODELS)).containsExactly("remote is only for runtime \"a2a\"");
+    }
+
+    @Test
+    void theRemoteFieldDoesNotChangeTheHashOfExistingVersions() {
+        assertThat(ContentHash.canonicalJson(valid())).doesNotContain("remote");
+        assertThat(ContentHash.canonicalJson(remote("partner-agent", "summarise"))).contains("\"remote\":{\"connectionId\":\"partner-agent\"");
     }
 }

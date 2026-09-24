@@ -50,4 +50,9 @@ public class TemporalRunLauncher implements RunLauncher {
     public void signalEffect(String workflowId, String effectId) {
         client.newWorkflowStub(AgentRunWorkflow.class, workflowId).effectResolved(effectId);
     }
+
+    @Override
+    public void signalInput(String workflowId, String messageId) {
+        client.newWorkflowStub(AgentRunWorkflow.class, workflowId).inputProvided(messageId);
+    }
 }

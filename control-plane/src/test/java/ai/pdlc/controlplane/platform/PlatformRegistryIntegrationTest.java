@@ -69,7 +69,7 @@ class PlatformRegistryIntegrationTest {
         connectionService = new ConnectionService(connections, models, workspaces, TestRegistries.egress(java.util.Set.of()));
         tools = new ToolRegistryService(new JdbcToolRegistryStore(jdbc), workspaces, connectionService,
                 new ai.pdlc.controlplane.sandbox.SandboxImageService(new ai.pdlc.controlplane.sandbox.JdbcSandboxImageStore(jdbc)));
-        agents = new AgentRegistryService(new JdbcAgentRegistryStore(jdbc), workspaces, models, tools);
+        agents = new AgentRegistryService(new JdbcAgentRegistryStore(jdbc), workspaces, models, tools, connectionService);
 
         workspaces.create(new WorkspaceRequest("engineering", "Engineering", List.of(ENG_ADMIN.user())), ENTERPRISE_ADMIN);
         workspaces.create(new WorkspaceRequest("finance", "Finance", List.of(FIN_ADMIN.user())), ENTERPRISE_ADMIN);
@@ -315,6 +315,39 @@ class PlatformRegistryIntegrationTest {
         images.retire("order-report", ENTERPRISE_ADMIN);
         assertThat(images.get("order-report").retiredBy()).isEqualTo("it@acme");
         assertThatThrownBy(() -> jdbc.update("UPDATE sandbox_images SET status = 'GONE'"))
+                .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+    }
+
+    @Test
+    void theV23SchemaHoldsA2aRunsTheirRemoteTaskAndOneReplyPerQuestion() {
+        AgentDefinitionDto created = agents.create("engineering",
+                new AgentDraftRequest("remote-ish", "Remote", labelSpec("R"), null), AUTHOR);
+        agents.publish("engineering", "remote-ish", created.draftRevision(), ENG_ADMIN);
+        var runs = new ai.pdlc.controlplane.runs.JdbcRunStore(jdbc);
+        java.util.UUID id = java.util.UUID.randomUUID();
+        assertThat(runs.insert(new ai.pdlc.controlplane.runs.RunStore.RunRow(id, "engineering", "remote-ish", 1, "sha256:x", null,
+                null, "gw", false, "{}", "QUEUED", null, null, null, null, null, 0, null, "agent-run-" + id, "op@acme", null, null,
+                null))).isTrue();
+        assertThat(runs.acceptInput(id, "too early", "op@acme")).isEmpty();
+
+        jdbc.update("UPDATE platform_runs SET status = 'AWAITING_INPUT' WHERE id = ?", id);
+        jdbc.update("INSERT INTO platform_remote_tasks (run_id, dialect, task_id, context_id, state, status_text) VALUES (?, '1.0', 't-1', 'c-1', 'INPUT_REQUIRED', 'Which region?')", id);
+        jdbc.update("INSERT INTO platform_run_messages (run_id, seq, kind, content_json) VALUES (?, 1, 'REMOTE_AGENT', '{\"text\":\"Which region?\"}')", id);
+        jdbc.update("INSERT INTO platform_remote_sends (run_id, message_id, state) VALUES (?, ?, 'ACKED')", id, id + ":0");
+        assertThat(runs.remote(id)).get().satisfies(r -> {
+            assertThat(r.taskId()).isEqualTo("t-1");
+            assertThat(r.statusText()).isEqualTo("Which region?");
+        });
+
+        assertThat(runs.acceptInput(id, "EMEA", "op@acme")).contains(2);
+        assertThat(runs.acceptInput(id, "APAC", "op@acme")).isEmpty();
+        assertThat(runs.find(id)).get().extracting(r -> r.status()).isEqualTo("QUEUED");
+        assertThat(jdbc.queryForObject("SELECT content_json FROM platform_run_messages WHERE run_id = ? AND seq = 2", String.class, id))
+                .contains("EMEA").contains("op@acme");
+        jdbc.update("UPDATE platform_runs SET status = 'AWAITING_AUTH' WHERE id = ?", id);
+        assertThatThrownBy(() -> jdbc.update("UPDATE platform_remote_tasks SET cancel = 'MAYBE' WHERE run_id = ?", id))
+                .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+        assertThatThrownBy(() -> jdbc.update("INSERT INTO platform_remote_sends (run_id, message_id, state) VALUES (?, 'm', 'LOST')", id))
                 .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
     }
 }

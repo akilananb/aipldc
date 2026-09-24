@@ -46,7 +46,7 @@ public final class TestRegistries {
         SandboxImageService sandboxImages = new SandboxImageService(new InMemorySandboxImageStore());
         ToolRegistryService tools = new ToolRegistryService(new InMemoryDefinitionStore(), workspaces, connections, sandboxImages);
         AgentRegistryService agents = new AgentRegistryService(new InMemoryAgentRegistryStore(), workspaces,
-                new ModelCatalog(connectionStore), tools);
+                new ModelCatalog(connectionStore), tools, connections);
         return new Registries(connections, tools, agents, sandboxImages);
     }
 

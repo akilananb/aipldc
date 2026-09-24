@@ -31,10 +31,18 @@ import java.util.Set;
  * by time. {@code NEEDS_OPERATOR} waits, without a deadline, for {@link #effectResolved}. Each
  * wait is followed by another invocation, which resumes the run's stored conversation. The loop is
  * behind a {@link Workflow#getVersion} marker so runs started before it replay unchanged.
+ *
+ * <p>Slice 2.5: an a2a invocation may pause at the remote agent's {@code input-required}
+ * ({@code AWAITING_INPUT}): it waits for {@link #inputProvided} and invokes again, which sends the
+ * reply to the same remote task; with no reply within {@link #INPUT_WAIT} the remote task is
+ * cancelled and the run fails. {@code auth-required} ({@code AWAITING_AUTH}) cannot be satisfied by
+ * the platform, so it waits until the run is cancelled. Only runs of this version ever return these
+ * statuses, so the new branches need no version marker.
  */
 public class AgentRunWorkflowImpl implements AgentRunWorkflow {
 
     static final Duration MARGIN = Duration.ofSeconds(30);
+    static final Duration INPUT_WAIT = Duration.ofDays(7);
 
     private static final ActivityOptions BOOKKEEPING = ActivityOptions.newBuilder()
             .setTaskQueue(TaskQueues.REASONING)
@@ -44,6 +52,7 @@ public class AgentRunWorkflowImpl implements AgentRunWorkflow {
 
     private final Set<String> decidedApprovals = new HashSet<>();
     private final Set<String> resolvedEffects = new HashSet<>();
+    private int pendingInputs;
 
     @Override
     public void approvalDecided(String approvalId) {
@@ -53,6 +62,11 @@ public class AgentRunWorkflowImpl implements AgentRunWorkflow {
     @Override
     public void effectResolved(String effectId) {
         resolvedEffects.add(effectId);
+    }
+
+    @Override
+    public void inputProvided(String messageId) {
+        pendingInputs++;
     }
 
     @Override
@@ -79,6 +93,15 @@ public class AgentRunWorkflowImpl implements AgentRunWorkflow {
                 } else if (NEEDS_OPERATOR.equals(outcome.status())) {
                     String effectId = outcome.effectId();
                     Workflow.await(() -> resolvedEffects.contains(effectId));
+                } else if (AWAITING_INPUT.equals(outcome.status())) {
+                    if (!Workflow.await(INPUT_WAIT, () -> pendingInputs > 0)) {
+                        bookkeeping.expireInput(input.runId());
+                        return new AgentRunOutcome(input.runId(), "FAILED",
+                                "no reply to the remote agent within " + INPUT_WAIT.toDays() + " days");
+                    }
+                    pendingInputs--;
+                } else if (AWAITING_AUTH.equals(outcome.status())) {
+                    Workflow.await(() -> false); // only a cancellation ends this wait
                 } else {
                     return outcome;
                 }

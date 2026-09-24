@@ -31,4 +31,17 @@ public interface RunStore {
 
     /** QUEUED → FAILED when the workflow could not even be started. */
     void failToStart(UUID id, String error);
+
+    /** The remote task an a2a run follows (slice 2.5), as the agents worker last recorded it. */
+    record RemoteRow(String dialect, String taskId, String contextId, String state, String statusText, String cancel) {
+    }
+
+    Optional<RemoteRow> remote(UUID runId);
+
+    /**
+     * Accepts an operator's reply to a remote agent: AWAITING_INPUT → QUEUED and the reply stored as
+     * the run's next REMOTE_USER message, atomically. Returns the message's seq, or empty when the run
+     * was not waiting for input (another reply won, or it was cancelled).
+     */
+    Optional<Integer> acceptInput(UUID runId, String text, String by);
 }

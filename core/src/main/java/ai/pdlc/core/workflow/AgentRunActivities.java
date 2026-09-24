@@ -31,4 +31,10 @@ public interface AgentRunActivities {
 
     /** PENDING → EXPIRED (never approved by time). Returns the approval's status afterwards. */
     String expireApproval(String approvalId);
+
+    /**
+     * An a2a run waited past {@link AgentRunWorkflowImpl#INPUT_WAIT} for an operator's reply: asks
+     * the remote agent to cancel its task (best effort) and fails the run.
+     */
+    void expireInput(String runId);
 }

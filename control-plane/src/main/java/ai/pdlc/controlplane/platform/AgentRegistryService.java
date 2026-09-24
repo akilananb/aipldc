@@ -1,5 +1,6 @@
 package ai.pdlc.controlplane.platform;
 
+import ai.pdlc.controlplane.connections.ConnectionService;
 import ai.pdlc.controlplane.connections.ModelCatalog;
 import ai.pdlc.controlplane.identity.Identity;
 import ai.pdlc.controlplane.platform.DefinitionStore.DefinitionRow;
@@ -47,14 +48,16 @@ public class AgentRegistryService {
     private final WorkspaceService workspaces;
     private final ModelCatalog models;
     private final ToolRegistryService tools;
+    private final ConnectionService connections;
 
     public AgentRegistryService(AgentRegistryStore store, WorkspaceService workspaces, ModelCatalog models,
-                                ToolRegistryService tools) {
+                                ToolRegistryService tools, ConnectionService connections) {
         this.registry = new VersionedDefinitions<>(store, "Agent", AgentSpec.class, ContentHash::ofAgent);
         this.store = store;
         this.workspaces = workspaces;
         this.models = models;
         this.tools = tools;
+        this.connections = connections;
     }
 
     public List<AgentDefinitionDto> list(String workspaceId, Identity identity) {
@@ -123,7 +126,9 @@ public class AgentRegistryService {
      * re-hashed so a tampered row fails loudly instead of running - and the model it will call
      * now. A disabled model or a revoked/expired connection fails here with the reason, unless the
      * agent declared an available fallback; there is no silent default model. A pinned tool that
-     * is no longer usable (retired, connection revoked or ungranted) blocks the run up front.
+     * is no longer usable (retired, connection revoked or ungranted) blocks the run up front. An
+     * {@code a2a} agent (slice 2.5) has no model: its {@code A2A_AGENT} connection must be usable by
+     * the workspace, and the run pins that connection instead.
      */
     public ResolvedAgentDto resolveForRun(String workspaceId, String id, Identity identity) {
         workspaces.require(workspaceId, identity, Capability.OPERATOR);
@@ -133,6 +138,13 @@ public class AgentRegistryService {
         }
         VersionRow version = registry.verified(registry.findVersion(workspaceId, id, row.currentVersion()));
         AgentSpec spec = registry.spec(version.specJson());
+        if (spec.isA2a()) {
+            List<String> problems = remoteProblems(workspaceId, spec);
+            if (!problems.isEmpty()) {
+                throw new ConflictException("Agent " + id + " v" + version.version() + " cannot run: " + String.join("; ", problems));
+            }
+            return new ResolvedAgentDto(toDto(version), null, null, spec.remote().connectionId(), false);
+        }
         List<String> toolProblems = tools.pinProblems(workspaceId, spec.toolsOrEmpty());
         if (!toolProblems.isEmpty()) {
             throw new ConflictException("Agent " + id + " v" + version.version() + " cannot run: "
@@ -168,10 +180,20 @@ public class AgentRegistryService {
 
     private List<String> check(String workspaceId, String name, AgentSpec spec) {
         List<String> errors = new ArrayList<>(AgentSpecValidator.validate(name, spec, models.authorizedModels()));
-        if (spec != null) {
+        if (spec != null && spec.isA2a()) {
+            errors.addAll(remoteProblems(workspaceId, spec));
+        } else if (spec != null) {
             errors.addAll(tools.pinProblems(workspaceId, spec.toolsOrEmpty()));
         }
         return errors;
+    }
+
+    /** Malformed remote bindings are the validator's to report; this checks the connection now. */
+    private List<String> remoteProblems(String workspaceId, AgentSpec spec) {
+        if (spec.remote() == null || spec.remote().connectionId() == null || spec.remote().connectionId().isBlank()) {
+            return List.of();
+        }
+        return connections.toolConnectionProblems(spec.remote().connectionId(), workspaceId, ConnectionService.A2A_AGENT);
     }
 
     private AgentDefinitionDto toDto(DefinitionRow row) {

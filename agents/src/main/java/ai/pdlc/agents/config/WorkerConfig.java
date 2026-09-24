@@ -2,10 +2,12 @@ package ai.pdlc.agents.config;
 
 import ai.pdlc.agents.activities.AgentActivitiesImpl;
 import ai.pdlc.agents.platform.AgentRunActivitiesImpl;
+import ai.pdlc.agents.platform.A2aCardActivitiesImpl;
 import ai.pdlc.agents.platform.McpDiscoveryActivitiesImpl;
 import ai.pdlc.core.workflow.AgentMentionWorkflowImpl;
 import ai.pdlc.core.workflow.AgentRunWorkflowImpl;
 import ai.pdlc.core.workflow.FeatureWorkflowImpl;
+import ai.pdlc.core.workflow.A2aCardWorkflowImpl;
 import ai.pdlc.core.workflow.McpDiscoveryWorkflowImpl;
 import ai.pdlc.core.workflow.TaskQueues;
 import io.temporal.client.WorkflowClient;
@@ -31,12 +33,13 @@ public class WorkerConfig {
     @Bean
     public WorkerFactory workerFactory(WorkflowClient client, AgentActivitiesImpl agentActivities,
                                        AgentRunActivitiesImpl agentRunActivities,
-                                       McpDiscoveryActivitiesImpl mcpDiscoveryActivities) {
+                                       McpDiscoveryActivitiesImpl mcpDiscoveryActivities,
+                                       A2aCardActivitiesImpl a2aCardActivities) {
         factory = WorkerFactory.newInstance(client);
         Worker worker = factory.newWorker(TaskQueues.REASONING);
         worker.registerWorkflowImplementationTypes(FeatureWorkflowImpl.class, AgentMentionWorkflowImpl.class,
-                AgentRunWorkflowImpl.class, McpDiscoveryWorkflowImpl.class);
-        worker.registerActivitiesImplementations(agentActivities, agentRunActivities, mcpDiscoveryActivities);
+                AgentRunWorkflowImpl.class, McpDiscoveryWorkflowImpl.class, A2aCardWorkflowImpl.class);
+        worker.registerActivitiesImplementations(agentActivities, agentRunActivities, mcpDiscoveryActivities, a2aCardActivities);
         factory.start();
         return factory;
     }

@@ -27,14 +27,29 @@ public class RunStore {
                              String contentHash, String name, String specJson, Map<String, String> inputs,
                              String model, String providerModel, Boolean modelEnabled, String connectionId,
                              String connectionStatus, OffsetDateTime connectionExpiresAt, String authType,
-                             String secretRef, String baseUrl, int attempts, long activeMs) {
+                             String secretRef, String baseUrl, int attempts, long activeMs, String connectionKind,
+                             String oauthClientId, boolean granted) {
+
+        /** Native-run shape (a model-provider connection, which is never granted per workspace). */
+        public Invocation(UUID runId, String workspaceId, String status, String agentId, int version, String contentHash,
+                          String name, String specJson, Map<String, String> inputs, String model, String providerModel,
+                          Boolean modelEnabled, String connectionId, String connectionStatus, OffsetDateTime connectionExpiresAt,
+                          String authType, String secretRef, String baseUrl, int attempts, long activeMs) {
+            this(runId, workspaceId, status, agentId, version, contentHash, name, specJson, inputs, model, providerModel,
+                    modelEnabled, connectionId, connectionStatus, connectionExpiresAt, authType, secretRef, baseUrl, attempts,
+                    activeMs, "MODEL_PROVIDER", null, false);
+        }
+    }
+
+    /** The remote task an a2a run follows (slice 2.5); {@code cancel} is what the remote agent did with a cancel. */
+    public record RemoteTask(String dialect, String taskId, String contextId, String state, String statusText, String cancel) {
     }
 
     /** One stored conversation entry (slice 2.2): {@code kind} is USER, ASSISTANT or TOOL_RESULT. */
     public record StoredMessage(int seq, String kind, String contentJson) {
     }
 
-    static final String WAITING_STATES = "'AWAITING_APPROVAL', 'NEEDS_OPERATOR'";
+    static final String WAITING_STATES = "'AWAITING_APPROVAL', 'NEEDS_OPERATOR', 'AWAITING_INPUT', 'AWAITING_AUTH'";
 
     private final JdbcTemplate jdbc;
     private final ObjectMapper mapper = new ObjectMapper();
@@ -49,7 +64,10 @@ public class RunStore {
                        r.model, r.provider_model, r.connection_id,
                        v.name, v.spec_json,
                        m.enabled AS model_enabled,
-                       c.status AS connection_status, c.expires_at, c.auth_type, c.secret_ref, c.base_url
+                       c.status AS connection_status, c.expires_at, c.auth_type, c.secret_ref, c.base_url,
+                       c.kind AS connection_kind, c.oauth_client_id,
+                       EXISTS (SELECT 1 FROM connection_grants g
+                               WHERE g.connection_id = c.id AND g.workspace_id = r.workspace_id) AS granted
                 FROM platform_runs r
                 JOIN agent_definition_versions v
                   ON v.workspace_id = r.workspace_id AND v.agent_id = r.agent_id AND v.version = r.agent_version
@@ -62,7 +80,8 @@ public class RunStore {
                 rs.getString("model"), rs.getString("provider_model"), (Boolean) rs.getObject("model_enabled"),
                 rs.getString("connection_id"), rs.getString("connection_status"),
                 rs.getObject("expires_at", OffsetDateTime.class), rs.getString("auth_type"),
-                rs.getString("secret_ref"), rs.getString("base_url"), rs.getInt("attempts"), rs.getLong("active_ms")), runId);
+                rs.getString("secret_ref"), rs.getString("base_url"), rs.getInt("attempts"), rs.getLong("active_ms"),
+                rs.getString("connection_kind"), rs.getString("oauth_client_id"), rs.getBoolean("granted")), runId);
         return rows.stream().findFirst();
     }
 
@@ -73,10 +92,10 @@ public class RunStore {
     public boolean markRunning(UUID runId) {
         return jdbc.update("""
                 UPDATE platform_runs SET status = 'RUNNING', attempts = attempts + 1, started_at = COALESCE(started_at, now())
-                WHERE id = ? AND status IN ('QUEUED', 'RUNNING', 'AWAITING_APPROVAL', 'NEEDS_OPERATOR')""", runId) == 1;
+                WHERE id = ? AND status IN ('QUEUED', 'RUNNING', """ + WAITING_STATES + ")", runId) == 1;
     }
 
-    /** RUNNING → AWAITING_APPROVAL or NEEDS_OPERATOR; false if the run left RUNNING meanwhile (e.g. cancelled). */
+    /** RUNNING → a waiting status; false if the run left RUNNING meanwhile (e.g. cancelled). */
     public boolean pause(UUID runId, String status) {
         return jdbc.update("UPDATE platform_runs SET status = ? WHERE id = ? AND status = 'RUNNING'", status, runId) == 1;
     }
@@ -127,6 +146,46 @@ public class RunStore {
     private void cancelPendingApprovals(UUID runId) {
         jdbc.update("UPDATE platform_approvals SET status = 'CANCELLED', decided_at = now() WHERE run_id = ? AND status = 'PENDING'",
                 runId);
+    }
+
+    public Optional<RemoteTask> remoteTask(UUID runId) {
+        return jdbc.query("SELECT * FROM platform_remote_tasks WHERE run_id = ?", (rs, n) -> new RemoteTask(rs.getString("dialect"),
+                rs.getString("task_id"), rs.getString("context_id"), rs.getString("state"), rs.getString("status_text"),
+                rs.getString("cancel")), runId).stream().findFirst();
+    }
+
+    /** Records the remote task as last seen; the task id, once known, is never replaced by a null. */
+    public void saveRemoteTask(UUID runId, String dialect, String taskId, String contextId, String state, String statusText) {
+        jdbc.update("""
+                INSERT INTO platform_remote_tasks (run_id, dialect, task_id, context_id, state, status_text) VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT (run_id) DO UPDATE SET dialect = EXCLUDED.dialect,
+                    task_id = COALESCE(platform_remote_tasks.task_id, EXCLUDED.task_id),
+                    context_id = COALESCE(EXCLUDED.context_id, platform_remote_tasks.context_id),
+                    state = EXCLUDED.state, status_text = EXCLUDED.status_text, updated_at = now()""",
+                runId, dialect, taskId, contextId, state, statusText);
+    }
+
+    public void setRemoteCancel(UUID runId, String cancel) {
+        jdbc.update("UPDATE platform_remote_tasks SET cancel = ?, updated_at = now() WHERE run_id = ?", cancel, runId);
+    }
+
+    /** INTENDED/SENT/ACKED, or null when this message was never recorded. */
+    public String sendState(UUID runId, String messageId) {
+        return jdbc.query("SELECT state FROM platform_remote_sends WHERE run_id = ? AND message_id = ?",
+                (rs, n) -> rs.getString("state"), runId, messageId).stream().findFirst().orElse(null);
+    }
+
+    /** Records the intent to send (idempotent) and returns the state now on record. */
+    public String intendSend(UUID runId, String messageId) {
+        jdbc.update("""
+                INSERT INTO platform_remote_sends (run_id, message_id, state) VALUES (?, ?, 'INTENDED')
+                ON CONFLICT (run_id, message_id) DO NOTHING""", runId, messageId);
+        return sendState(runId, messageId);
+    }
+
+    public void setSendState(UUID runId, String messageId, String state) {
+        jdbc.update("UPDATE platform_remote_sends SET state = ?, updated_at = now() WHERE run_id = ? AND message_id = ?",
+                state, runId, messageId);
     }
 
     /** Records the escalation of a still-pending approval; returns its status either way. */
