@@ -11,9 +11,12 @@ import ai.pdlc.controlplane.web.dto.ConnectionDto;
 import ai.pdlc.controlplane.web.dto.ConnectionRequest;
 import ai.pdlc.controlplane.web.dto.ModelDto;
 import ai.pdlc.controlplane.web.dto.ModelRequest;
+import ai.pdlc.core.platform.EgressPolicy;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.net.URI;
+import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
@@ -28,6 +31,11 @@ import java.util.regex.Pattern;
  * reference that only the execution adapter using it resolves. Control-plane deliberately does not
  * try to resolve it - the secret lives with the process that calls the provider. A revoked
  * connection is terminal; replace it with a new one rather than reviving it.
+ *
+ * <p>{@code HTTP_API} connections (Phase 2 slice 2.1) back workspace tools. Their base URL must pass
+ * the {@link EgressPolicy} when saved (the executor checks again on every call), and a workspace can
+ * use one only while the enterprise Admin's grant stands - revoking the grant or the connection
+ * denies the next tool call of a running agent.
  */
 @Service
 public class ConnectionService {
@@ -35,15 +43,21 @@ public class ConnectionService {
     static final Pattern CONNECTION_ID = Pattern.compile("^[a-z0-9][a-z0-9-]{1,39}$");
     static final Pattern MODEL_ID = Pattern.compile("^[A-Za-z0-9][A-Za-z0-9._/:-]{0,127}$");
     static final Pattern SECRET_REF = Pattern.compile("^kv://[a-z0-9][a-z0-9-]{0,63}$");
-    static final Set<String> KINDS = Set.of("MODEL_PROVIDER");
+    public static final String MODEL_PROVIDER = "MODEL_PROVIDER";
+    public static final String HTTP_API = "HTTP_API";
+    static final Set<String> KINDS = Set.of(MODEL_PROVIDER, HTTP_API);
     static final Set<String> AUTH_TYPES = Set.of("API_KEY", "NONE");
 
     private final ConnectionStore store;
     private final ModelCatalog catalog;
+    private final WorkspaceService workspaces;
+    private final EgressPolicy egress;
 
-    public ConnectionService(ConnectionStore store, ModelCatalog catalog) {
+    public ConnectionService(ConnectionStore store, ModelCatalog catalog, WorkspaceService workspaces, EgressPolicy egress) {
         this.store = store;
         this.catalog = catalog;
+        this.workspaces = workspaces;
+        this.egress = egress;
     }
 
     public List<ConnectionDto> connections(Identity identity) {
@@ -62,6 +76,7 @@ public class ConnectionService {
             errors.add("kind must be one of " + KINDS);
         }
         validateCredentials(request, errors);
+        checkEgress(request.kind(), request.baseUrl(), errors);
         throwIfAny(errors);
         ConnectionRow row = new ConnectionRow(request.id(), "ENTERPRISE", null, request.kind(), request.authType(),
                 blankToNull(request.secretRef()), request.baseUrl(), "ACTIVE", request.expiresAt(), null,
@@ -80,6 +95,7 @@ public class ConnectionService {
         List<String> errors = new ArrayList<>();
         validateCredentials(new ConnectionRequest(id, existing.kind(), existing.authType(), request.secretRef(),
                 request.baseUrl(), request.expiresAt()), errors);
+        checkEgress(existing.kind(), request.baseUrl(), errors);
         throwIfAny(errors);
         store.updateConnection(id, blankToNull(request.secretRef()), request.baseUrl(), request.expiresAt(), identity.user());
         return toDto(store.connection(id).orElseThrow());
@@ -91,6 +107,73 @@ public class ConnectionService {
         requireActive(id);
         store.revokeConnection(id, identity.user());
         return toDto(store.connection(id).orElseThrow());
+    }
+
+    /** Lets the workspace's tools use an active HTTP_API connection (enterprise Admin). */
+    @Transactional
+    public List<String> grant(String id, String workspaceId, Identity identity) {
+        requireEnterpriseAdmin(identity);
+        ConnectionRow row = requireActive(id);
+        if (!HTTP_API.equals(row.kind())) {
+            throw new IllegalArgumentException("Only " + HTTP_API + " connections are granted to workspaces");
+        }
+        if (!workspaces.exists(workspaceId)) {
+            throw new NotFoundException("No workspace " + workspaceId);
+        }
+        store.grant(id, workspaceId, identity.user());
+        return store.grantedWorkspaces(id);
+    }
+
+    /** Takes effect on the next tool call: the executor re-checks the grant before every call. */
+    @Transactional
+    public List<String> revokeGrant(String id, String workspaceId, Identity identity) {
+        requireEnterpriseAdmin(identity);
+        store.connection(id).orElseThrow(() -> new NotFoundException("No connection " + id));
+        if (!store.revokeGrant(id, workspaceId)) {
+            throw new NotFoundException("Connection " + id + " is not granted to " + workspaceId);
+        }
+        return store.grantedWorkspaces(id);
+    }
+
+    public List<String> grants(String id, Identity identity) {
+        requireEnterpriseAdmin(identity);
+        store.connection(id).orElseThrow(() -> new NotFoundException("No connection " + id));
+        return store.grantedWorkspaces(id);
+    }
+
+    /** The HTTP_API connections a workspace's tool authors may bind (members only; no secret refs). */
+    public List<ConnectionDto> workspaceConnections(String workspaceId, Identity identity) {
+        workspaces.requireMember(workspaceId, identity);
+        return store.grantedTo(workspaceId).stream()
+                .map(r -> new ConnectionDto(r.id(), r.scope(), r.workspaceId(), r.kind(), r.authType(), null, r.baseUrl(),
+                        r.status(), r.expiresAt(), r.createdAt(), r.createdBy(), r.updatedAt(), r.updatedBy(),
+                        r.revokedAt(), r.revokedBy()))
+                .toList();
+    }
+
+    /**
+     * Why a workspace's tool cannot use {@code connectionId} right now (empty = usable): it must be
+     * an active, unexpired HTTP_API connection granted to the workspace. Used at tool publication
+     * and whenever an agent pinning the tool is published or started.
+     */
+    public List<String> toolConnectionProblems(String connectionId, String workspaceId) {
+        ConnectionRow row = store.connection(connectionId).orElse(null);
+        if (row == null) {
+            return List.of("connection " + connectionId + " does not exist");
+        }
+        List<String> problems = new ArrayList<>();
+        if (!HTTP_API.equals(row.kind())) {
+            problems.add("connection " + connectionId + " is not an " + HTTP_API + " connection");
+        }
+        if (!"ACTIVE".equals(row.status())) {
+            problems.add("connection " + connectionId + " is revoked");
+        } else if (row.expiresAt() != null && !row.expiresAt().isAfter(OffsetDateTime.now())) {
+            problems.add("connection " + connectionId + " expired at " + row.expiresAt());
+        }
+        if (!store.granted(connectionId, workspaceId)) {
+            problems.add("connection " + connectionId + " is not granted to workspace " + workspaceId);
+        }
+        return problems;
     }
 
     public List<ModelDto> models() {
@@ -155,6 +238,27 @@ public class ConnectionService {
         }
         if (request.baseUrl() == null || !(request.baseUrl().startsWith("https://") || request.baseUrl().startsWith("http://"))) {
             errors.add("baseUrl must start with http:// or https://");
+        }
+    }
+
+    private void checkEgress(String kind, String baseUrl, List<String> errors) {
+        if (!HTTP_API.equals(kind) || baseUrl == null || !errors.isEmpty()) {
+            return;
+        }
+        URI uri;
+        try {
+            uri = URI.create(baseUrl);
+        } catch (IllegalArgumentException e) {
+            errors.add("baseUrl is not a valid URL");
+            return;
+        }
+        if (uri.getRawQuery() != null || uri.getRawFragment() != null) {
+            errors.add("baseUrl must not have a query or fragment");
+            return;
+        }
+        EgressPolicy.Decision decision = egress.check(uri);
+        if (!decision.allowed()) {
+            errors.add("baseUrl is not an allowed destination: " + decision.reason());
         }
     }
 

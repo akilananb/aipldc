@@ -10,6 +10,7 @@ import ai.pdlc.controlplane.web.NotFoundException;
 import ai.pdlc.controlplane.web.ServiceUnavailableException;
 import ai.pdlc.controlplane.web.dto.ResolvedAgentDto;
 import ai.pdlc.controlplane.web.dto.RunDto;
+import ai.pdlc.controlplane.web.dto.ToolCallDto;
 import ai.pdlc.controlplane.web.dto.StartRunRequest;
 import ai.pdlc.core.platform.AgentInputs;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -87,6 +88,12 @@ public class RunService {
     public RunDto get(String workspaceId, String runId, Identity identity) {
         workspaces.requireMember(workspaceId, identity);
         return toDto(find(workspaceId, runId));
+    }
+
+    /** The run's tool-call trace (members): decisions and outcomes, never credentials or response bodies. */
+    public List<ToolCallDto> toolCalls(String workspaceId, String runId, Identity identity) {
+        workspaces.requireMember(workspaceId, identity);
+        return store.toolCalls(find(workspaceId, runId).id());
     }
 
     public List<RunDto> list(String workspaceId, String agentId, Identity identity) {

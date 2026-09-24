@@ -34,8 +34,7 @@ class PdlcImportSeederTest {
     private final InMemoryWorkspaceStore workspaceStore = new InMemoryWorkspaceStore();
     private final InMemoryConnectionStore connections = InMemoryConnectionStore.withModels("default-gateway", "sonnet");
     private final WorkspaceService workspaces = new WorkspaceService(workspaceStore);
-    private final AgentRegistryService registry =
-            new AgentRegistryService(new InMemoryAgentRegistryStore(), workspaces, new ModelCatalog(connections));
+    private final AgentRegistryService registry = TestRegistries.over(workspaces, connections).agents();
     private final ProjectDirectory projects = mock(ProjectDirectory.class);
 
     private PdlcImportSeeder seeder(String promptsDir, String admins) {

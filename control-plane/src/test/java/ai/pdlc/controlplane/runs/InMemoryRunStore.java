@@ -54,4 +54,11 @@ class InMemoryRunStore implements RunStore {
                 error, r.promptTokens(), r.completionTokens(), r.attempts(), r.idempotencyKey(), r.workflowId(),
                 r.createdBy(), r.createdAt(), r.startedAt(), OffsetDateTime.now()));
     }
+
+    final java.util.Map<UUID, List<ai.pdlc.controlplane.web.dto.ToolCallDto>> toolCalls = new java.util.HashMap<>();
+
+    @Override
+    public List<ai.pdlc.controlplane.web.dto.ToolCallDto> toolCalls(UUID runId) {
+        return toolCalls.getOrDefault(runId, List.of());
+    }
 }

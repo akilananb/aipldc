@@ -17,6 +17,7 @@ public class InMemoryConnectionStore implements ConnectionStore {
     private final Map<String, ConnectionRow> connections = new TreeMap<>();
     private final Map<String, ModelRow> models = new TreeMap<>();
     private final Map<String, String> imports = new TreeMap<>();
+    private final Set<String> grants = new java.util.TreeSet<>();
 
     /** An active API-key connection {@code connectionId} serving the given enabled models. */
     public static InMemoryConnectionStore withModels(String connectionId, String... modelIds) {
@@ -95,5 +96,31 @@ public class InMemoryConnectionStore implements ConnectionStore {
 
     public Map<String, String> imports() {
         return imports;
+    }
+
+    @Override
+    public boolean grant(String connectionId, String workspaceId, String grantedBy) {
+        return grants.add(connectionId + "|" + workspaceId);
+    }
+
+    @Override
+    public boolean revokeGrant(String connectionId, String workspaceId) {
+        return grants.remove(connectionId + "|" + workspaceId);
+    }
+
+    @Override
+    public boolean granted(String connectionId, String workspaceId) {
+        return grants.contains(connectionId + "|" + workspaceId);
+    }
+
+    @Override
+    public List<String> grantedWorkspaces(String connectionId) {
+        return grants.stream().filter(g -> g.startsWith(connectionId + "|")).map(g -> g.substring(connectionId.length() + 1)).toList();
+    }
+
+    @Override
+    public List<ConnectionRow> grantedTo(String workspaceId) {
+        return grants.stream().filter(g -> g.endsWith("|" + workspaceId)).map(g -> connections.get(g.substring(0, g.indexOf('|'))))
+                .toList();
     }
 }

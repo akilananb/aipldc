@@ -1,5 +1,6 @@
 package ai.pdlc.controlplane.platform;
 
+import ai.pdlc.controlplane.connections.ConnectionService;
 import ai.pdlc.controlplane.connections.ConnectionStore;
 import ai.pdlc.controlplane.connections.JdbcConnectionStore;
 import ai.pdlc.controlplane.connections.ModelCatalog;
@@ -29,8 +30,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Docker-dependent (Testcontainers Postgres + real Flyway migrations, see AGENTS.md's
- * Docker-unavailable exclusion list): {@link JdbcWorkspaceStore} and {@link JdbcAgentRegistryStore}
- * against the real {@code V15} schema, driven through the services. Like {@code BuildTaskLeaseTest},
+ * Docker-unavailable exclusion list): {@link JdbcWorkspaceStore}, the JDBC definition stores,
+ * connections/grants and runs against the real schema, driven through the services. Like {@code BuildTaskLeaseTest},
  * no Spring context is booted.
  */
 @Testcontainers
@@ -47,6 +48,8 @@ class PlatformRegistryIntegrationTest {
     static WorkspaceService workspaces;
     static AgentRegistryService agents;
     static JdbcConnectionStore connections;
+    static ConnectionService connectionService;
+    static ToolRegistryService tools;
 
     @BeforeAll
     static void migrate() {
@@ -63,7 +66,9 @@ class PlatformRegistryIntegrationTest {
                 true, null, "it@acme"));
         ModelCatalog models = new ModelCatalog(connections);
         workspaces = new WorkspaceService(new JdbcWorkspaceStore(jdbc));
-        agents = new AgentRegistryService(new JdbcAgentRegistryStore(jdbc), workspaces, models);
+        connectionService = new ConnectionService(connections, models, workspaces, TestRegistries.egress(java.util.Set.of()));
+        tools = new ToolRegistryService(new JdbcToolRegistryStore(jdbc), workspaces, connectionService);
+        agents = new AgentRegistryService(new JdbcAgentRegistryStore(jdbc), workspaces, models, tools);
 
         workspaces.create(new WorkspaceRequest("engineering", "Engineering", List.of(ENG_ADMIN.user())), ENTERPRISE_ADMIN);
         workspaces.create(new WorkspaceRequest("finance", "Finance", List.of(FIN_ADMIN.user())), ENTERPRISE_ADMIN);
@@ -181,5 +186,57 @@ class PlatformRegistryIntegrationTest {
         assertThat(store.projects("engineering")).extracting(WorkspaceStore.LinkedProject::id).containsExactly("proj-a");
         assertThat(workspaces.projects("engineering", OPERATOR)).hasSize(1);
         assertThatThrownBy(() -> workspaces.projects("engineering", FIN_ADMIN)).isInstanceOf(NotFoundException.class);
+    }
+
+    @Test
+    void toolsPublishOnlyOverGrantedConnectionsAndAgentPinsFollowTheGrant() {
+        connectionService.createConnection(new ai.pdlc.controlplane.web.dto.ConnectionRequest("orders-api", "HTTP_API",
+                "API_KEY", "kv://orders-key", "https://api.example/v1", null), ENTERPRISE_ADMIN);
+        ai.pdlc.core.platform.ToolSpec spec = new ai.pdlc.core.platform.ToolSpec("Look up an order", "http", "orders-api",
+                "GET", "/orders/{orderId}", java.util.Map.of("type", "object",
+                        "properties", java.util.Map.of("orderId", java.util.Map.of("type", "string")),
+                        "required", List.of("orderId")), "READ", 10, 4096);
+        var tool = tools.create("engineering", new ai.pdlc.controlplane.web.dto.ToolDraftRequest("get-order", "Get order",
+                spec, null), AUTHOR);
+
+        assertThatThrownBy(() -> tools.publish("engineering", "get-order", tool.draftRevision(), ENG_ADMIN))
+                .hasMessageContaining("not granted to workspace engineering");
+        assertThat(connectionService.grant("orders-api", "engineering", ENTERPRISE_ADMIN)).containsExactly("engineering");
+        var v1 = tools.publish("engineering", "get-order", tool.draftRevision(), ENG_ADMIN);
+        assertThat(v1.contentHash()).startsWith("sha256:");
+        assertThat(connectionService.workspaceConnections("engineering", OPERATOR))
+                .singleElement().satisfies(c -> assertThat(c.secretRef()).isNull());
+
+        var base = labelSpec("T");
+        var withTool = new ai.pdlc.core.platform.AgentSpec(base.description(), base.runtime(), base.prompt(), base.variables(),
+                base.model(), base.limits(), base.outputSchema(), List.of(new ai.pdlc.core.platform.AgentSpec.ToolRef("get-order", 1)));
+        var agent = agents.create("engineering", new AgentDraftRequest("order-bot", "Order bot", withTool, null), AUTHOR);
+        agents.publish("engineering", "order-bot", agent.draftRevision(), ENG_ADMIN);
+        assertThat(agents.resolveForRun("engineering", "order-bot", OPERATOR).definition().spec().toolsOrEmpty()).hasSize(1);
+
+        connectionService.revokeGrant("orders-api", "engineering", ENTERPRISE_ADMIN);
+        assertThatThrownBy(() -> agents.resolveForRun("engineering", "order-bot", OPERATOR))
+                .isInstanceOf(ConflictException.class)
+                .hasMessageContaining("get-order v1: connection orders-api is not granted to workspace engineering");
+    }
+
+    @Test
+    void theToolCallTraceIsReadInCallOrder() {
+        AgentDefinitionDto created = agents.create("engineering",
+                new AgentDraftRequest("traced", "Traced", labelSpec("X"), null), AUTHOR);
+        agents.publish("engineering", "traced", created.draftRevision(), ENG_ADMIN);
+        var runs = new ai.pdlc.controlplane.runs.JdbcRunStore(jdbc);
+        java.util.UUID id = java.util.UUID.randomUUID();
+        runs.insert(new ai.pdlc.controlplane.runs.RunStore.RunRow(id, "engineering", "traced", 1, "sha256:x", "sonnet",
+                "p", "gw", false, "{}", "QUEUED", null, null, null, null, null, 0, null, "wf-" + id, "op@acme", null, null, null));
+        jdbc.update("""
+                INSERT INTO platform_tool_calls (run_id, attempt, turn, call_id, tool_id, tool_version, args_json, args_hash,
+                    decision, reason, http_status, duration_ms, response_bytes, truncated)
+                VALUES (?, 1, 1, 'c1', 'get-order', 1, '{}', 'sha256:a', 'ALLOWED', null, 200, 12, 40, false),
+                       (?, 1, 2, 'c2', 'cancel-order', 1, '{}', 'sha256:b', 'DENIED', 'requires approval', null, null, null, false)""",
+                id, id);
+
+        assertThat(runs.toolCalls(id)).extracting(c -> c.toolId() + ":" + c.decision() + ":" + c.httpStatus())
+                .containsExactly("get-order:ALLOWED:200", "cancel-order:DENIED:null");
     }
 }
