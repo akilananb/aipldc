@@ -111,4 +111,20 @@ class AgentSpecValidatorTest {
         AgentSpec v = valid();
         return new AgentSpec(v.description(), v.runtime(), prompt, v.variables(), v.model(), v.limits(), v.outputSchema());
     }
+
+    @Test
+    void checksToolPinsAndLoopLimitsStructurally() {
+        AgentSpec v = valid();
+        AgentSpec spec = new AgentSpec(v.description(), v.runtime(), v.prompt(), v.variables(), v.model(),
+                new AgentSpec.Limits(2_000, 60, 0, 65), v.outputSchema(),
+                List.of(new AgentSpec.ToolRef("t1", 1), new AgentSpec.ToolRef("t1", 2),
+                        new AgentSpec.ToolRef("t2", null), new AgentSpec.ToolRef(" ", 1)));
+
+        assertThat(AgentSpecValidator.validate("Labeler", spec, MODELS)).containsExactly(
+                "limits.maxModelTurns must be between 1 and 32",
+                "limits.maxToolCalls must be between 1 and 64",
+                "tool \"t1\" is listed more than once",
+                "tool \"t2\" must pin a published version",
+                "tools[].tool is required");
+    }
 }
