@@ -2,6 +2,8 @@ package ai.pdlc.agents.platform;
 
 import ai.pdlc.agents.platform.ToolStore.CallRecord;
 import ai.pdlc.agents.platform.ToolStore.PinnedTool;
+import ai.pdlc.adapters.mcp.McpException;
+import ai.pdlc.adapters.mcp.McpHttpClient;
 import ai.pdlc.core.platform.ContentHash;
 import ai.pdlc.core.platform.EgressPolicy;
 import ai.pdlc.core.platform.ToolArgs;
@@ -94,18 +96,20 @@ public class ToolExecutor {
     private final ToolStore tools;
     private final SecretsPort secrets;
     private final EgressPolicy egress;
+    private final McpToolCaller mcp;
     private final HttpClient http;
     private final Clock clock;
 
     @Autowired
-    public ToolExecutor(ToolStore tools, SecretsPort secrets, EgressPolicy egress) {
-        this(tools, secrets, egress, Clock.systemUTC());
+    public ToolExecutor(ToolStore tools, SecretsPort secrets, EgressPolicy egress, McpToolCaller mcp) {
+        this(tools, secrets, egress, mcp, Clock.systemUTC());
     }
 
-    ToolExecutor(ToolStore tools, SecretsPort secrets, EgressPolicy egress, Clock clock) {
+    ToolExecutor(ToolStore tools, SecretsPort secrets, EgressPolicy egress, McpToolCaller mcp, Clock clock) {
         this.tools = tools;
         this.secrets = secrets;
         this.egress = egress;
+        this.mcp = mcp;
         this.clock = clock;
         this.http = HttpClient.newBuilder()
                 .followRedirects(HttpClient.Redirect.NEVER)
@@ -135,13 +139,13 @@ public class ToolExecutor {
         if (!args.valid()) {
             return deny(ctx, call, version, args, "invalid arguments: " + String.join("; ", args.errors()));
         }
-        String connectionProblem = connectionProblem(tool);
+        String connectionProblem = connectionProblem(tool, spec);
         if (connectionProblem != null) {
             return deny(ctx, call, version, args, connectionProblem);
         }
         URI uri;
         try {
-            uri = buildUri(tool.baseUrl(), spec, args.args());
+            uri = spec.isMcp() ? URI.create(tool.baseUrl()) : buildUri(tool.baseUrl(), spec, args.args());
         } catch (IllegalArgumentException e) {
             return deny(ctx, call, version, args, e.getMessage());
         }
@@ -168,6 +172,9 @@ public class ToolExecutor {
         if (timeout.isNegative() || timeout.isZero()) {
             return deny(ctx, call, version, args, "the run deadline has passed");
         }
+        if (spec.isMcp()) {
+            return mcp(ctx, call, version, args, spec, tool, timeout, approval);
+        }
         String secret = null;
         if ("API_KEY".equals(tool.authType())) {
             try {
@@ -183,6 +190,87 @@ public class ToolExecutor {
         return approval == null
                 ? send(ctx, call, version, args, spec, uri, timeout, secret)
                 : write(ctx, call, version, args, spec, uri, timeout, secret, approval);
+    }
+
+    /**
+     * An MCP tool call (slice 2.3), after every policy check above has passed. The server's current
+     * definition is compared with the reviewed one first - a changed or removed tool is refused
+     * without being called. A WRITE records its effect intent before {@code tools/call}; MCP has no
+     * idempotency key, so an outcome that may have happened always waits for an operator.
+     */
+    private Outcome mcp(Context ctx, ModelInvoker.ToolCall call, int version, ToolArgs.Parsed args, ToolSpec spec,
+                        PinnedTool tool, Duration timeout, ToolStore.Approval approval) {
+        long started = System.nanoTime();
+        String key = ctx.runId() + ":" + ctx.turn() + ":" + call.id();
+        if (approval != null) {
+            ToolStore.Effect known = tools.effect(key).orElse(null);
+            if (known != null && ("SUCCEEDED".equals(known.state()) || "FAILED".equals(known.state()))) {
+                return replayed(ctx, call, version, args, known);
+            }
+            if (known != null && ("SENT".equals(known.state()) || "UNKNOWN".equals(known.state()))) {
+                return needsOperator(ctx, call, version, args, known);
+            }
+        }
+        McpToolCaller.Session session;
+        try {
+            session = mcp.open(tool.connection(), timeout, spec.maxResponseBytes());
+            String drift = mcp.driftProblem(session, ctx.runId() + "|" + ctx.attempt() + "|" + tool.connectionId(), spec);
+            if (drift != null) {
+                return deny(ctx, call, version, args, drift);
+            }
+        } catch (IllegalStateException | McpException e) {
+            return failed(ctx, call, version, args, started, e.getMessage());
+        }
+        if (approval == null) {
+            try {
+                McpHttpClient.CallResult result = session.session().callTool(spec.mcpTool(), args.args());
+                return mcpResult(ctx, call, version, args, spec, session, result, started, null);
+            } catch (McpException e) {
+                return failed(ctx, call, version, args, started, e.getMessage());
+            }
+        }
+        ToolStore.Effect effect = tools.intend(ctx.runId(), approval.id(), call.name(), version, args.hash(), key);
+        if (!"INTENDED".equals(effect.state())) {
+            // Another attempt got here between our read and the insert: never send twice.
+            return needsOperator(ctx, call, version, args, effect);
+        }
+        tools.markSent(effect.id());
+        try {
+            McpHttpClient.CallResult result = session.session().callTool(spec.mcpTool(), args.args());
+            return mcpResult(ctx, call, version, args, spec, session, result, started, effect);
+        } catch (McpException e) {
+            if (e.maybeSent()) {
+                tools.markUnknown(effect.id());
+                tools.record(new CallRecord(ctx.runId(), ctx.attempt(), ctx.turn(), call.id(), call.name(), version,
+                        args.args().toString(), args.hash(), ALLOWED, null, null, elapsed(started), null, false,
+                        e.getMessage() + "; outcome unknown"));
+                return new Outcome(false, null, new Pause(NEEDS_OPERATOR, effect.id(), 0, 0));
+            }
+            String content = JSON.createObjectNode().put("error", e.getMessage()).toString();
+            tools.finish(effect.id(), "FAILED", null, content);
+            return failed(ctx, call, version, args, started, e.getMessage());
+        }
+    }
+
+    private Outcome mcpResult(Context ctx, ModelInvoker.ToolCall call, int version, ToolArgs.Parsed args, ToolSpec spec,
+                              McpToolCaller.Session session, McpHttpClient.CallResult result, long started, ToolStore.Effect effect) {
+        String text = redact(result.text(), session.secretToRedact());
+        boolean truncated = result.truncated() || text.length() > spec.maxResponseBytes();
+        if (text.length() > spec.maxResponseBytes()) {
+            text = text.substring(0, spec.maxResponseBytes());
+        }
+        String content = JSON.createObjectNode().put("isError", result.isError()).put("truncated", truncated)
+                .put("content", text).toString();
+        if (effect != null) {
+            tools.finish(effect.id(), result.isError() ? "FAILED" : "SUCCEEDED", null, content);
+        }
+        long millis = elapsed(started);
+        tools.record(new CallRecord(ctx.runId(), ctx.attempt(), ctx.turn(), call.id(), call.name(), version,
+                args.args().toString(), args.hash(), ALLOWED, effect == null ? null : "approved (" + effect.id() + ")", null, millis,
+                (long) text.length(), truncated, result.isError() ? "the MCP tool reported an error" : null));
+        log.info("Run {} turn {}: mcp tool {} v{} ({}) -> {} in {} ms", ctx.runId(), ctx.turn(), call.name(), version,
+                spec.mcpTool(), result.isError() ? "error" : "ok", millis);
+        return new Outcome(true, content);
     }
 
     /** Creates (or re-reads) the call's approval and pauses the run on it; nothing is sent. */
@@ -231,14 +319,7 @@ public class ToolExecutor {
         ToolStore.Effect effect = tools.intend(ctx.runId(), approval.id(), call.name(), version, args.hash(), key);
         switch (effect.state()) {
             case "SUCCEEDED", "FAILED" -> {
-                String content = effect.resultContent() != null ? effect.resultContent()
-                        : JSON.createObjectNode().put("outcome", effect.state())
-                                .put("note", "recorded by operator " + effect.resolvedBy()
-                                        + (effect.note() == null ? "" : ": " + effect.note())).toString();
-                tools.record(new CallRecord(ctx.runId(), ctx.attempt(), ctx.turn(), call.id(), call.name(), version,
-                        args.args().toString(), args.hash(), ALLOWED, null, effect.httpStatus(), null, null, false,
-                        "effect already " + effect.state().toLowerCase() + "; not resent"));
-                return new Outcome(true, content);
+                return replayed(ctx, call, version, args, effect);
             }
             case "SENT", "UNKNOWN" -> {
                 if (!spec.idempotentByHeader()) {
@@ -278,6 +359,18 @@ public class ToolExecutor {
                 // The target dedups on the key, so resending the same request once is safe.
             }
         }
+    }
+
+    /** A write whose outcome is already known is reported again, never resent. */
+    private Outcome replayed(Context ctx, ModelInvoker.ToolCall call, int version, ToolArgs.Parsed args, ToolStore.Effect effect) {
+        String content = effect.resultContent() != null ? effect.resultContent()
+                : JSON.createObjectNode().put("outcome", effect.state())
+                        .put("note", "recorded by operator " + effect.resolvedBy()
+                                + (effect.note() == null ? "" : ": " + effect.note())).toString();
+        tools.record(new CallRecord(ctx.runId(), ctx.attempt(), ctx.turn(), call.id(), call.name(), version,
+                args.args().toString(), args.hash(), ALLOWED, null, effect.httpStatus(), null, null, false,
+                "effect already " + effect.state().toLowerCase() + "; not resent"));
+        return new Outcome(true, content);
     }
 
     private Outcome needsOperator(Context ctx, ModelInvoker.ToolCall call, int version, ToolArgs.Parsed args,
@@ -368,12 +461,13 @@ public class ToolExecutor {
         return new Outcome(false, JSON.createObjectNode().put("error", "denied by policy: " + reason).toString());
     }
 
-    private String connectionProblem(PinnedTool tool) {
+    private String connectionProblem(PinnedTool tool, ToolSpec spec) {
         if (tool.connectionId() == null) {
             return "the tool's connection no longer exists";
         }
-        if (!"HTTP_API".equals(tool.connectionKind())) {
-            return "connection " + tool.connectionId() + " is not an HTTP_API connection";
+        String kind = spec.isMcp() ? "MCP_SERVER" : "HTTP_API";
+        if (!kind.equals(tool.connectionKind())) {
+            return "connection " + tool.connectionId() + " is not an " + kind + " connection";
         }
         if (!"ACTIVE".equals(tool.connectionStatus())) {
             return "connection " + tool.connectionId() + " is revoked";

@@ -20,7 +20,24 @@ public class ToolStore {
     public record PinnedTool(String workspaceId, String toolId, int version, String name, String specJson,
                              String contentHash, String toolStatus, String connectionId, String connectionKind,
                              String connectionStatus, OffsetDateTime connectionExpiresAt, String authType,
-                             String secretRef, String baseUrl, boolean granted) {
+                             String secretRef, String baseUrl, boolean granted, String oauthClientId) {
+
+        public PinnedTool(String workspaceId, String toolId, int version, String name, String specJson, String contentHash,
+                          String toolStatus, String connectionId, String connectionKind, String connectionStatus,
+                          OffsetDateTime connectionExpiresAt, String authType, String secretRef, String baseUrl,
+                          boolean granted) {
+            this(workspaceId, toolId, version, name, specJson, contentHash, toolStatus, connectionId, connectionKind,
+                    connectionStatus, connectionExpiresAt, authType, secretRef, baseUrl, granted, null);
+        }
+
+        McpCredentials.Connection connection() {
+            return new McpCredentials.Connection(connectionId, authType, secretRef, baseUrl, oauthClientId);
+        }
+    }
+
+    /** A connection as the MCP discovery activity needs it (no grant: control-plane checked it before starting). */
+    public record ConnectionInfo(String id, String kind, String status, OffsetDateTime expiresAt, String authType,
+                                 String secretRef, String baseUrl, String oauthClientId) {
     }
 
     /** One trace row; {@code decision} is ALLOWED or DENIED. Never holds credentials or response bodies. */
@@ -49,7 +66,7 @@ public class ToolStore {
         return jdbc.query("""
                 SELECT v.workspace_id, v.tool_id, v.version, v.name, v.spec_json, v.content_hash, d.status,
                        c.id AS connection_id, c.kind, c.status AS connection_status, c.expires_at, c.auth_type,
-                       c.secret_ref, c.base_url,
+                       c.secret_ref, c.base_url, c.oauth_client_id,
                        EXISTS (SELECT 1 FROM connection_grants g
                                WHERE g.connection_id = c.id AND g.workspace_id = v.workspace_id) AS granted
                 FROM tool_definition_versions v
@@ -60,7 +77,8 @@ public class ToolStore {
                 rs.getString("spec_json"), rs.getString("content_hash"), rs.getString("status"),
                 rs.getString("connection_id"), rs.getString("kind"), rs.getString("connection_status"),
                 rs.getObject("expires_at", OffsetDateTime.class), rs.getString("auth_type"), rs.getString("secret_ref"),
-                rs.getString("base_url"), rs.getBoolean("granted")), workspaceId, toolId, version).stream().findFirst();
+                rs.getString("base_url"), rs.getBoolean("granted"), rs.getString("oauth_client_id")), workspaceId, toolId, version)
+                .stream().findFirst();
     }
 
     public void record(CallRecord r) {
@@ -70,6 +88,13 @@ public class ToolStore {
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 r.runId(), r.attempt(), r.turn(), r.callId(), r.toolId(), r.toolVersion(), r.argsJson(), r.argsHash(),
                 r.decision(), r.reason(), r.httpStatus(), r.durationMs(), r.responseBytes(), r.truncated(), r.error());
+    }
+
+    public Optional<ConnectionInfo> connection(String connectionId) {
+        return jdbc.query("SELECT * FROM connections WHERE id = ?", (rs, n) -> new ConnectionInfo(rs.getString("id"),
+                rs.getString("kind"), rs.getString("status"), rs.getObject("expires_at", OffsetDateTime.class),
+                rs.getString("auth_type"), rs.getString("secret_ref"), rs.getString("base_url"), rs.getString("oauth_client_id")),
+                connectionId).stream().findFirst();
     }
 
     public Optional<Approval> approval(UUID runId, int turn, String callId) {

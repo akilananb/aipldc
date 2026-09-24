@@ -45,8 +45,13 @@ public class ConnectionService {
     static final Pattern SECRET_REF = Pattern.compile("^kv://[a-z0-9][a-z0-9-]{0,63}$");
     public static final String MODEL_PROVIDER = "MODEL_PROVIDER";
     public static final String HTTP_API = "HTTP_API";
-    static final Set<String> KINDS = Set.of(MODEL_PROVIDER, HTTP_API);
-    static final Set<String> AUTH_TYPES = Set.of("API_KEY", "NONE");
+    public static final String MCP_SERVER = "MCP_SERVER";
+    public static final String OAUTH_CLIENT_CREDENTIALS = "OAUTH_CLIENT_CREDENTIALS";
+    static final Set<String> KINDS = Set.of(MODEL_PROVIDER, HTTP_API, MCP_SERVER);
+    /** Kinds whose base URL tools call, so it must pass the egress policy and can be granted to workspaces. */
+    static final Set<String> TOOL_KINDS = Set.of(HTTP_API, MCP_SERVER);
+    static final Set<String> AUTH_TYPES = Set.of("API_KEY", "NONE", OAUTH_CLIENT_CREDENTIALS);
+    static final Pattern OAUTH_CLIENT_ID = Pattern.compile("^[A-Za-z0-9._:@/-]{1,200}$");
 
     private final ConnectionStore store;
     private final ModelCatalog catalog;
@@ -80,7 +85,7 @@ public class ConnectionService {
         throwIfAny(errors);
         ConnectionRow row = new ConnectionRow(request.id(), "ENTERPRISE", null, request.kind(), request.authType(),
                 blankToNull(request.secretRef()), request.baseUrl(), "ACTIVE", request.expiresAt(), null,
-                identity.user(), null, identity.user(), null, null);
+                identity.user(), null, identity.user(), null, null, blankToNull(request.oauthClientId()));
         if (!store.insertConnection(row)) {
             throw new ConflictException("Connection " + request.id() + " already exists");
         }
@@ -93,11 +98,14 @@ public class ConnectionService {
         requireEnterpriseAdmin(identity);
         ConnectionRow existing = requireActive(id);
         List<String> errors = new ArrayList<>();
+        String clientId = OAUTH_CLIENT_CREDENTIALS.equals(existing.authType()) && blank(request.oauthClientId())
+                ? existing.oauthClientId() : request.oauthClientId();
         validateCredentials(new ConnectionRequest(id, existing.kind(), existing.authType(), request.secretRef(),
-                request.baseUrl(), request.expiresAt()), errors);
+                request.baseUrl(), request.expiresAt(), clientId), errors);
         checkEgress(existing.kind(), request.baseUrl(), errors);
         throwIfAny(errors);
         store.updateConnection(id, blankToNull(request.secretRef()), request.baseUrl(), request.expiresAt(), identity.user());
+        store.setOAuthClientId(id, blankToNull(clientId));
         return toDto(store.connection(id).orElseThrow());
     }
 
@@ -114,8 +122,8 @@ public class ConnectionService {
     public List<String> grant(String id, String workspaceId, Identity identity) {
         requireEnterpriseAdmin(identity);
         ConnectionRow row = requireActive(id);
-        if (!HTTP_API.equals(row.kind())) {
-            throw new IllegalArgumentException("Only " + HTTP_API + " connections are granted to workspaces");
+        if (!TOOL_KINDS.contains(row.kind())) {
+            throw new IllegalArgumentException("Only " + TOOL_KINDS + " connections are granted to workspaces");
         }
         if (!workspaces.exists(workspaceId)) {
             throw new NotFoundException("No workspace " + workspaceId);
@@ -141,29 +149,30 @@ public class ConnectionService {
         return store.grantedWorkspaces(id);
     }
 
-    /** The HTTP_API connections a workspace's tool authors may bind (members only; no secret refs). */
+    /** The HTTP_API and MCP_SERVER connections a workspace's tool authors may bind (members only; no secret refs). */
     public List<ConnectionDto> workspaceConnections(String workspaceId, Identity identity) {
         workspaces.requireMember(workspaceId, identity);
         return store.grantedTo(workspaceId).stream()
                 .map(r -> new ConnectionDto(r.id(), r.scope(), r.workspaceId(), r.kind(), r.authType(), null, r.baseUrl(),
                         r.status(), r.expiresAt(), r.createdAt(), r.createdBy(), r.updatedAt(), r.updatedBy(),
-                        r.revokedAt(), r.revokedBy()))
+                        r.revokedAt(), r.revokedBy(), r.oauthClientId()))
                 .toList();
     }
 
     /**
      * Why a workspace's tool cannot use {@code connectionId} right now (empty = usable): it must be
-     * an active, unexpired HTTP_API connection granted to the workspace. Used at tool publication
-     * and whenever an agent pinning the tool is published or started.
+     * an active, unexpired connection of {@code requiredKind} (HTTP_API for http tools, MCP_SERVER
+     * for mcp tools) granted to the workspace. Used at tool publication, at MCP discovery, and
+     * whenever an agent pinning the tool is published or started.
      */
-    public List<String> toolConnectionProblems(String connectionId, String workspaceId) {
+    public List<String> toolConnectionProblems(String connectionId, String workspaceId, String requiredKind) {
         ConnectionRow row = store.connection(connectionId).orElse(null);
         if (row == null) {
             return List.of("connection " + connectionId + " does not exist");
         }
         List<String> problems = new ArrayList<>();
-        if (!HTTP_API.equals(row.kind())) {
-            problems.add("connection " + connectionId + " is not an " + HTTP_API + " connection");
+        if (!requiredKind.equals(row.kind())) {
+            problems.add("connection " + connectionId + " is not an " + requiredKind + " connection");
         }
         if (!"ACTIVE".equals(row.status())) {
             problems.add("connection " + connectionId + " is revoked");
@@ -227,6 +236,16 @@ public class ConnectionService {
     }
 
     private static void validateCredentials(ConnectionRequest request, List<String> errors) {
+        boolean oauth = OAUTH_CLIENT_CREDENTIALS.equals(request.authType());
+        if (oauth && !MCP_SERVER.equals(request.kind())) {
+            errors.add("authType " + OAUTH_CLIENT_CREDENTIALS + " is only supported for " + MCP_SERVER + " connections");
+        }
+        if (oauth && (request.oauthClientId() == null || !OAUTH_CLIENT_ID.matcher(request.oauthClientId()).matches())) {
+            errors.add("oauthClientId must match " + OAUTH_CLIENT_ID.pattern());
+        }
+        if (!oauth && !blank(request.oauthClientId())) {
+            errors.add("oauthClientId applies only to authType " + OAUTH_CLIENT_CREDENTIALS);
+        }
         if (!AUTH_TYPES.contains(request.authType())) {
             errors.add("authType must be one of " + AUTH_TYPES);
         } else if ("NONE".equals(request.authType())) {
@@ -242,7 +261,7 @@ public class ConnectionService {
     }
 
     private void checkEgress(String kind, String baseUrl, List<String> errors) {
-        if (!HTTP_API.equals(kind) || baseUrl == null || !errors.isEmpty()) {
+        if (!TOOL_KINDS.contains(kind) || baseUrl == null || !errors.isEmpty()) {
             return;
         }
         URI uri;
@@ -297,6 +316,6 @@ public class ConnectionService {
     static ConnectionDto toDto(ConnectionRow r) {
         return new ConnectionDto(r.id(), r.scope(), r.workspaceId(), r.kind(), r.authType(), r.secretRef(), r.baseUrl(),
                 r.status(), r.expiresAt(), r.createdAt(), r.createdBy(), r.updatedAt(), r.updatedBy(), r.revokedAt(),
-                r.revokedBy());
+                r.revokedBy(), r.oauthClientId());
     }
 }

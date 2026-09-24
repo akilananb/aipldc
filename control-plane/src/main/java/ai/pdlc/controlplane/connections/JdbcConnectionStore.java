@@ -17,7 +17,7 @@ public class JdbcConnectionStore implements ConnectionStore {
             rs.getString("auth_type"), rs.getString("secret_ref"), rs.getString("base_url"), rs.getString("status"),
             rs.getObject("expires_at", OffsetDateTime.class), rs.getObject("created_at", OffsetDateTime.class),
             rs.getString("created_by"), rs.getObject("updated_at", OffsetDateTime.class), rs.getString("updated_by"),
-            rs.getObject("revoked_at", OffsetDateTime.class), rs.getString("revoked_by"));
+            rs.getObject("revoked_at", OffsetDateTime.class), rs.getString("revoked_by"), rs.getString("oauth_client_id"));
 
     private static final RowMapper<ModelRow> MODEL = (rs, n) -> new ModelRow(
             rs.getString("id"), rs.getString("connection_id"), rs.getString("provider_model"),
@@ -45,10 +45,10 @@ public class JdbcConnectionStore implements ConnectionStore {
         try {
             jdbc.update("""
                     INSERT INTO connections (id, scope, workspace_id, kind, auth_type, secret_ref, base_url, expires_at,
-                                             created_by, updated_by)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                             created_by, updated_by, oauth_client_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     r.id(), r.scope(), r.workspaceId(), r.kind(), r.authType(), r.secretRef(), r.baseUrl(),
-                    r.expiresAt(), r.createdBy(), r.createdBy());
+                    r.expiresAt(), r.createdBy(), r.createdBy(), r.oauthClientId());
             return true;
         } catch (DuplicateKeyException e) {
             return false;
@@ -60,6 +60,11 @@ public class JdbcConnectionStore implements ConnectionStore {
         jdbc.update("""
                 UPDATE connections SET secret_ref = ?, base_url = ?, expires_at = ?, updated_at = now(), updated_by = ?
                 WHERE id = ?""", secretRef, baseUrl, expiresAt, updatedBy, id);
+    }
+
+    @Override
+    public void setOAuthClientId(String id, String oauthClientId) {
+        jdbc.update("UPDATE connections SET oauth_client_id = ? WHERE id = ?", oauthClientId, id);
     }
 
     @Override

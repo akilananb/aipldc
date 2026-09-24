@@ -106,10 +106,13 @@ class AgentSpringWiringTest {
     @Test
     void springContainerConstructsThePlatformRunner() {
         try (AnnotationConfigApplicationContext ctx = new AnnotationConfigApplicationContext()) {
-            ctx.register(TestBeans.class, OpenAiCompatibleModelInvoker.class, ToolExecutor.class, AgentRunActivitiesImpl.class);
+            ctx.register(TestBeans.class, OpenAiCompatibleModelInvoker.class, ai.pdlc.agents.platform.McpCredentials.class,
+                    ai.pdlc.agents.platform.McpToolCaller.class, ToolExecutor.class, AgentRunActivitiesImpl.class,
+                    ai.pdlc.agents.platform.McpDiscoveryActivitiesImpl.class);
             ctx.refresh();
 
             assertThat(ctx.getBean(AgentRunActivitiesImpl.class)).isNotNull();
+            assertThat(ctx.getBean(ai.pdlc.agents.platform.McpDiscoveryActivitiesImpl.class)).isNotNull();
         }
     }
 

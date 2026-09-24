@@ -156,11 +156,11 @@ class ConnectionServiceTest {
         assertThatThrownBy(() -> service.grant("orders-api", "nope", ADMIN)).isInstanceOf(NotFoundException.class);
 
         assertThat(service.grant("orders-api", "engineering", ADMIN)).containsExactly("engineering");
-        assertThat(service.toolConnectionProblems("orders-api", "engineering")).isEmpty();
+        assertThat(service.toolConnectionProblems("orders-api", "engineering", "HTTP_API")).isEmpty();
         assertThat(service.workspaceConnections("engineering", LEAD)).extracting(ConnectionDto::id).containsExactly("orders-api");
         assertThat(service.revokeGrant("orders-api", "engineering", ADMIN)).isEmpty();
         assertThatThrownBy(() -> service.revokeGrant("orders-api", "engineering", ADMIN)).isInstanceOf(NotFoundException.class);
-        assertThat(service.toolConnectionProblems("orders-api", "engineering"))
+        assertThat(service.toolConnectionProblems("orders-api", "engineering", "HTTP_API"))
                 .containsExactly("connection orders-api is not granted to workspace engineering");
     }
 
@@ -171,7 +171,31 @@ class ConnectionServiceTest {
                 java.time.OffsetDateTime.now().minusMinutes(1)), ADMIN);
         service.grant("orders-api", "engineering", ADMIN);
 
-        assertThat(service.toolConnectionProblems("orders-api", "engineering")).singleElement()
+        assertThat(service.toolConnectionProblems("orders-api", "engineering", "HTTP_API")).singleElement()
                 .asString().startsWith("connection orders-api expired at");
+    }
+
+    @Test
+    void mcpServersTakeABearerOrOAuthClientCredentialsAndPassTheEgressPolicy() {
+        var oauth = service.createConnection(new ConnectionRequest("orders-mcp", "MCP_SERVER", "OAUTH_CLIENT_CREDENTIALS",
+                "kv://orders-mcp-secret", "https://api.example/mcp", null, "platform-client"), ADMIN);
+        assertThat(oauth.oauthClientId()).isEqualTo("platform-client");
+        assertThat(oauth.secretRef()).isEqualTo("kv://orders-mcp-secret");
+
+        assertThatThrownBy(() -> service.createConnection(new ConnectionRequest("m2", "MCP_SERVER", "OAUTH_CLIENT_CREDENTIALS",
+                "kv://x", "https://api.example/mcp", null, null), ADMIN)).hasMessageContaining("oauthClientId must match");
+        assertThatThrownBy(() -> service.createConnection(new ConnectionRequest("m3", "HTTP_API", "OAUTH_CLIENT_CREDENTIALS",
+                "kv://x", "https://api.example/v1", null, "c"), ADMIN))
+                .hasMessageContaining("only supported for MCP_SERVER connections");
+        assertThatThrownBy(() -> service.createConnection(new ConnectionRequest("m4", "MCP_SERVER", "API_KEY",
+                "kv://x", "https://api.example/mcp", null, "stray-client"), ADMIN))
+                .hasMessageContaining("oauthClientId applies only to authType OAUTH_CLIENT_CREDENTIALS");
+        assertThatThrownBy(() -> service.createConnection(new ConnectionRequest("m5", "MCP_SERVER", "NONE", null,
+                "http://169.254.169.254/mcp", null), ADMIN)).hasMessageContaining("link-local / metadata");
+
+        var rotated = service.updateConnection("orders-mcp", new ConnectionRequest(null, null, null, "kv://orders-mcp-secret-2",
+                "https://api.example/mcp", null), ADMIN);
+        assertThat(rotated.oauthClientId()).isEqualTo("platform-client");
+        assertThat(rotated.secretRef()).isEqualTo("kv://orders-mcp-secret-2");
     }
 }
