@@ -140,4 +140,29 @@ class PlatformRegistryIntegrationTest {
         assertThat(connections.recordImport("test-import", "x")).isTrue();
         assertThat(connections.recordImport("test-import", "x")).isFalse();
     }
+
+    @Test
+    void theJdbcRunStorePinsAndGuardsRuns() {
+        AgentDefinitionDto created = agents.create("engineering",
+                new AgentDraftRequest("runnable", "Runnable", labelSpec("R"), null), AUTHOR);
+        agents.publish("engineering", "runnable", created.draftRevision(), ENG_ADMIN);
+        var runs = new ai.pdlc.controlplane.runs.JdbcRunStore(jdbc);
+        java.util.UUID id = java.util.UUID.randomUUID();
+        var row = new ai.pdlc.controlplane.runs.RunStore.RunRow(id, "engineering", "runnable", 1, "sha256:x", "sonnet",
+                "anthropic/claude-sonnet-4", "gw", false, "{\"input\":\"x\"}", "QUEUED", null, null, null, null, null,
+                0, "key-1", "agent-run-" + id, "op@acme", null, null, null);
+
+        assertThat(runs.insert(row)).isTrue();
+        assertThat(runs.insert(new ai.pdlc.controlplane.runs.RunStore.RunRow(java.util.UUID.randomUUID(), "engineering",
+                "runnable", 1, "sha256:x", "sonnet", "p", "gw", false, "{}", "QUEUED", null, null, null, null, null, 0,
+                "key-1", "wf", "op@acme", null, null, null))).isFalse();
+        assertThat(runs.findByIdempotencyKey("engineering", "key-1")).get().extracting(r -> r.id()).isEqualTo(id);
+        assertThat(runs.find(id)).get().satisfies(r -> {
+            assertThat(r.status()).isEqualTo("QUEUED");
+            assertThat(r.createdAt()).isNotNull();
+        });
+        runs.failToStart(id, "no temporal");
+        assertThat(runs.find(id)).get().extracting(r -> r.status()).isEqualTo("FAILED");
+        assertThat(runs.list("engineering", "runnable", 10)).hasSize(1);
+    }
 }

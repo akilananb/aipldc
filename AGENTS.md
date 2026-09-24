@@ -87,6 +87,7 @@ and shows the draft → a PO/SquadLead approves via `POST .../approve-agent-resu
 | `control-plane/src/main/java/ai/pdlc/controlplane/review/` | `ReviewTrailService`, `CommentReanchorer`, `AgentMentions` |
 | `control-plane/src/main/java/ai/pdlc/controlplane/platform/` + `core/.../platform/` | Configurable agent platform (docs/phase-1-execution-spec.md): workspaces, capabilities, versioned `AgentSpec` registry, `ContentHash` |
 | `control-plane/src/main/java/ai/pdlc/controlplane/connections/` | Connections (secret *references* only) and the DB-backed `ModelCatalog`, seeded once from `pdlc.yaml` by `ModelCatalogSeeder` |
+| `control-plane/.../runs/` + `agents/.../platform/` + `core/.../workflow/AgentRunWorkflow*` | Durable single-agent runs: `RunService` pins version+model on a `platform_runs` row and starts `AgentRunWorkflow`; the agents-side `AgentRunActivitiesImpl` renders, calls the model at runtime (`OpenAiCompatibleModelInvoker`) and records the outcome |
 | `control-plane/src/main/resources/db/migration/` | Flyway `V1__schema.sql` … `V6__agent_mention_columns.sql` |
 | `agents/src/main/java/ai/pdlc/agents/{grill,po,plan,review,release,monitor,mention}/` | Per-domain LLM agent components |
 | `agents/src/main/java/ai/pdlc/agents/activities/` | `AgentActivitiesImpl`, `AgentContext` (best-effort reads), `RunRecorder` |
@@ -190,7 +191,7 @@ scripts/e2e-demo-phase4.sh   # + release pack -> gate 3 -> deploy -> monitor
 - **Registering a new Temporal workflow type:** one line in
   `agents/src/main/java/ai/pdlc/agents/config/WorkerConfig.java`:
   `worker.registerWorkflowImplementationTypes(FeatureWorkflowImpl.class,
-  AgentMentionWorkflowImpl.class)`.
+  AgentMentionWorkflowImpl.class, AgentRunWorkflowImpl.class)`.
 - **Naming:** `*Controller` (REST), `*Entity`+`*Repository` (Spring Data JDBC pair), `*Dto`
   (wire records under `web/dto/`), `*Impl` (interface implementation), `*Config` (Spring
   `@Configuration`), `*Agent` (LLM caller under `agents/`), `Fake*` (in-process Temporal test
