@@ -108,9 +108,11 @@ class AgentSpringWiringTest {
         try (AnnotationConfigApplicationContext ctx = new AnnotationConfigApplicationContext()) {
             ctx.register(TestBeans.class, OpenAiCompatibleModelInvoker.class, ai.pdlc.agents.platform.McpCredentials.class,
                     ai.pdlc.agents.platform.McpToolCaller.class, ToolExecutor.class, AgentRunActivitiesImpl.class,
-                    ai.pdlc.agents.platform.McpDiscoveryActivitiesImpl.class);
+                    ai.pdlc.agents.platform.McpDiscoveryActivitiesImpl.class, ai.pdlc.agents.config.SandboxConfig.class);
             ctx.refresh();
 
+            // Sandbox tools default to off: every call is refused (no isolation runtime).
+            assertThat(ctx.getBean(ai.pdlc.agents.platform.SandboxToolRunner.class).isolation()).isNull();
             assertThat(ctx.getBean(AgentRunActivitiesImpl.class)).isNotNull();
             assertThat(ctx.getBean(ai.pdlc.agents.platform.McpDiscoveryActivitiesImpl.class)).isNotNull();
         }

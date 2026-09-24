@@ -1,9 +1,12 @@
 package ai.pdlc.agents.platform;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
+import java.io.IOException;
 import java.time.OffsetDateTime;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -15,6 +18,8 @@ import java.util.UUID;
  */
 @Repository
 public class ToolStore {
+
+    private static final ObjectMapper HOSTS = new ObjectMapper();
 
     /** {@code connection*} fields are null when the connection row is gone. */
     public record PinnedTool(String workspaceId, String toolId, int version, String name, String specJson,
@@ -58,6 +63,11 @@ public class ToolStore {
 
     private final JdbcTemplate jdbc;
 
+    /** A sandbox catalog entry (slice 2.4) as the executor re-reads it at call time. */
+    public record SandboxImage(String id, String imageRef, String status, String inputSchemaJson, String outputSchemaJson,
+                               String egressHostsJson, int cpuMillis, int memoryMb, int timeoutSeconds) {
+    }
+
     public ToolStore(JdbcTemplate jdbc) {
         this.jdbc = jdbc;
     }
@@ -88,6 +98,13 @@ public class ToolStore {
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 r.runId(), r.attempt(), r.turn(), r.callId(), r.toolId(), r.toolVersion(), r.argsJson(), r.argsHash(),
                 r.decision(), r.reason(), r.httpStatus(), r.durationMs(), r.responseBytes(), r.truncated(), r.error());
+    }
+
+    public Optional<SandboxImage> sandboxImage(String id) {
+        return jdbc.query("SELECT * FROM sandbox_images WHERE id = ?", (rs, n) -> new SandboxImage(rs.getString("id"),
+                rs.getString("image_ref"), rs.getString("status"), rs.getString("input_schema_json"),
+                rs.getString("output_schema_json"), rs.getString("egress_hosts_json"), rs.getInt("cpu_millis"),
+                rs.getInt("memory_mb"), rs.getInt("timeout_seconds")), id).stream().findFirst();
     }
 
     public Optional<ConnectionInfo> connection(String connectionId) {
@@ -146,5 +163,13 @@ public class ToolStore {
     public void markUnknown(UUID effectId) {
         jdbc.update("UPDATE platform_effects SET state = 'UNKNOWN', updated_at = now() WHERE id = ? AND state = 'SENT'",
                 effectId);
+    }
+
+    static List<String> readHosts(String json) {
+        try {
+            return json == null ? List.of() : List.of(HOSTS.readValue(json, String[].class));
+        } catch (IOException e) {
+            return List.of();
+        }
     }
 }

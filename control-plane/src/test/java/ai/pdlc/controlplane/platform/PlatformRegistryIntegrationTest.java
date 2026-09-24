@@ -67,7 +67,8 @@ class PlatformRegistryIntegrationTest {
         ModelCatalog models = new ModelCatalog(connections);
         workspaces = new WorkspaceService(new JdbcWorkspaceStore(jdbc));
         connectionService = new ConnectionService(connections, models, workspaces, TestRegistries.egress(java.util.Set.of()));
-        tools = new ToolRegistryService(new JdbcToolRegistryStore(jdbc), workspaces, connectionService);
+        tools = new ToolRegistryService(new JdbcToolRegistryStore(jdbc), workspaces, connectionService,
+                new ai.pdlc.controlplane.sandbox.SandboxImageService(new ai.pdlc.controlplane.sandbox.JdbcSandboxImageStore(jdbc)));
         agents = new AgentRegistryService(new JdbcAgentRegistryStore(jdbc), workspaces, models, tools);
 
         workspaces.create(new WorkspaceRequest("engineering", "Engineering", List.of(ENG_ADMIN.user())), ENTERPRISE_ADMIN);
@@ -280,6 +281,40 @@ class PlatformRegistryIntegrationTest {
             assertThat(e.resolution()).isEqualTo("RETRY");
         });
         assertThatThrownBy(() -> jdbc.update("UPDATE platform_runs SET status = 'PAUSED' WHERE id = ?", run))
+                .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+    }
+
+    @Test
+    void theV22SandboxCatalogRoundTripsAndGuardsSandboxTools() {
+        var images = new ai.pdlc.controlplane.sandbox.SandboxImageService(new ai.pdlc.controlplane.sandbox.JdbcSandboxImageStore(jdbc));
+        String refV1 = "registry.acme/tools/order-report@sha256:" + "a".repeat(64);
+        java.util.Map<String, Object> input = java.util.Map.of("type", "object",
+                "properties", java.util.Map.of("orderId", java.util.Map.of("type", "string")));
+        var request = new ai.pdlc.controlplane.web.dto.SandboxImageRequest("order-report", refV1, "Builds a report", input, null,
+                List.of("api.example"), 500, 256, 60);
+        images.create(request, ENTERPRISE_ADMIN);
+        assertThat(images.get("order-report")).satisfies(i -> {
+            assertThat(i.inputSchema()).isEqualTo(input);
+            assertThat(i.outputSchema()).isNull();
+            assertThat(i.egressHosts()).containsExactly("api.example");
+            assertThat(i.createdBy()).isEqualTo("it@acme");
+        });
+        workspaces.setMember("engineering", "author@acme", java.util.EnumSet.of(Capability.AUTHOR), ENG_ADMIN);
+        Identity author = new Identity("author@acme", "FSDeveloper");
+        ai.pdlc.core.platform.ToolSpec spec = new ai.pdlc.core.platform.ToolSpec("Report", "sandbox", null, null, null, input,
+                "READ", 30, 4096, null, null, null, null, "order-report", refV1);
+        var created = tools.create("engineering", new ai.pdlc.controlplane.web.dto.ToolDraftRequest("report", "Report", spec, null),
+                author);
+        assertThat(tools.publish("engineering", "report", created.draftRevision(), ENG_ADMIN).version()).isEqualTo(1);
+
+        images.update("order-report", new ai.pdlc.controlplane.web.dto.SandboxImageRequest(null,
+                "registry.acme/tools/order-report@sha256:" + "b".repeat(64), "Builds a report", input, null, List.of(),
+                500, 256, 60), ENTERPRISE_ADMIN);
+        assertThat(tools.pinProblems("engineering", List.of(new ai.pdlc.core.platform.AgentSpec.ToolRef("report", 1))))
+                .singleElement().asString().contains("needs re-review");
+        images.retire("order-report", ENTERPRISE_ADMIN);
+        assertThat(images.get("order-report").retiredBy()).isEqualTo("it@acme");
+        assertThatThrownBy(() -> jdbc.update("UPDATE sandbox_images SET status = 'GONE'"))
                 .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
     }
 }

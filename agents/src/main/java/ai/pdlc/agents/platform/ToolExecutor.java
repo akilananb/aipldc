@@ -6,6 +6,7 @@ import ai.pdlc.adapters.mcp.McpException;
 import ai.pdlc.adapters.mcp.McpHttpClient;
 import ai.pdlc.core.platform.ContentHash;
 import ai.pdlc.core.platform.EgressPolicy;
+import ai.pdlc.core.platform.OutputSchema;
 import ai.pdlc.core.platform.ToolArgs;
 import ai.pdlc.core.platform.ToolSpec;
 import ai.pdlc.core.platform.ToolSpecValidator;
@@ -31,6 +32,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.StringJoiner;
@@ -59,9 +61,16 @@ import java.util.UUID;
  * </ol>
  * A denial is returned to the model as an error result; it does not fail the run.
  *
- * <p>Known gap, closed by slice 2.4's egress proxy: the HTTP client resolves the host again when
- * it connects, so a name whose DNS answer changes between the check and the connect (rebinding)
- * is not pinned to the checked addresses.
+ * <p>A {@code kind: sandbox} tool (slice 2.4) has no connection: instead its enterprise catalog
+ * entry must still be active and carry the reviewed image reference, and a sandbox isolation
+ * runtime must be configured. The image then runs through {@link SandboxToolRunner} with the
+ * validated arguments as input, the image's limits, and network only through the egress proxy to
+ * the image's approved hosts.
+ *
+ * <p>Known gap for {@code http} tools: the HTTP client resolves the host again when it connects,
+ * so a name whose DNS answer changes between the check and the connect (rebinding) is not pinned
+ * to the checked addresses. Sandbox egress goes through the proxy, which connects to the address
+ * it checked.
  */
 @Component
 public class ToolExecutor {
@@ -97,24 +106,38 @@ public class ToolExecutor {
     private final SecretsPort secrets;
     private final EgressPolicy egress;
     private final McpToolCaller mcp;
+    private final SandboxToolRunner sandbox;
     private final HttpClient http;
     private final Clock clock;
 
     @Autowired
-    public ToolExecutor(ToolStore tools, SecretsPort secrets, EgressPolicy egress, McpToolCaller mcp) {
-        this(tools, secrets, egress, mcp, Clock.systemUTC());
+    public ToolExecutor(ToolStore tools, SecretsPort secrets, EgressPolicy egress, McpToolCaller mcp, SandboxToolRunner sandbox) {
+        this(tools, secrets, egress, mcp, sandbox, Clock.systemUTC());
     }
 
     ToolExecutor(ToolStore tools, SecretsPort secrets, EgressPolicy egress, McpToolCaller mcp, Clock clock) {
+        this(tools, secrets, egress, mcp, null, clock);
+    }
+
+    ToolExecutor(ToolStore tools, SecretsPort secrets, EgressPolicy egress, McpToolCaller mcp, SandboxToolRunner sandbox,
+                 Clock clock) {
         this.tools = tools;
         this.secrets = secrets;
         this.egress = egress;
         this.mcp = mcp;
+        this.sandbox = sandbox;
         this.clock = clock;
         this.http = HttpClient.newBuilder()
                 .followRedirects(HttpClient.Redirect.NEVER)
                 .connectTimeout(Duration.ofSeconds(10))
                 .build();
+    }
+
+    /** Cancellation (slice 2.4): revokes the run's sandbox egress credentials and kills its sandbox calls. */
+    public void cancelRun(String runId) {
+        if (sandbox != null) {
+            sandbox.terminateRun(runId);
+        }
     }
 
     /** @param pinned the agent version's tool pins: tool id → version */
@@ -139,19 +162,28 @@ public class ToolExecutor {
         if (!args.valid()) {
             return deny(ctx, call, version, args, "invalid arguments: " + String.join("; ", args.errors()));
         }
-        String connectionProblem = connectionProblem(tool, spec);
-        if (connectionProblem != null) {
-            return deny(ctx, call, version, args, connectionProblem);
-        }
-        URI uri;
-        try {
-            uri = spec.isMcp() ? URI.create(tool.baseUrl()) : buildUri(tool.baseUrl(), spec, args.args());
-        } catch (IllegalArgumentException e) {
-            return deny(ctx, call, version, args, e.getMessage());
-        }
-        EgressPolicy.Decision destination = egress.check(uri);
-        if (!destination.allowed()) {
-            return deny(ctx, call, version, args, "destination not allowed: " + destination.reason());
+        URI uri = null;
+        ToolStore.SandboxImage image = null;
+        if (spec.isSandbox()) {
+            image = tools.sandboxImage(spec.sandboxImage()).orElse(null);
+            String problem = sandboxProblem(spec, image);
+            if (problem != null) {
+                return deny(ctx, call, version, args, problem);
+            }
+        } else {
+            String connectionProblem = connectionProblem(tool, spec);
+            if (connectionProblem != null) {
+                return deny(ctx, call, version, args, connectionProblem);
+            }
+            try {
+                uri = spec.isMcp() ? URI.create(tool.baseUrl()) : buildUri(tool.baseUrl(), spec, args.args());
+            } catch (IllegalArgumentException e) {
+                return deny(ctx, call, version, args, e.getMessage());
+            }
+            EgressPolicy.Decision destination = egress.check(uri);
+            if (!destination.allowed()) {
+                return deny(ctx, call, version, args, "destination not allowed: " + destination.reason());
+            }
         }
         ToolStore.Approval approval = null;
         if (ToolSpec.WRITE.equals(spec.effect())) {
@@ -171,6 +203,12 @@ public class ToolExecutor {
         }
         if (timeout.isNegative() || timeout.isZero()) {
             return deny(ctx, call, version, args, "the run deadline has passed");
+        }
+        if (spec.isSandbox()) {
+            if (timeout.compareTo(Duration.ofSeconds(image.timeoutSeconds())) > 0) {
+                timeout = Duration.ofSeconds(image.timeoutSeconds());
+            }
+            return sandbox(ctx, call, version, args, spec, image, timeout, approval);
         }
         if (spec.isMcp()) {
             return mcp(ctx, call, version, args, spec, tool, timeout, approval);
@@ -272,6 +310,138 @@ public class ToolExecutor {
         log.info("Run {} turn {}: mcp tool {} v{} ({}) -> {} in {} ms", ctx.runId(), ctx.turn(), call.name(), version,
                 spec.mcpTool(), result.isError() ? "error" : "ok", millis);
         return new Outcome(true, content);
+    }
+
+    /** Why a sandbox tool may not run now (null = it may): its catalog entry and an isolation runtime. */
+    private String sandboxProblem(ToolSpec spec, ToolStore.SandboxImage image) {
+        if (image == null) {
+            return "sandbox image " + spec.sandboxImage() + " is not in the enterprise catalog";
+        }
+        if (!"ACTIVE".equals(image.status())) {
+            return "sandbox image " + spec.sandboxImage() + " is retired";
+        }
+        if (!image.imageRef().equals(spec.sandboxImageRef())) {
+            return "sandbox image " + spec.sandboxImage() + " changed since the tool was reviewed; it needs re-review";
+        }
+        try {
+            if (!JSON.readValue(image.inputSchemaJson(), Map.class).equals(spec.inputSchema())) {
+                return "sandbox image " + spec.sandboxImage() + " declares a different input schema now; the tool needs re-review";
+            }
+        } catch (IOException e) {
+            return "sandbox image " + spec.sandboxImage() + " has an unreadable input schema";
+        }
+        if (sandbox == null || sandbox.isolation() == null) {
+            return "no sandbox isolation runtime is configured; untrusted packages are refused";
+        }
+        return null;
+    }
+
+    /**
+     * A sandbox tool call (slice 2.4), after every policy check above has passed. The package gets
+     * the validated arguments as {@code PDLC_INPUT} and must print one JSON value matching the
+     * image's declared output schema. A WRITE records its effect intent first; a package has no
+     * idempotency key, so one that may have run (timeout, infrastructure error) waits for an operator.
+     */
+    private Outcome sandbox(Context ctx, ModelInvoker.ToolCall call, int version, ToolArgs.Parsed args, ToolSpec spec,
+                            ToolStore.SandboxImage image, Duration timeout, ToolStore.Approval approval) {
+        String key = ctx.runId() + ":" + ctx.turn() + ":" + call.id();
+        ToolStore.Effect effect = null;
+        if (approval != null) {
+            ToolStore.Effect known = tools.effect(key).orElse(null);
+            if (known != null && ("SUCCEEDED".equals(known.state()) || "FAILED".equals(known.state()))) {
+                return replayed(ctx, call, version, args, known);
+            }
+            if (known != null && ("SENT".equals(known.state()) || "UNKNOWN".equals(known.state()))) {
+                return needsOperator(ctx, call, version, args, known);
+            }
+            effect = tools.intend(ctx.runId(), approval.id(), call.name(), version, args.hash(), key);
+            if (!"INTENDED".equals(effect.state())) {
+                return needsOperator(ctx, call, version, args, effect);
+            }
+            tools.markSent(effect.id());
+        }
+        long started = System.nanoTime();
+        SandboxToolRunner.Run run;
+        try {
+            run = sandbox.run(ctx.runId().toString(), ctx.workspaceId(), key, image, args.args().toString(), timeout,
+                    spec.maxResponseBytes());
+        } catch (IllegalStateException e) {
+            if (effect != null) {
+                tools.finish(effect.id(), "FAILED", null, JSON.createObjectNode().put("error", e.getMessage()).toString());
+            }
+            return failed(ctx, call, version, args, started, e.getMessage());
+        }
+        String egressSummary = SandboxToolRunner.summary(run.egress());
+        String approved = approval == null ? null : "approved (" + approval.id() + ")";
+        String reason = approved == null ? egressSummary : egressSummary == null ? approved : approved + "; " + egressSummary;
+        if (run.result().timedOut() || run.result().error() != null) {
+            String error = run.result().timedOut() ? "timed out after " + timeout.toSeconds() + "s; the sandbox was killed"
+                    : run.result().error();
+            if (effect != null) {
+                tools.markUnknown(effect.id());
+                tools.record(new CallRecord(ctx.runId(), ctx.attempt(), ctx.turn(), call.id(), call.name(), version,
+                        args.args().toString(), args.hash(), ALLOWED, reason, null, elapsed(started), null, false,
+                        error + "; outcome unknown"));
+                return new Outcome(false, null, new Pause(NEEDS_OPERATOR, effect.id(), 0, 0));
+            }
+            tools.record(new CallRecord(ctx.runId(), ctx.attempt(), ctx.turn(), call.id(), call.name(), version,
+                    args.args().toString(), args.hash(), ALLOWED, reason, null, elapsed(started), null, false, error));
+            log.info("Run {} turn {}: sandbox tool {} v{} failed: {}", ctx.runId(), ctx.turn(), call.name(), version, error);
+            return new Outcome(true, JSON.createObjectNode().put("error", error).toString());
+        }
+        SandboxOutput output = output(run, image);
+        if (effect != null) {
+            tools.finish(effect.id(), output.error() == null ? "SUCCEEDED" : "FAILED", null, output.content().toString());
+        }
+        long millis = elapsed(started);
+        tools.record(new CallRecord(ctx.runId(), ctx.attempt(), ctx.turn(), call.id(), call.name(), version,
+                args.args().toString(), args.hash(), ALLOWED, reason, null, millis, (long) output.bytes(),
+                run.result().truncated(), output.error()));
+        log.info("Run {} turn {}: sandbox tool {} v{} ({}) -> exit {} in {} ms", ctx.runId(), ctx.turn(), call.name(), version,
+                image.id(), run.result().exitCode(), millis);
+        return new Outcome(true, output.content().toString());
+    }
+
+    /** The package's result as the model sees it; {@code error} non-null when it failed or broke its output contract. */
+    private record SandboxOutput(ObjectNode content, int bytes, String error) {
+    }
+
+    private static SandboxOutput output(SandboxToolRunner.Run run, ToolStore.SandboxImage image) {
+        String stdout = redact(run.result().stdout(), run.tokenToRedact());
+        int exit = run.result().exitCode();
+        ObjectNode content = JSON.createObjectNode().put("exitCode", exit).put("truncated", run.result().truncated());
+        String error = null;
+        if (exit != 0) {
+            error = "the package exited with code " + exit;
+        } else if (run.result().truncated()) {
+            error = "the package's output exceeded maxResponseBytes";
+        } else {
+            JsonNode value = null;
+            try {
+                value = JSON.readTree(stdout);
+            } catch (IOException e) {
+                error = "the package's output is not JSON";
+            }
+            if (value != null && image.outputSchemaJson() != null) {
+                try {
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> schema = JSON.readValue(image.outputSchemaJson(), Map.class);
+                    List<String> problems = OutputSchema.validate(schema, value);
+                    if (!problems.isEmpty()) {
+                        error = "the package's output does not match the image's output schema: " + String.join("; ", problems);
+                    }
+                } catch (IOException e) {
+                    error = "the image's output schema is unreadable";
+                }
+            }
+            if (error == null) {
+                content.set("output", value);
+            }
+        }
+        if (error != null) {
+            content.put("error", error).put("stdout", stdout);
+        }
+        return new SandboxOutput(content, stdout.length(), error);
     }
 
     /** Creates (or re-reads) the call's approval and pauses the run on it; nothing is sent. */

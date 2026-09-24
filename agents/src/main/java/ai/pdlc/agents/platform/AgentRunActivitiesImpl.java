@@ -376,6 +376,8 @@ public class AgentRunActivitiesImpl implements AgentRunActivities {
     @Override
     public void markCancelled(String runId) {
         runs.cancel(UUID.fromString(runId));
+        // Sandbox calls still running for this run lose their egress credentials and are killed.
+        executor.cancelRun(runId);
     }
 
     @Override
