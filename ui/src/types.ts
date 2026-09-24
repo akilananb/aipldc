@@ -304,3 +304,101 @@ export interface ProjectRequest {
   gates: Record<string, GateRoles>;
   build: ProjectBuild;
 }
+
+// ---- Configurable agent platform (docs/phase-1-execution-spec.md) ----
+
+export type Capability = 'WORKSPACE_ADMIN' | 'AUTHOR' | 'OPERATOR' | 'REVIEWER' | 'CURATOR';
+
+export interface Workspace {
+  id: string;
+  name: string;
+  createdAt: string;
+  createdBy: string;
+  /** The caller's own capabilities in this workspace. */
+  capabilities: Capability[];
+}
+
+export interface AgentVariable {
+  name: string;
+  description: string | null;
+  required: boolean;
+}
+
+export interface AgentSpec {
+  description: string | null;
+  runtime: string | null;
+  prompt: string | null;
+  variables: AgentVariable[] | null;
+  model: { model: string | null; fallbacks: string[] | null } | null;
+  limits: { maxOutputTokens: number | null; timeoutSeconds: number | null } | null;
+  outputSchema: Record<string, unknown> | null;
+}
+
+export interface AgentDefinition {
+  workspaceId: string;
+  id: string;
+  status: 'ACTIVE' | 'RETIRED';
+  draftName: string;
+  draftSpec: AgentSpec | null;
+  draftRevision: number;
+  currentVersion: number | null;
+  latestVersion: number | null;
+  updatedAt: string;
+  updatedBy: string;
+}
+
+export interface AgentVersion {
+  workspaceId: string;
+  agentId: string;
+  version: number;
+  name: string;
+  spec: AgentSpec;
+  contentHash: string;
+  publishedAt: string;
+  publishedBy: string;
+}
+
+export interface AgentValidation {
+  valid: boolean;
+  errors: string[];
+  contentHash: string | null;
+  draftRevision: number;
+}
+
+export interface CatalogModel {
+  id: string;
+  connectionId: string;
+  providerModel: string;
+  displayName: string;
+  enabled: boolean;
+  available: boolean;
+  unavailableReason: string | null;
+}
+
+export type RunStatus = 'QUEUED' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'CANCELLED';
+
+export interface PlatformRun {
+  id: string;
+  workspaceId: string;
+  agentId: string;
+  agentVersion: number;
+  contentHash: string;
+  model: string;
+  providerModel: string;
+  connectionId: string;
+  fallback: boolean;
+  inputs: Record<string, string>;
+  status: RunStatus;
+  outputText: string | null;
+  output: unknown;
+  error: string | null;
+  /** null = the provider did not report usage (unknown, not zero). */
+  promptTokens: number | null;
+  completionTokens: number | null;
+  attempts: number;
+  idempotencyKey: string | null;
+  createdBy: string;
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+}

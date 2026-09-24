@@ -2,7 +2,7 @@
 
 This spec turns Phase 1 of [configurable-agent-platform.md](configurable-agent-platform.md) into
 slices that can be built one at a time. Each slice ships something usable end to end and has its
-own exit evidence. **Slices 1–4 are implemented**; slices 5–6 are specified here and are not
+own exit evidence. **Slices 1–5 are implemented**; slice 6 is specified here and is not
 yet built.
 
 **Phase 1 exit evidence** (from the roadmap):
@@ -282,13 +282,59 @@ rules in [Scalability and service boundaries](configurable-agent-platform.md#sca
 - Structured output was parsed, and a schema violation failed with the output kept.
 - Revoking the connection refused new starts and failed an already-queued run at invocation.
 
-## Slice 5 — Agent Studio UI
+## Slice 5 — Agent Studio UI (implemented)
 
-- **Navigation:** a workspace selector in AppShell. Workspace id goes into every react-query key.
-- **Screens:** an Agents list, and an editor with prompt (CodeMirror), variables, model picker from the catalog, limits and output schema.
-- **Publishing and history:** a validate panel with the findings, draft revision conflict handling (reload and compare), publish, version history with a side-by-side diff, rollback and retire.
-- **Runs:** a test-invocation drawer that creates a real run in slice 4's run API and shows the pinned version and hash.
-- **Verification:** `npm run build`, plus manual browser checks of keyboard-only editing, narrow widths, and the empty, loading, conflict and 403/404 states.
+The Studio lives in `ui/src/studio/`. It is reached from **Agent Studio** in the AppShell navigation and uses the existing Radix Themes, `Surface`, `PageHeader`, toast and react-query patterns.
+
+**Workspace selector.**
+
+- It sits in the Studio header rather than globally in AppShell. The PDLC pages aren't workspace-scoped yet, so a global selector would imply scoping that doesn't exist.
+- The choice is remembered per browser.
+- Every Studio query key includes the workspace id: `['studio', ws, …]`.
+- Workspaces the caller doesn't belong to are listed as disabled. This only happens for the enterprise Admin, who sees every workspace's name.
+
+**`/studio` (`StudioPage`).**
+
+- Shows the caller's own capabilities in the workspace and lists its agents: status, the version runs use, latest version, draft revision, and who last updated it.
+- **New agent** (AUTHOR or WORKSPACE_ADMIN) creates a draft and opens it in the editor.
+- **New workspace** (enterprise Admin only) names its administrators.
+
+**`/studio/:ws/agents/:agentId` (`AgentEditorPage`).** Three tabs plus an inspector.
+
+- **Editor tab (`AgentForm`):**
+  - The prompt is edited in CodeMirror. Tab moves focus rather than indenting, so the editor is not a keyboard trap.
+  - **Declare …** adds any variables the prompt uses but hasn't declared, using the same rule as the server.
+  - Variables table, and a model picker from the catalog. Unavailable models are shown disabled, with the reason.
+  - Allowed fallbacks, limits, and the output schema as JSON (checked locally before save).
+- **Inspector:**
+  - status, the version runs use, the draft revision and an unsaved-changes marker;
+  - **Validate** shows the findings, or the hash that publishing would pin;
+  - **Publish vN** needs WORKSPACE_ADMIN and a saved draft;
+  - **Retire** asks for confirmation first.
+- **Conflicts:** every save sends the revision it was based on.
+  - A 409 shows a conflict callout. The author's edits stay in the form until they choose **Load latest (discard my edits)**.
+  - Background refetches never overwrite local edits.
+- **Versions tab (`VersionsPanel`):**
+  - Immutable versions with their content hash; "runs use this" marks the current one.
+  - A side-by-side diff between any two versions, or a version and the unsaved working draft.
+  - **Use vN for new runs** rolls back.
+- **Test runs tab (`RunsPanel`):**
+  - Input fields come from the variables of the version runs currently use. **Start run** needs OPERATOR.
+  - The run is followed live with 2s polling until it finishes. It shows the pinned version and hash, the model, provider model and connection (and whether a fallback was used), attempts, tokens (shown as "unknown" when not reported), output or error, and Cancel while it is active.
+  - A list of recent runs.
+
+**Capability gating.** Controls are shown disabled with the reason, or hidden, based on the caller's capabilities in the workspace. The server enforces the same rules regardless.
+
+**Verification** (`npm run build` passes, plus a live browser check). Stack: local Postgres, Temporal dev server, a key-checking model stub, control-plane, the agents worker and the Vite UI, driven by Playwright and Chromium with the dev identities.
+
+- **Lead** created an agent, typed the prompt, declared its variable with one click, picked the model, saved (revision 2), validated and published v1.
+  - A test run succeeded, showing pinned v1, its hash, tokens 7/5 and the ALPHA output.
+  - Lead then published v2, diffed v1 against v2 (ALPHA/BETA), and rolled back so new runs use v1.
+- **Author (fsdev)** saved a stale draft after lead's save: the conflict callout appeared, and **Load latest** restored the server draft. Publish was disabled for the author.
+- **Operator (qa):** the editor was read-only, the run form targeted v1 after the rollback, and runs were allowed.
+- **Non-member (po):** saw "No workspace yet"; the direct URL showed "No workspace eng" (404).
+- **Keyboard-only:** focus reached every form control. A timeout edit plus Enter on Save saved the draft. This check found the CodeMirror Tab trap, which is now fixed.
+- **390px width:** no horizontal page overflow; the form stacks into one column.
 
 ## Slice 6 — PDLC seed import
 

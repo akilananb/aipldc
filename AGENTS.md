@@ -95,6 +95,7 @@ and shows the draft → a PO/SquadLead approves via `POST .../approve-agent-resu
 | `agents/src/main/resources/prompts/*.mustache` | LLM prompt templates, one file per agent-call |
 | `build-worker/src/` | Standalone Node ACP build agent (`worker.ts`, `poller.ts`, `acp.ts`, `buildTask.ts`, `repo.ts`, `verifier.ts`) |
 | `ui/src/routes/` | `ReviewPage.tsx`, `TaskDetailPage.tsx`, item list |
+| `ui/src/studio/` | Agent Studio (docs/phase-1-execution-spec.md slice 5): workspace-scoped agent list, editor, versions/diff/rollback, test runs; API client is `studio` in `ui/src/api.ts` |
 | `ui/src/review/` | `CommentPanel.tsx`, `PreviewTab`/`SourceTab`/`DiffTab`/`ReviewMdTab`, `GateBadge.tsx` |
 | `infra/` | `Tiltfile`-referenced `k8s/*.yaml`, `pdlc.yaml` (runtime config), `stub-llm/` (WireMock) |
 | `docs/` | Architecture ground truth: `agent-playbook.md`, `orchestration-decision.md`, `tech-stack-architecture.md`, `storyboard.md` |
