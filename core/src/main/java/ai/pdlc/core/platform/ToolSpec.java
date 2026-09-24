@@ -1,5 +1,6 @@
 package ai.pdlc.core.platform;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonInclude;
 
 import java.util.Map;
@@ -23,6 +24,9 @@ import java.util.Map;
  *                         {@code Idempotency-Key} header, so an unknown outcome can be resent safely;
  *                         {@code NONE} (null) = it cannot, and an unknown outcome waits for an operator
  * @param approval         WRITE tools: when a pending approval escalates and when it expires (null = defaults)
+ * @param mcpTool          kind {@code mcp} (slice 2.3): the remote tool's name on the MCP server
+ * @param mcpFingerprint   kind {@code mcp}: {@link McpFingerprint} of the server's definition that was
+ *                         reviewed; a call is refused when the server's current definition differs
  */
 public record ToolSpec(
         String description,
@@ -35,9 +39,12 @@ public record ToolSpec(
         Integer timeoutSeconds,
         Integer maxResponseBytes,
         @JsonInclude(JsonInclude.Include.NON_NULL) String idempotency,
-        @JsonInclude(JsonInclude.Include.NON_NULL) Approval approval) {
+        @JsonInclude(JsonInclude.Include.NON_NULL) Approval approval,
+        @JsonInclude(JsonInclude.Include.NON_NULL) String mcpTool,
+        @JsonInclude(JsonInclude.Include.NON_NULL) String mcpFingerprint) {
 
     public static final String KIND_HTTP = "http";
+    public static final String KIND_MCP = "mcp";
     public static final String READ = "READ";
     public static final String WRITE = "WRITE";
     public static final String IDEMPOTENCY_HEADER = "HEADER";
@@ -47,6 +54,19 @@ public record ToolSpec(
     public ToolSpec(String description, String kind, String connectionId, String method, String path,
                     Map<String, Object> inputSchema, String effect, Integer timeoutSeconds, Integer maxResponseBytes) {
         this(description, kind, connectionId, method, path, inputSchema, effect, timeoutSeconds, maxResponseBytes, null, null);
+    }
+
+    /** Slice 2.2 shape (no MCP fields); keeps those versions' hashes. */
+    public ToolSpec(String description, String kind, String connectionId, String method, String path,
+                    Map<String, Object> inputSchema, String effect, Integer timeoutSeconds, Integer maxResponseBytes,
+                    String idempotency, Approval approval) {
+        this(description, kind, connectionId, method, path, inputSchema, effect, timeoutSeconds, maxResponseBytes,
+                idempotency, approval, null, null);
+    }
+
+    @JsonIgnore
+    public boolean isMcp() {
+        return KIND_MCP.equals(kind);
     }
 
     /** Approval timing for a WRITE call; there is no auto-approval, expiry means denied. */

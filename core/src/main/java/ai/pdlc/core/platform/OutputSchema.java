@@ -6,17 +6,30 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
+import java.util.regex.Pattern;
+import java.util.regex.PatternSyntaxException;
 
 /**
- * The JSON Schema subset an agent's {@code outputSchema} may use, enforced exactly: {@code type}
- * ({@code object|array|string|number|integer|boolean|null}), {@code properties}, {@code required},
- * {@code items}, {@code enum}, {@code description}. Any other keyword is rejected at publication
- * ({@link #unsupported}) rather than silently ignored at run time, so a published schema always
- * means what it says.
+ * The JSON Schema subset an agent's {@code outputSchema} and a tool's {@code inputSchema} may use,
+ * enforced exactly: {@code type} ({@code object|array|string|number|integer|boolean|null}),
+ * {@code properties}, {@code required}, {@code items}, {@code enum}, {@code additionalProperties},
+ * and the constraints {@code minimum}/{@code maximum}, {@code minLength}/{@code maxLength},
+ * {@code minItems}/{@code maxItems} and {@code pattern}. The annotations {@code description},
+ * {@code title}, {@code default}, {@code examples}, {@code format} and {@code $schema} carry no
+ * constraint and are accepted as documentation (slice 2.3: real MCP schemas use them). Any other
+ * keyword is rejected at publication ({@link #unsupported}) rather than silently ignored at run
+ * time, so a published schema always means what it says.
  */
 public final class OutputSchema {
 
-    static final Set<String> KEYWORDS = Set.of("type", "properties", "required", "items", "enum", "description");
+    static final Set<String> KEYWORDS = new TreeSet<>(Set.of("type", "properties", "required", "items", "enum",
+            "additionalProperties", "minimum", "maximum", "minLength", "maxLength", "minItems", "maxItems", "pattern",
+            "description", "title", "default", "examples", "format", "$schema"));
+    static final Set<String> NUMERIC = Set.of("minimum", "maximum");
+    static final Set<String> COUNTS = Set.of("minLength", "maxLength", "minItems", "maxItems");
+    /** Patterns run against model-supplied values; a length cap keeps them reviewable and cheap. */
+    static final int MAX_PATTERN_LENGTH = 200;
     static final Set<String> TYPES = Set.of("object", "array", "string", "number", "integer", "boolean", "null");
 
     private OutputSchema() {
@@ -65,6 +78,33 @@ public final class OutputSchema {
         if (map.containsKey("enum") && !(map.get("enum") instanceof List<?>)) {
             errors.add(path + ".enum must be an array");
         }
+        Object additional = map.get("additionalProperties");
+        if (additional instanceof Map<?, ?>) {
+            checkSchema(additional, path + ".additionalProperties", errors);
+        } else if (additional != null && !(additional instanceof Boolean)) {
+            errors.add(path + ".additionalProperties must be a boolean or a schema");
+        }
+        for (String k : NUMERIC) {
+            if (map.containsKey(k) && !(map.get(k) instanceof Number)) {
+                errors.add(path + "." + k + " must be a number");
+            }
+        }
+        for (String k : COUNTS) {
+            if (map.containsKey(k) && !(map.get(k) instanceof Number n && n.longValue() >= 0 && n.doubleValue() == n.longValue())) {
+                errors.add(path + "." + k + " must be a non-negative integer");
+            }
+        }
+        if (map.containsKey("pattern")) {
+            if (!(map.get("pattern") instanceof String p) || p.length() > MAX_PATTERN_LENGTH) {
+                errors.add(path + ".pattern must be a string of at most " + MAX_PATTERN_LENGTH + " characters");
+            } else {
+                try {
+                    Pattern.compile(p);
+                } catch (PatternSyntaxException e) {
+                    errors.add(path + ".pattern is not a valid regular expression");
+                }
+            }
+        }
     }
 
     @SuppressWarnings("unchecked")
@@ -98,6 +138,48 @@ public final class OutputSchema {
         if (value.isArray() && schema.get("items") instanceof Map<?, ?> items) {
             for (int i = 0; i < value.size(); i++) {
                 validate((Map<String, Object>) items, value.get(i), path + "[" + i + "]", errors);
+            }
+        }
+        if (value.isObject()) {
+            Map<?, ?> props = schema.get("properties") instanceof Map<?, ?> p ? p : Map.of();
+            Object additional = schema.get("additionalProperties");
+            value.fieldNames().forEachRemaining(name -> {
+                if (props.containsKey(name)) {
+                    return;
+                }
+                if (Boolean.FALSE.equals(additional)) {
+                    errors.add(path + "." + name + " is not allowed");
+                } else if (additional instanceof Map<?, ?> extra) {
+                    validate((Map<String, Object>) extra, value.get(name), path + "." + name, errors);
+                }
+            });
+        }
+        if (value.isNumber()) {
+            if (schema.get("minimum") instanceof Number min && value.doubleValue() < min.doubleValue()) {
+                errors.add(path + " must be >= " + min);
+            }
+            if (schema.get("maximum") instanceof Number max && value.doubleValue() > max.doubleValue()) {
+                errors.add(path + " must be <= " + max);
+            }
+        }
+        if (value.isTextual()) {
+            int length = value.asText().codePointCount(0, value.asText().length());
+            if (schema.get("minLength") instanceof Number min && length < min.intValue()) {
+                errors.add(path + " must be at least " + min + " characters");
+            }
+            if (schema.get("maxLength") instanceof Number max && length > max.intValue()) {
+                errors.add(path + " must be at most " + max + " characters");
+            }
+            if (schema.get("pattern") instanceof String p && !Pattern.compile(p).matcher(value.asText()).find()) {
+                errors.add(path + " must match " + p);
+            }
+        }
+        if (value.isArray()) {
+            if (schema.get("minItems") instanceof Number min && value.size() < min.intValue()) {
+                errors.add(path + " must have at least " + min + " items");
+            }
+            if (schema.get("maxItems") instanceof Number max && value.size() > max.intValue()) {
+                errors.add(path + " must have at most " + max + " items");
             }
         }
     }
