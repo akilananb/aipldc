@@ -1,5 +1,8 @@
 package ai.pdlc.controlplane.platform;
 
+import ai.pdlc.controlplane.connections.InMemoryConnectionStore;
+import ai.pdlc.controlplane.connections.ModelCatalog;
+import ai.pdlc.controlplane.connections.ConnectionStore.ModelRow;
 import ai.pdlc.controlplane.identity.Identity;
 import ai.pdlc.controlplane.web.ConflictException;
 import ai.pdlc.controlplane.web.ForbiddenException;
@@ -14,15 +17,12 @@ import org.junit.jupiter.api.Test;
 
 import java.util.EnumSet;
 import java.util.List;
-import java.util.Set;
 
 import static ai.pdlc.controlplane.platform.WorkspaceServiceTest.ENG_ADMIN;
 import static ai.pdlc.controlplane.platform.WorkspaceServiceTest.ENTERPRISE_ADMIN;
 import static ai.pdlc.controlplane.platform.WorkspaceServiceTest.FIN_ADMIN;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
 /**
  * Phase 1 acceptance "versions and authorization" at the registry level: a run that resolved v1
@@ -36,13 +36,13 @@ class AgentRegistryServiceTest {
 
     private final InMemoryWorkspaceStore workspaceStore = new InMemoryWorkspaceStore();
     private final WorkspaceService workspaces = new WorkspaceService(workspaceStore);
-    private final ModelCatalog models = mock(ModelCatalog.class);
+    private final InMemoryConnectionStore connections = InMemoryConnectionStore.withModels("gw", "sonnet", "haiku");
+    private final ModelCatalog models = new ModelCatalog(connections);
     private final AgentRegistryService service =
             new AgentRegistryService(new InMemoryAgentRegistryStore(), workspaces, models);
 
     @BeforeEach
     void seed() {
-        when(models.authorizedModels()).thenReturn(Set.of("sonnet", "haiku"));
         workspaces.create(new WorkspaceRequest("engineering", "Engineering", List.of(ENG_ADMIN.user())), ENTERPRISE_ADMIN);
         workspaces.create(new WorkspaceRequest("finance", "Finance", List.of(FIN_ADMIN.user())), ENTERPRISE_ADMIN);
         workspaces.setMember("engineering", AUTHOR.user(), EnumSet.of(Capability.AUTHOR), ENG_ADMIN);
@@ -61,12 +61,12 @@ class AgentRegistryServiceTest {
         AgentDefinitionDto created = service.create("engineering",
                 new AgentDraftRequest("labeler", "Labeler", labelSpec("ALPHA"), null), AUTHOR);
         service.publish("engineering", "labeler", created.draftRevision(), ENG_ADMIN);
-        AgentVersionDto pinnedByRun = service.resolveForRun("engineering", "labeler", OPERATOR);
+        AgentVersionDto pinnedByRun = service.resolveForRun("engineering", "labeler", OPERATOR).definition();
 
         AgentDefinitionDto edited = service.saveDraft("engineering", "labeler",
                 new AgentDraftRequest(null, "Labeler", labelSpec("BETA"), created.draftRevision()), AUTHOR);
         service.publish("engineering", "labeler", edited.draftRevision(), ENG_ADMIN);
-        AgentVersionDto nextRun = service.resolveForRun("engineering", "labeler", OPERATOR);
+        AgentVersionDto nextRun = service.resolveForRun("engineering", "labeler", OPERATOR).definition();
 
         assertThat(pinnedByRun.version()).isEqualTo(1);
         assertThat(pinnedByRun.spec().prompt()).contains("ALPHA");
@@ -167,7 +167,7 @@ class AgentRegistryServiceTest {
 
         assertThat(rolledBack.currentVersion()).isEqualTo(1);
         assertThat(rolledBack.latestVersion()).isEqualTo(2);
-        assertThat(service.resolveForRun("engineering", "labeler", OPERATOR).spec().prompt()).contains("ALPHA");
+        assertThat(service.resolveForRun("engineering", "labeler", OPERATOR).definition().spec().prompt()).contains("ALPHA");
         assertThatThrownBy(() -> service.rollback("engineering", "labeler", 7, ENG_ADMIN))
                 .isInstanceOf(NotFoundException.class);
     }
@@ -186,5 +186,52 @@ class AgentRegistryServiceTest {
         assertThatThrownBy(() -> service.saveDraft("engineering", "labeler",
                 new AgentDraftRequest(null, "Labeler", labelSpec("B"), created.draftRevision()), AUTHOR))
                 .isInstanceOf(ConflictException.class);
+    }
+
+    @Test
+    void aRevokedConnectionFailsTheNextRunWithTheReasonAndNoSilentDefault() {
+        AgentDefinitionDto created = service.create("engineering",
+                new AgentDraftRequest("labeler", "Labeler", labelSpec("ALPHA"), null), AUTHOR);
+        service.publish("engineering", "labeler", created.draftRevision(), ENG_ADMIN);
+        assertThat(service.resolveForRun("engineering", "labeler", OPERATOR).connectionId()).isEqualTo("gw");
+
+        connections.revokeConnection("gw", "it@acme");
+
+        assertThatThrownBy(() -> service.resolveForRun("engineering", "labeler", OPERATOR))
+                .isInstanceOf(ConflictException.class)
+                .hasMessage("No available model: sonnet (connection gw revoked)");
+    }
+
+    @Test
+    void aDisabledModelFallsBackOnlyToADeclaredFallback() {
+        AgentSpec spec = labelSpec("ALPHA");
+        AgentSpec withFallback = new AgentSpec(spec.description(), spec.runtime(), spec.prompt(), spec.variables(),
+                new AgentSpec.ModelBinding("sonnet", List.of("haiku")), spec.limits(), spec.outputSchema());
+        AgentDefinitionDto created = service.create("engineering",
+                new AgentDraftRequest("labeler", "Labeler", withFallback, null), AUTHOR);
+        service.publish("engineering", "labeler", created.draftRevision(), ENG_ADMIN);
+
+        connections.updateModel(new ModelRow("sonnet", "gw", "sonnet", "sonnet", false, null, "it@acme"));
+
+        var resolved = service.resolveForRun("engineering", "labeler", OPERATOR);
+        assertThat(resolved.model()).isEqualTo("haiku");
+        assertThat(resolved.fallback()).isTrue();
+        assertThat(resolved.definition().version()).isEqualTo(1);
+    }
+
+    @Test
+    void aModelAddedToTheCatalogIsBindableWithoutRestart() {
+        AgentSpec spec = labelSpec("ALPHA");
+        AgentSpec onOpus = new AgentSpec(spec.description(), spec.runtime(), spec.prompt(), spec.variables(),
+                new AgentSpec.ModelBinding("opus", List.of()), spec.limits(), spec.outputSchema());
+        AgentDefinitionDto created = service.create("engineering",
+                new AgentDraftRequest("thinker", "Thinker", onOpus, null), AUTHOR);
+        assertThatThrownBy(() -> service.publish("engineering", "thinker", created.draftRevision(), ENG_ADMIN))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("opus");
+
+        connections.insertModel(new ModelRow("opus", "gw", "claude-opus", "Opus", true, null, "it@acme"));
+
+        assertThat(service.publish("engineering", "thinker", created.draftRevision(), ENG_ADMIN).version()).isEqualTo(1);
+        assertThat(service.resolveForRun("engineering", "thinker", OPERATOR).providerModel()).isEqualTo("claude-opus");
     }
 }

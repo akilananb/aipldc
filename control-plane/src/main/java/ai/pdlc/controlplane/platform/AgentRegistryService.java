@@ -1,5 +1,6 @@
 package ai.pdlc.controlplane.platform;
 
+import ai.pdlc.controlplane.connections.ModelCatalog;
 import ai.pdlc.controlplane.identity.Identity;
 import ai.pdlc.controlplane.platform.AgentRegistryStore.AgentRow;
 import ai.pdlc.controlplane.platform.AgentRegistryStore.Status;
@@ -10,6 +11,7 @@ import ai.pdlc.controlplane.web.dto.AgentDefinitionDto;
 import ai.pdlc.controlplane.web.dto.AgentDraftRequest;
 import ai.pdlc.controlplane.web.dto.AgentValidationDto;
 import ai.pdlc.controlplane.web.dto.AgentVersionDto;
+import ai.pdlc.controlplane.web.dto.ResolvedAgentDto;
 import ai.pdlc.core.platform.AgentSpec;
 import ai.pdlc.core.platform.AgentSpecValidator;
 import ai.pdlc.core.platform.ContentHash;
@@ -152,10 +154,12 @@ public class AgentRegistryService {
     }
 
     /**
-     * The immutable definition a new run pins: the current published version of an active agent,
-     * with its stored content re-hashed so a tampered row fails loudly instead of running.
+     * What a new run pins: the current published version of an active agent - its stored content
+     * re-hashed so a tampered row fails loudly instead of running - and the model it will call
+     * now. A disabled model or a revoked/expired connection fails here with the reason, unless the
+     * agent declared an available fallback; there is no silent default model.
      */
-    public AgentVersionDto resolveForRun(String workspaceId, String id, Identity identity) {
+    public ResolvedAgentDto resolveForRun(String workspaceId, String id, Identity identity) {
         workspaces.require(workspaceId, identity, Capability.OPERATOR);
         AgentRow row = requireActive(find(workspaceId, id));
         if (row.currentVersion() == null) {
@@ -166,7 +170,8 @@ public class AgentRegistryService {
         if (!ContentHash.ofAgent(version.name(), spec).equals(version.contentHash())) {
             throw new IllegalStateException("Agent " + id + " v" + version.version() + " content does not match its hash");
         }
-        return toDto(version);
+        ModelCatalog.ResolvedModel model = models.resolve(spec.model());
+        return new ResolvedAgentDto(toDto(version), model.model(), model.providerModel(), model.connectionId(), model.fallback());
     }
 
     private AgentRow find(String workspaceId, String id) {

@@ -2,7 +2,7 @@
 
 This spec turns Phase 1 of [configurable-agent-platform.md](configurable-agent-platform.md) into
 slices that can be built one at a time. Each slice ships something usable end to end and has its
-own exit evidence. **Slices 1 and 2 are implemented**; slices 3–6 are specified here and are not
+own exit evidence. **Slices 1–3 are implemented**; slices 4–6 are specified here and are not
 yet built.
 
 **Phase 1 exit evidence** (from the roadmap):
@@ -146,13 +146,76 @@ yet built.
 - Replicated control-plane needs Spring Session JDBC (see [Scalability and service boundaries](configurable-agent-platform.md#scalability-and-service-boundaries)).
 - IdP-initiated (RP) logout.
 
-## Slice 3 — Model catalog and connection references
+## Slice 3 — Model catalog and connection references (implemented)
 
-- **Model provider connections:** tables `connections` (workspace or enterprise scope, type, status, expiry) and `model_provider_connections`. Only enterprise admins create them.
-  - Secrets are stored as references resolved through `SecretsPort`, never as values in a row, prompt or DTO.
-- **Model catalog:** `models` rows (provider connection, model id, display name, enabled) replace the YAML-derived `ModelCatalog`. Publication validation calls the same `authorizedModels()` method, so slice 1 code doesn't change.
-- **Changes without restart:** disabling a model or revoking a connection affects the next run immediately. A pinned run whose model is revoked fails visibly at invocation and does not fall back to another model.
-- **Exit:** an admin adds a model and binds an agent to it without a restart. A revoked connection fails the next invocation with an explicit error.
+This slice adds a `connections` module (`control-plane/.../connections`), following the module
+rules in [Scalability and service boundaries](configurable-agent-platform.md#scalability-and-service-boundaries).
+
+**Schema.** `V16__connections_model_catalog.sql` adds three tables:
+
+- **`connections`:**
+  - Scope is `ENTERPRISE` or `WORKSPACE`; `WORKSPACE` scope must name a workspace.
+  - `kind`: only `MODEL_PROVIDER` for now.
+  - `auth_type`: `API_KEY` or `NONE`.
+  - `secret_ref`, `base_url`, `status` (`ACTIVE` or `REVOKED`), `expires_at`, and who changed it and when.
+- **`models`:**
+  - The catalog id is what an `AgentSpec` binds, e.g. `sonnet` or `anthropic/claude-sonnet`.
+  - Each row also has `connection_id`, `provider_model` (the name sent to the provider), `display_name` and `enabled`.
+- **`platform_imports`:** one row per one-time import from deployment config.
+
+**Credentials.**
+
+- A connection holds only a `kv://name` secret reference. A literal secret is rejected with a 400.
+- No DTO ever returns a secret value.
+- Control-plane does not resolve the reference. The execution adapter that calls the provider does (slice 4, in agents).
+- Rotation replaces the reference. Revocation is terminal: to restore access, create a new connection.
+
+**Availability.** A model is available when three things hold:
+
+- it is enabled;
+- its connection is `ACTIVE`;
+- the connection has not expired.
+
+`ModelCatalog` reads the database on every call, so changes take effect without a restart:
+
+- `authorizedModels()` decides what can be published.
+- `resolve(binding)` tries the bound model first, then only the fallbacks the agent declared. If none is available it fails with a 409 that names the reason for every candidate. There is no silent default.
+
+`AgentRegistryService.resolveForRun` now returns `ResolvedAgentDto`: the pinned version plus `model`, `providerModel`, `connectionId` and `fallback`.
+
+**Seed.** `ModelCatalogSeeder` runs once, recorded in `platform_imports`:
+
+- It creates connection `default-gateway` for `agents.gateway`, with `kv://pdlc-llm-api-key`, i.e. `PDLC_LLM_API_KEY`.
+- It adds one model per distinct `agents.roles.*.model`.
+- Later `pdlc.yaml` edits never overwrite catalog edits.
+
+**REST (`/api/platform`).**
+
+| Method and path | Who |
+|---|---|
+| `GET /connections` | enterprise Admin |
+| `POST /connections` | enterprise Admin |
+| `PUT /connections/{id}` (rotate `secretRef`, `baseUrl`, `expiresAt`) | enterprise Admin |
+| `POST /connections/{id}/revoke` | enterprise Admin |
+| `GET /models` | any signed-in user |
+| `POST /models` | enterprise Admin |
+| `PUT /models/{*id}` (ids may contain `/`) | enterprise Admin |
+
+**Exit evidence:**
+
+| Test | What it proves |
+|---|---|
+| `ModelCatalogTest` | Availability rules (disabled, revoked, expired); fallback order; the explicit error. |
+| `ConnectionServiceTest` | Admin-only writes; secret values rejected; revocation is terminal; models need an active connection. |
+| `ModelCatalogSeederTest` | The import runs once and preserves admin edits. |
+| `AgentRegistryServiceTest` (new cases) | A model added to the catalog is publishable without a restart; a revoked connection fails the next resolution with its reason; a disabled model uses a declared fallback. |
+| `PlatformRegistryIntegrationTest` | The JDBC catalog and one-time imports against real Postgres. |
+
+**Not in this slice:**
+
+- workspace-level model allowlists (every workspace sees the whole enterprise catalog);
+- connection health checks against the provider;
+- the agents runtime reading the catalog. That comes with the run in slice 4, where the model is resolved at invocation time.
 
 ## Slice 4 — Single-agent durable run
 
