@@ -364,6 +364,25 @@ export interface ToolSpec {
   /** kind 'mcp' (slice 2.3): the remote tool and the fingerprint of its reviewed definition. */
   mcpTool?: string | null;
   mcpFingerprint?: string | null;
+  /** kind 'sandbox' (slice 2.4): the catalog entry and the digest-pinned image reviewed with it. */
+  sandboxImage?: string | null;
+  sandboxImageRef?: string | null;
+}
+
+/** An enterprise-approved sandbox image (docs/phase-2-execution-spec.md slice 2.4). */
+export interface SandboxImage {
+  id: string;
+  imageRef: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+  outputSchema: Record<string, unknown> | null;
+  egressHosts: string[];
+  cpuMillis: number;
+  memoryMb: number;
+  timeoutSeconds: number;
+  status: 'ACTIVE' | 'RETIRED';
+  updatedAt: string;
+  updatedBy: string;
 }
 
 export type McpReviewState = 'NEW' | 'APPROVED' | 'CHANGED' | 'UNSUPPORTED_SCHEMA' | 'REMOVED';

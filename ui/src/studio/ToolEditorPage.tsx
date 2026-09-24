@@ -5,7 +5,8 @@ import { AlertDialog, Box, Button, Callout, Flex, Select, Skeleton, Table, Text,
 import { AlertTriangle, CheckCircle2, Save, Send } from 'lucide-react';
 import { toast } from 'sonner';
 import { ApiError, errorMessage, studio } from '../api';
-import type { ToolDefinition, ToolSpec } from '../types';
+import type { SandboxImage, ToolDefinition, ToolSpec } from '../types';
+import { operationLabel } from './ToolsSection';
 import PageHeader, { MetaItems } from '../components/PageHeader';
 import Surface from '../components/Surface';
 import ErrorCallout from '../components/ErrorCallout';
@@ -20,6 +21,8 @@ interface ToolDraft {
   kind: string;
   mcpTool: string;
   mcpFingerprint: string;
+  sandboxImage: string;
+  sandboxImageRef: string;
   name: string;
   description: string;
   connectionId: string;
@@ -39,6 +42,8 @@ function toDraft(name: string, spec: ToolSpec | null): ToolDraft {
     kind: spec?.kind ?? 'http',
     mcpTool: spec?.mcpTool ?? '',
     mcpFingerprint: spec?.mcpFingerprint ?? '',
+    sandboxImage: spec?.sandboxImage ?? '',
+    sandboxImageRef: spec?.sandboxImageRef ?? '',
     name,
     description: spec?.description ?? '',
     connectionId: spec?.connectionId ?? '',
@@ -78,7 +83,8 @@ function toSpec(d: ToolDraft): { ok: true; spec: ToolSpec } | { ok: false; error
   // Write settings are sent only for WRITE tools and only when set, so READ tools keep the 2.1 shape.
   const write = d.effect === 'WRITE';
   const writeSettings: Partial<ToolSpec> = {};
-  if (write && d.idempotency === 'HEADER' && d.kind !== 'mcp') writeSettings.idempotency = 'HEADER';
+  if (write && d.idempotency === 'HEADER' && d.kind === 'http') writeSettings.idempotency = 'HEADER';
+  const sandbox = d.kind === 'sandbox';
   if (write && (escalate != null || expire != null)) {
     writeSettings.approval = { escalateAfterMinutes: escalate, expireAfterMinutes: expire };
   }
@@ -87,10 +93,11 @@ function toSpec(d: ToolDraft): { ok: true; spec: ToolSpec } | { ok: false; error
     spec: {
       description: d.description.trim() === '' ? null : d.description,
       kind: d.kind,
-      connectionId: d.connectionId === '' ? null : d.connectionId,
-      method: d.kind === 'mcp' ? null : d.method,
-      path: d.kind === 'mcp' ? null : d.path,
+      connectionId: sandbox || d.connectionId === '' ? null : d.connectionId,
+      method: d.kind === 'http' ? d.method : null,
+      path: d.kind === 'http' ? d.path : null,
       ...(d.kind === 'mcp' ? { mcpTool: d.mcpTool, mcpFingerprint: d.mcpFingerprint } : {}),
+      ...(sandbox ? { sandboxImage: d.sandboxImage, sandboxImageRef: d.sandboxImageRef } : {}),
       inputSchema,
       effect: d.effect as ToolSpec['effect'],
       timeoutSeconds: timeout,
@@ -100,8 +107,27 @@ function toSpec(d: ToolDraft): { ok: true; spec: ToolSpec } | { ok: false; error
   };
 }
 
-function isMcpTool(t: ToolDefinition): boolean {
-  return t.draftSpec?.kind === 'mcp';
+function kindBadge(t: ToolDefinition): string {
+  if (t.draftSpec?.kind === 'mcp') return 'MCP TOOL';
+  if (t.draftSpec?.kind === 'sandbox') return 'SANDBOX TOOL';
+  return 'TOOL';
+}
+
+/** Structural equality of two JSON values, ignoring object key order (the server stores schemas canonically). */
+function sameJson(a: unknown, b: unknown): boolean {
+  const canonical = (v: unknown): unknown =>
+    Array.isArray(v)
+      ? v.map(canonical)
+      : v !== null && typeof v === 'object'
+        ? Object.fromEntries(Object.keys(v as object).sort().map((k) => [k, canonical((v as Record<string, unknown>)[k])]))
+        : v;
+  return JSON.stringify(canonical(a)) === JSON.stringify(canonical(b));
+}
+
+/** "name@sha256:abcd…" → the short digest, for display. */
+function digestOf(ref: string): string {
+  const at = ref.indexOf('@sha256:');
+  return at < 0 ? ref : ref.slice(at + '@sha256:'.length);
 }
 
 function Field({ label, hint, htmlFor, children }: { label: string; hint?: string; htmlFor?: string; children: ReactNode }) {
@@ -121,10 +147,11 @@ function Field({ label, hint, htmlFor, children }: { label: string; hint?: strin
 }
 
 /**
- * One governed API tool (docs/phase-2-execution-spec.md slice 2.1): edit the draft, validate,
- * publish immutable versions, retire. Publishing needs an active HTTP_API connection granted to the
- * workspace; the credential stays with the connection. Descriptions are what the model reads - they
- * never grant anything.
+ * One governed tool (docs/phase-2-execution-spec.md slices 2.1-2.4): edit the draft, validate,
+ * publish immutable versions, retire. An HTTP or MCP tool needs an active connection granted to the
+ * workspace (the credential stays with the connection); a sandbox tool needs an active catalog image
+ * still carrying the digest it was reviewed with. Descriptions are what the model reads - they never
+ * grant anything.
  */
 export default function ToolEditorPage() {
   const { ws = '', toolId = '' } = useParams();
@@ -137,6 +164,7 @@ export default function ToolEditorPage() {
   const toolQuery = useQuery({ queryKey: toolKey, queryFn: () => studio.tool(ws, toolId) });
   const versionsQuery = useQuery({ queryKey: [...toolKey, 'versions'], queryFn: () => studio.toolVersions(ws, toolId) });
   const connectionsQuery = useQuery({ queryKey: ['studio', ws, 'connections'], queryFn: () => studio.connections(ws) });
+  const imagesQuery = useQuery({ queryKey: ['platform', 'sandbox-images'], queryFn: studio.sandboxImages });
 
   const tool = toolQuery.data;
   const [draft, setDraft] = useState<ToolDraft | null>(null);
@@ -220,6 +248,10 @@ export default function ToolEditorPage() {
 
   const set = <K extends keyof ToolDraft>(key: K, value: ToolDraft[K]) => setDraft({ ...draft, [key]: value });
   const isMcp = draft.kind === 'mcp';
+  const isSandbox = draft.kind === 'sandbox';
+  const image: SandboxImage | undefined = (imagesQuery.data ?? []).find((i) => i.id === draft.sandboxImage);
+  const imageMoved = !!image && (image.imageRef !== draft.sandboxImageRef
+    || !sameJson(image.inputSchema, specResult?.ok ? specResult.spec.inputSchema : null));
   const connections = connectionsQuery.data ?? [];
   const versions = versionsQuery.data ?? [];
   const readOnly = !canEdit;
@@ -302,7 +334,7 @@ export default function ToolEditorPage() {
       <PageHeader
         title={tool.draftName}
         subtitle={draft.description || undefined}
-        badges={<span className="pill violet">{isMcpTool(tool) ? 'MCP TOOL' : 'TOOL'}</span>}
+        badges={<span className="pill violet">{kindBadge(tool)}</span>}
         meta={
           <MetaItems
             items={[
@@ -369,7 +401,17 @@ export default function ToolEditorPage() {
                 </Field>
               </Box>
             </Flex>
+            {isSandbox && (
+              <SandboxImageField
+                image={image}
+                draft={draft}
+                moved={imageMoved}
+                readOnly={readOnly}
+                onAdopt={(i) => setDraft({ ...draft, sandboxImageRef: i.imageRef, inputSchema: JSON.stringify(i.inputSchema, null, 2) })}
+              />
+            )}
             <Flex gap="3" wrap="wrap">
+              {!isSandbox && (
               <Box style={{ flex: '1 1 220px' }}>
                 <Field
                   label="Connection"
@@ -391,6 +433,7 @@ export default function ToolEditorPage() {
                   </Select.Root>
                 </Field>
               </Box>
+              )}
               {isMcp && (
                 <Box style={{ flex: '1 1 240px' }}>
                   <Field label="Remote MCP tool" hint="Pinned with the fingerprint of the definition that was reviewed. If the server changes it, calls are refused until it is re-reviewed.">
@@ -401,7 +444,7 @@ export default function ToolEditorPage() {
                   </Field>
                 </Box>
               )}
-              {!isMcp && (
+              {!isMcp && !isSandbox && (
               <Box style={{ flex: '0 1 140px' }}>
                 <Field label="Method">
                   <Select.Root value={draft.method} disabled={readOnly} onValueChange={(v) => set('method', v)}>
@@ -417,8 +460,17 @@ export default function ToolEditorPage() {
                 </Field>
               </Box>
               )}
-              <Box style={{ flex: '0 1 160px' }}>
-                <Field label="Effect" hint={isMcp ? "You decide, not the server's hints. Every WRITE call waits for a reviewer's approval." : "Only GET is READ. Every WRITE call waits for a reviewer's approval."}>
+              <Box style={{ flex: isSandbox ? '1 1 320px' : '0 1 160px' }}>
+                <Field
+                  label="Effect"
+                  hint={
+                    isMcp
+                      ? "You decide, not the server's hints. Every WRITE call waits for a reviewer's approval."
+                      : isSandbox
+                        ? "WRITE if the package changes anything outside its sandbox. Every WRITE call waits for a reviewer's approval."
+                        : "Only GET is READ. Every WRITE call waits for a reviewer's approval."
+                  }
+                >
                   <Select.Root value={draft.effect} disabled={readOnly} onValueChange={(v) => set('effect', v)}>
                     <Select.Trigger aria-label="Effect" style={{ width: '100%' }} />
                     <Select.Content>
@@ -429,7 +481,7 @@ export default function ToolEditorPage() {
                 </Field>
               </Box>
             </Flex>
-            {!isMcp && (
+            {!isMcp && !isSandbox && (
             <Field
               label="Path"
               htmlFor="tool-path"
@@ -446,7 +498,11 @@ export default function ToolEditorPage() {
             )}
             <Flex gap="3" wrap="wrap">
               <Box style={{ flex: '1 1 180px' }}>
-                <Field label="Timeout (seconds)" htmlFor="tool-timeout" hint="1–120, capped by the run's deadline.">
+                <Field
+                  label="Timeout (seconds)"
+                  htmlFor="tool-timeout"
+                  hint={isSandbox ? `1–${image?.timeoutSeconds ?? 600} (the image's limit); the sandbox is killed when it passes.` : "1–120, capped by the run's deadline."}
+                >
                   <TextField.Root
                     id="tool-timeout"
                     inputMode="numeric"
@@ -457,7 +513,11 @@ export default function ToolEditorPage() {
                 </Field>
               </Box>
               <Box style={{ flex: '1 1 180px' }}>
-                <Field label="Max response bytes" htmlFor="tool-max-bytes" hint="256–1000000. Longer bodies are cut and flagged.">
+                <Field
+                  label={isSandbox ? 'Max output bytes' : 'Max response bytes'}
+                  htmlFor="tool-max-bytes"
+                  hint={isSandbox ? "256–1000000. Longer output is cut and reported as an error." : '256–1000000. Longer bodies are cut and flagged.'}
+                >
                   <TextField.Root
                     id="tool-max-bytes"
                     inputMode="numeric"
@@ -470,7 +530,7 @@ export default function ToolEditorPage() {
             </Flex>
             {draft.effect === 'WRITE' && (
               <Flex gap="3" wrap="wrap">
-                {!isMcp && (
+                {!isMcp && !isSandbox && (
                 <Box style={{ flex: '1 1 220px' }}>
                   <Field
                     label="Idempotency"
@@ -516,13 +576,15 @@ export default function ToolEditorPage() {
               hint={
                 isMcp
                   ? "The server's schema as reviewed; it must match the server exactly at call time."
-                  : 'type: object. Declare every path parameter. Undeclared arguments are refused.'
+                  : isSandbox
+                    ? "Declared by the image in the enterprise catalog. The arguments reach the package as PDLC_INPUT."
+                    : 'type: object. Declare every path parameter. Undeclared arguments are refused.'
               }
             >
               <TextArea
                 id="tool-schema"
                 value={draft.inputSchema}
-                disabled={readOnly || isMcp}
+                disabled={readOnly || isMcp || isSandbox}
                 rows={8}
                 style={{ fontFamily: 'var(--code-font-family, monospace)' }}
                 onChange={(e) => set('inputSchema', e.target.value)}
@@ -557,8 +619,7 @@ export default function ToolEditorPage() {
                       </Table.Cell>
                       <Table.Cell>
                         <code style={{ fontSize: 12 }}>
-                          {v.spec.method} {v.spec.connectionId}
-                          {v.spec.path} · {v.spec.effect}
+                          {operationLabel(v.spec)} · {v.spec.effect}
                         </code>
                       </Table.Cell>
                       <Table.Cell>
@@ -575,5 +636,66 @@ export default function ToolEditorPage() {
           ))}
       </Surface>
     </Box>
+  );
+}
+
+/** The catalog image a sandbox tool runs: digest, limits and approved hosts, all set by the enterprise. */
+function SandboxImageField({
+  image,
+  draft,
+  moved,
+  readOnly,
+  onAdopt,
+}: {
+  image: SandboxImage | undefined;
+  draft: ToolDraft;
+  moved: boolean;
+  readOnly: boolean;
+  onAdopt: (image: SandboxImage) => void;
+}) {
+  return (
+    <Field
+      label="Sandbox image"
+      hint="Runs in an isolated container: non-root, read-only filesystem, a fresh workspace per call, and network only to the image's approved hosts through the egress proxy."
+    >
+      <Flex direction="column" gap="2">
+        <Flex gap="2" align="center" wrap="wrap">
+          <code style={{ fontSize: 13 }}>{draft.sandboxImage}</code>
+          {draft.sandboxImageRef && <CopyHash hash={digestOf(draft.sandboxImageRef)} />}
+          {image?.status === 'RETIRED' && <span className="pill fail">RETIRED</span>}
+        </Flex>
+        {image ? (
+          <Flex gap="2" wrap="wrap">
+            <span className="meta-tag">{image.cpuMillis}m CPU</span>
+            <span className="meta-tag">{image.memoryMb} MiB</span>
+            <span className="meta-tag">≤ {image.timeoutSeconds}s</span>
+            <span className="meta-tag">
+              {image.egressHosts.length === 0 ? 'no network' : `egress: ${image.egressHosts.join(', ')}`}
+            </span>
+            {image.outputSchema && <span className="meta-tag">JSON output checked</span>}
+          </Flex>
+        ) : (
+          <Text size="1" color="red">
+            This image is not in the enterprise catalog; the tool cannot be published or run.
+          </Text>
+        )}
+        {moved && image && image.status === 'ACTIVE' && (
+          <Callout.Root color="amber" size="1">
+            <Callout.Icon>
+              <AlertTriangle size={14} />
+            </Callout.Icon>
+            <Callout.Text>
+              The catalog now pins a different image or schema. Calls are refused until the tool is re-reviewed and a new version is
+              published.{' '}
+              {!readOnly && (
+                <Button size="1" variant="soft" color="amber" onClick={() => onAdopt(image)}>
+                  Update draft to the catalog image
+                </Button>
+              )}
+            </Callout.Text>
+          </Callout.Root>
+        )}
+      </Flex>
+    </Field>
   );
 }

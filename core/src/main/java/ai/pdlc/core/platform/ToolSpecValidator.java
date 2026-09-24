@@ -12,6 +12,8 @@ import java.util.regex.Pattern;
 public final class ToolSpecValidator {
 
     public static final int MAX_TIMEOUT_SECONDS = 120;
+    /** Sandbox packages start a container or Job, so they get a longer ceiling. */
+    public static final int MAX_SANDBOX_TIMEOUT_SECONDS = 600;
     public static final int MAX_RESPONSE_BYTES = 1_000_000;
     /** Approval waits are bounded: a pending write can hold a run at most 30 days. */
     public static final int MAX_APPROVAL_MINUTES = 43_200;
@@ -21,6 +23,8 @@ public final class ToolSpecValidator {
     public static final Pattern TOOL_NAME = Pattern.compile("^[a-zA-Z0-9_-]{1,64}$");
     /** MCP tool names as servers publish them. */
     public static final Pattern MCP_TOOL_NAME = Pattern.compile("^[A-Za-z0-9_./-]{1,128}$");
+    /** Immutable image references only: a tag can be re-pointed, a digest cannot. */
+    public static final Pattern IMAGE_REF = Pattern.compile("^[a-z0-9][a-z0-9._/:-]{0,254}@sha256:[a-f0-9]{64}$");
 
     private ToolSpecValidator() {
     }
@@ -37,6 +41,13 @@ public final class ToolSpecValidator {
         if (spec.description() == null || spec.description().isBlank()) {
             errors.add("description is required (it is what the model is told)");
         }
+        if (ToolSpec.KIND_SANDBOX.equals(spec.kind())) {
+            validateSandbox(spec, errors);
+            return errors;
+        }
+        if (spec.sandboxImage() != null || spec.sandboxImageRef() != null) {
+            errors.add("sandboxImage and sandboxImageRef apply only to sandbox tools");
+        }
         if (spec.connectionId() == null || spec.connectionId().isBlank()) {
             errors.add("connectionId is required");
         }
@@ -45,7 +56,7 @@ public final class ToolSpecValidator {
             return errors;
         }
         if (!ToolSpec.KIND_HTTP.equals(spec.kind())) {
-            errors.add("kind must be \"http\" or \"mcp\"");
+            errors.add("kind must be \"http\", \"mcp\" or \"sandbox\"");
         }
         if (spec.mcpTool() != null || spec.mcpFingerprint() != null) {
             errors.add("mcpTool and mcpFingerprint apply only to mcp tools");
@@ -76,8 +87,33 @@ public final class ToolSpecValidator {
                 }
             }
         }
-        checkLimitsAndApproval(spec, errors);
+        checkLimitsAndApproval(spec, errors, MAX_TIMEOUT_SECONDS);
         return errors;
+    }
+
+    /**
+     * A sandbox tool: an enterprise-approved image run in isolation. It has no connection - its only
+     * network is the egress proxy, limited to the catalog entry's approved hosts.
+     */
+    private static void validateSandbox(ToolSpec spec, List<String> errors) {
+        if (spec.sandboxImage() == null || spec.sandboxImage().isBlank()) {
+            errors.add("sandboxImage is required (an enterprise catalog entry)");
+        }
+        if (spec.sandboxImageRef() == null || !IMAGE_REF.matcher(spec.sandboxImageRef()).matches()) {
+            errors.add("sandboxImageRef must be a digest-pinned image reference (name@sha256:<64 hex>)");
+        }
+        if (spec.connectionId() != null || spec.method() != null || spec.path() != null
+                || spec.mcpTool() != null || spec.mcpFingerprint() != null) {
+            errors.add("sandbox tools have no connection, method, path or MCP fields");
+        }
+        if (!ToolSpec.READ.equals(spec.effect()) && !ToolSpec.WRITE.equals(spec.effect())) {
+            errors.add("effect must be READ or WRITE");
+        }
+        if (spec.idempotency() != null && !ToolSpec.IDEMPOTENCY_NONE.equals(spec.idempotency())) {
+            errors.add("sandbox tools have no idempotency key support; idempotency must be NONE");
+        }
+        declaredProperties(spec.inputSchema(), errors);
+        checkLimitsAndApproval(spec, errors, MAX_SANDBOX_TIMEOUT_SECONDS);
     }
 
     /** An MCP tool: the server defines the call; the review pins its name, schema and fingerprint. */
@@ -98,12 +134,12 @@ public final class ToolSpecValidator {
             errors.add("mcp tools have no idempotency key support; idempotency must be NONE");
         }
         declaredProperties(spec.inputSchema(), errors);
-        checkLimitsAndApproval(spec, errors);
+        checkLimitsAndApproval(spec, errors, MAX_TIMEOUT_SECONDS);
     }
 
-    private static void checkLimitsAndApproval(ToolSpec spec, List<String> errors) {
-        if (spec.timeoutSeconds() == null || spec.timeoutSeconds() < 1 || spec.timeoutSeconds() > MAX_TIMEOUT_SECONDS) {
-            errors.add("timeoutSeconds must be between 1 and " + MAX_TIMEOUT_SECONDS);
+    private static void checkLimitsAndApproval(ToolSpec spec, List<String> errors, int maxTimeoutSeconds) {
+        if (spec.timeoutSeconds() == null || spec.timeoutSeconds() < 1 || spec.timeoutSeconds() > maxTimeoutSeconds) {
+            errors.add("timeoutSeconds must be between 1 and " + maxTimeoutSeconds);
         }
         if (spec.maxResponseBytes() == null || spec.maxResponseBytes() < 256 || spec.maxResponseBytes() > MAX_RESPONSE_BYTES) {
             errors.add("maxResponseBytes must be between 256 and " + MAX_RESPONSE_BYTES);

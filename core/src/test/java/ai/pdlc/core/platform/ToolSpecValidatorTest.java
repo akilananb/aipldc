@@ -63,7 +63,7 @@ class ToolSpecValidatorTest {
                 "name is required",
                 "description is required (it is what the model is told)",
                 "connectionId is required",
-                "kind must be \"http\" or \"mcp\"",
+                "kind must be \"http\", \"mcp\" or \"sandbox\"",
                 "method must be one of " + ToolSpecValidator.METHODS,
                 "effect must be READ or WRITE",
                 "inputSchema uses unsupported keyword \"not\" (supported: " + OutputSchema.KEYWORDS + ")",
@@ -140,5 +140,29 @@ class ToolSpecValidatorTest {
     @Test
     void earlierToolShapesKeepTheirHashes() {
         assertThat(ContentHash.canonicalJson(valid())).doesNotContain("mcpTool", "mcpFingerprint");
+    }
+
+    static final String IMAGE = "registry.acme/tools/order-report@sha256:" + "a".repeat(64);
+
+    static ToolSpec sandbox(String imageRef) {
+        return new ToolSpec("Build an order report", "sandbox", null, null, null, valid().inputSchema(), "READ", 300, 65_536,
+                null, null, null, null, "order-report", imageRef);
+    }
+
+    @Test
+    void sandboxToolsPinADigestAndHaveNoConnection() {
+        assertThat(ToolSpecValidator.validate("t", sandbox(IMAGE))).isEmpty();
+        assertThat(ToolSpecValidator.validate("t", sandbox("registry.acme/tools/order-report:latest")))
+                .containsExactly("sandboxImageRef must be a digest-pinned image reference (name@sha256:<64 hex>)");
+        ToolSpec s = sandbox(IMAGE);
+        assertThat(ToolSpecValidator.validate("t", new ToolSpec(s.description(), "sandbox", "orders-api", "GET", null,
+                s.inputSchema(), "READ", 601, 65_536, null, null, null, null, null, IMAGE))).containsExactly(
+                "sandboxImage is required (an enterprise catalog entry)",
+                "sandbox tools have no connection, method, path or MCP fields",
+                "timeoutSeconds must be between 1 and 600");
+        assertThat(ToolSpecValidator.validate("t", new ToolSpec(s.description(), "http", "c", "GET", "/x", s.inputSchema(),
+                "READ", 10, 4096, null, null, null, null, "order-report", null)))
+                .containsExactly("sandboxImage and sandboxImageRef apply only to sandbox tools");
+        assertThat(ContentHash.canonicalJson(valid())).doesNotContain("sandbox");
     }
 }

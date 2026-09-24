@@ -3,6 +3,8 @@ package ai.pdlc.controlplane.platform;
 import ai.pdlc.controlplane.connections.ConnectionService;
 import ai.pdlc.controlplane.connections.InMemoryConnectionStore;
 import ai.pdlc.controlplane.connections.ModelCatalog;
+import ai.pdlc.controlplane.sandbox.InMemorySandboxImageStore;
+import ai.pdlc.controlplane.sandbox.SandboxImageService;
 import ai.pdlc.core.platform.EgressPolicy;
 
 import java.net.InetAddress;
@@ -34,16 +36,18 @@ public final class TestRegistries {
         });
     }
 
-    public record Registries(ConnectionService connections, ToolRegistryService tools, AgentRegistryService agents) {
+    public record Registries(ConnectionService connections, ToolRegistryService tools, AgentRegistryService agents,
+                             SandboxImageService sandboxImages) {
     }
 
     public static Registries over(WorkspaceService workspaces, InMemoryConnectionStore connectionStore) {
         ConnectionService connections = new ConnectionService(connectionStore, new ModelCatalog(connectionStore), workspaces,
                 egress(Set.of()));
-        ToolRegistryService tools = new ToolRegistryService(new InMemoryDefinitionStore(), workspaces, connections);
+        SandboxImageService sandboxImages = new SandboxImageService(new InMemorySandboxImageStore());
+        ToolRegistryService tools = new ToolRegistryService(new InMemoryDefinitionStore(), workspaces, connections, sandboxImages);
         AgentRegistryService agents = new AgentRegistryService(new InMemoryAgentRegistryStore(), workspaces,
                 new ModelCatalog(connectionStore), tools);
-        return new Registries(connections, tools, agents);
+        return new Registries(connections, tools, agents, sandboxImages);
     }
 
     private TestRegistries() {

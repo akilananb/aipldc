@@ -5,6 +5,7 @@ import ai.pdlc.controlplane.identity.Identity;
 import ai.pdlc.controlplane.platform.DefinitionStore.DefinitionRow;
 import ai.pdlc.controlplane.platform.DefinitionStore.Status;
 import ai.pdlc.controlplane.platform.DefinitionStore.VersionRow;
+import ai.pdlc.controlplane.sandbox.SandboxImageService;
 import ai.pdlc.controlplane.web.dto.ToolDefinitionDto;
 import ai.pdlc.controlplane.web.dto.ToolDraftRequest;
 import ai.pdlc.controlplane.web.dto.ToolValidationDto;
@@ -23,7 +24,9 @@ import java.util.List;
  * The ToolDefinition registry (docs/phase-2-execution-spec.md slice 2.1): the same draft →
  * immutable version → retire lifecycle as agents ({@link VersionedDefinitions}), plus the rule that
  * a tool may only be published - and a published tool only used - while its connection is an
- * active, unexpired {@code HTTP_API} connection granted to the workspace.
+ * active, unexpired {@code HTTP_API} connection granted to the workspace. A {@code kind: sandbox}
+ * tool (slice 2.4) has no connection; it must name an active {@link SandboxImageService} catalog
+ * entry that still carries the image reference it was reviewed with.
  *
  * <p>Registry checks are for authors; they never authorize a call. The agents worker's
  * {@code ToolExecutor} re-checks grant and connection before every call.
@@ -34,11 +37,14 @@ public class ToolRegistryService {
     private final VersionedDefinitions<ToolSpec> registry;
     private final WorkspaceService workspaces;
     private final ConnectionService connections;
+    private final SandboxImageService sandboxImages;
 
-    public ToolRegistryService(ToolRegistryStore store, WorkspaceService workspaces, ConnectionService connections) {
+    public ToolRegistryService(ToolRegistryStore store, WorkspaceService workspaces, ConnectionService connections,
+                               SandboxImageService sandboxImages) {
         this.registry = new VersionedDefinitions<>(store, "Tool", ToolSpec.class, ContentHash::ofTool);
         this.workspaces = workspaces;
         this.connections = connections;
+        this.sandboxImages = sandboxImages;
     }
 
     public List<ToolDefinitionDto> list(String workspaceId, Identity identity) {
@@ -130,7 +136,8 @@ public class ToolRegistryService {
                 continue;
             }
             ToolSpec spec = registry.spec(registry.verified(version).specJson());
-            connections.toolConnectionProblems(spec.connectionId(), workspaceId, connectionKind(spec)).stream()
+            (spec.isSandbox() ? sandboxImages.toolProblems(spec)
+                    : connections.toolConnectionProblems(spec.connectionId(), workspaceId, connectionKind(spec))).stream()
                     .map(p -> "tool " + ref.tool() + " v" + ref.version() + ": " + p)
                     .forEach(problems::add);
         }
@@ -139,7 +146,9 @@ public class ToolRegistryService {
 
     private List<String> check(String workspaceId, String name, ToolSpec spec) {
         List<String> errors = new ArrayList<>(ToolSpecValidator.validate(name, spec));
-        if (spec != null && spec.connectionId() != null && !spec.connectionId().isBlank()) {
+        if (spec != null && spec.isSandbox()) {
+            errors.addAll(sandboxImages.toolProblems(spec));
+        } else if (spec != null && spec.connectionId() != null && !spec.connectionId().isBlank()) {
             errors.addAll(connections.toolConnectionProblems(spec.connectionId(), workspaceId, connectionKind(spec)));
         }
         return errors;

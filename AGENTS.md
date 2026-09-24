@@ -90,8 +90,9 @@ and shows the draft → a PO/SquadLead approves via `POST .../approve-agent-resu
 | `control-plane/.../platform/{ToolRegistryService,VersionedDefinitions,DefinitionStore}` + `agents/.../platform/{ToolExecutor,ToolStore}` + `core/.../platform/{ToolSpec*,ToolArgs,EgressPolicy}` | Governed API tools (docs/phase-2-execution-spec.md slice 2.1): versioned tool registry sharing the agent lifecycle, `HTTP_API` connections granted per workspace (`connection_grants`), the bounded tool loop and its `platform_tool_calls` trace |
 | `adapters/.../mcp/` + `control-plane/.../connections/McpDiscoveryService` + `agents/.../platform/{McpToolCaller,McpCredentials,McpDiscoveryActivitiesImpl}` + `ui/src/studio/McpDiscoveryPanel.tsx` | Remote MCP tools (docs/phase-2-execution-spec.md slice 2.3): governed Streamable-HTTP client, OAuth client credentials, discovery/review, fingerprint-checked execution |
 | `control-plane/.../runs/{ApprovalService,JdbcApprovalStore}` + `ui/src/studio/ApprovalsSection.tsx` | Write approvals inbox and effect resolution (docs/phase-2-execution-spec.md slice 2.2) |
+| `core/.../port/SandboxPort` + `adapters/.../sandbox/` + `control-plane/.../sandbox/` + `agents/.../platform/SandboxToolRunner` + `agents/.../config/SandboxConfig` + `infra/k8s/sandbox.yaml` | Sandbox tools (docs/phase-2-execution-spec.md slice 2.4): enterprise image catalog (`sandbox_images`), `KubernetesJobSandbox` (Job per call under a gVisor RuntimeClass) and `DockerSandbox` (local dev under `runsc`), and the per-call credentialed `SandboxEgressProxy` |
 | `control-plane/.../runs/` + `agents/.../platform/` + `core/.../workflow/AgentRunWorkflow*` | Durable single-agent runs: `RunService` pins version+model on a `platform_runs` row and starts `AgentRunWorkflow`; the agents-side `AgentRunActivitiesImpl` renders, calls the model at runtime (`OpenAiCompatibleModelInvoker`) and records the outcome |
-| `control-plane/src/main/resources/db/migration/` | Flyway `V1__schema.sql` … `V6__agent_mention_columns.sql` |
+| `control-plane/src/main/resources/db/migration/` | Flyway `V1__schema.sql` … `V22__sandbox_images.sql` |
 | `agents/src/main/java/ai/pdlc/agents/{grill,po,plan,review,release,monitor,mention}/` | Per-domain LLM agent components |
 | `agents/src/main/java/ai/pdlc/agents/activities/` | `AgentActivitiesImpl`, `AgentContext` (best-effort reads), `RunRecorder` |
 | `agents/src/main/java/ai/pdlc/agents/templates/` | `PromptTemplates` (Mustache renderer) |
@@ -226,6 +227,12 @@ scripts/e2e-demo-phase4.sh   # + release pack -> gate 3 -> deploy -> monitor
   `ToolExecutor` refuses a call when the server's current definition differs. Talk to MCP servers only through
   `adapters/.../mcp/McpHttpClient` (egress-guarded, no redirects) and `McpOAuth` - never the MCP SDK transport - and
   keep credential use in agents (discovery runs as `McpDiscoveryWorkflow` on `REASONING`).
+- **Sandbox tools** (slice 2.4) are `kind: sandbox` tool versions pinning an enterprise catalog image by digest;
+  `ToolExecutor` refuses a call when the entry is retired, re-pinned or its schema changed, or when no isolation
+  runtime is configured (`pdlc.sandbox.provider=none` is the default). Run images only through `SandboxPort`
+  (non-root, read-only root, dropped capabilities, no host mounts or runtime socket, fresh workspace per call), give
+  them network only through `SandboxEgressProxy` with a per-call credential that is revoked when the call ends or the
+  run is cancelled, and never pass input or credentials on a command line or in a Job spec.
 - **No linter/formatter configured anywhere** (no ESLint, Prettier, Checkstyle, Spotless,
   `.editorconfig`). Match surrounding code style by hand; TypeScript's only enforced gate is
   `tsc --noEmit` (strict mode) inside `npm run build`.
@@ -317,7 +324,9 @@ scripts/e2e-demo-phase4.sh   # + release pack -> gate 3 -> deploy -> monitor
 - **Real-network adapter tests** (`adapters/.../ado/AdoBoardAdapterContractTest.java`,
   `.../github/GitHubRepoAdapterWireTest.java`) are gated by
   `@EnabledIfEnvironmentVariable(named = "ADO_ORG"/"ADO_PROJECT"/"ADO_PAT", ...)` — they silently
-  skip (not fail) unless those env vars are set.
+  skip (not fail) unless those env vars are set. Likewise `adapters/.../sandbox/KubernetesJobSandboxClusterTest`
+  needs `PDLC_K8S_API`/`PDLC_K8S_TOKEN`/`PDLC_K8S_CA` (set by `scripts/sandbox-colima.sh`), and `DockerSandboxTest`
+  skips itself unless a Docker engine with the `runsc` runtime and `busybox:1.36` is available.
 - **Config-drift test:** `InfraPdlcYamlTest` loads the real `infra/pdlc.yaml`; when adding a new
   `agents.roles` entry, extend its `containsKeys(...)` assertion to keep it meaningful.
 - **`agents/src/test/java/ai/pdlc/agents/AgentSpringWiringTest.java`** proves Spring can
