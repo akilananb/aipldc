@@ -85,6 +85,7 @@ and shows the draft → a PO/SquadLead approves via `POST .../approve-agent-resu
 | `control-plane/src/main/java/ai/pdlc/controlplane/persistence/` | Spring Data JDBC entities/repositories |
 | `control-plane/src/main/java/ai/pdlc/controlplane/temporal/` | `BoardSideEffectsImpl`, `BuildActivitiesImpl`, `WorkerConfig`, `WorkflowStubs` |
 | `control-plane/src/main/java/ai/pdlc/controlplane/review/` | `ReviewTrailService`, `CommentReanchorer`, `AgentMentions` |
+| `control-plane/src/main/java/ai/pdlc/controlplane/platform/` + `core/.../platform/` | Configurable agent platform (docs/phase-1-execution-spec.md): workspaces, capabilities, versioned `AgentSpec` registry, `ContentHash` |
 | `control-plane/src/main/resources/db/migration/` | Flyway `V1__schema.sql` … `V6__agent_mention_columns.sql` |
 | `agents/src/main/java/ai/pdlc/agents/{grill,po,plan,review,release,monitor,mention}/` | Per-domain LLM agent components |
 | `agents/src/main/java/ai/pdlc/agents/activities/` | `AgentActivitiesImpl`, `AgentContext` (best-effort reads), `RunRecorder` |
@@ -106,7 +107,7 @@ mvn test                                                    # full reactor test 
 mvn -pl control-plane -am test                              # one module + its deps
 mvn -pl control-plane test -Dtest=AgentMentionsTest         # one test class
 mvn -pl control-plane test -Dtest=AgentMentionsTest#parsesEachSupportedAgentCaseInsensitively  # one method
-mvn -q -o test -pl core,control-plane,agents -Dtest='!BoardSideEffectsImplTest,!PersistenceIntegrationTest,!BuildTaskLeaseTest'  # skip Docker-dependent tests (see Testing & QA)
+mvn -q -o test -pl core,control-plane,agents -Dtest='!BoardSideEffectsImplTest,!PersistenceIntegrationTest,!BuildTaskLeaseTest,!PlatformRegistryIntegrationTest'  # skip Docker-dependent tests (see Testing & QA)
 ```
 
 **UI (`ui/`, Node/Vite):**
@@ -280,7 +281,7 @@ scripts/e2e-demo-phase4.sh   # + release pack -> gate 3 -> deploy -> monitor
      `control-plane/src/test/java/ai/pdlc/controlplane/review/AgentMentionsTest.java`.
 - **Docker-unavailable environments:** exclude the Testcontainers-backed classes:
   ```bash
-  mvn -q -o test -pl core,control-plane,agents -Dtest='!BoardSideEffectsImplTest,!PersistenceIntegrationTest,!BuildTaskLeaseTest'
+  mvn -q -o test -pl core,control-plane,agents -Dtest='!BoardSideEffectsImplTest,!PersistenceIntegrationTest,!BuildTaskLeaseTest,!PlatformRegistryIntegrationTest'
   ```
   (this is an informal, comment-documented convention — see
   `agents/src/test/java/ai/pdlc/agents/AgentSpringWiringTest.java:34-38` — not a pom-level
