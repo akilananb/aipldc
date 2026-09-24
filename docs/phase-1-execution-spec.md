@@ -2,7 +2,7 @@
 
 This spec turns Phase 1 of [configurable-agent-platform.md](configurable-agent-platform.md) into
 slices that can be built one at a time. Each slice ships something usable end to end and has its
-own exit evidence. **Slices 1 and 2 are implemented**; slices 3–6 are specified here and are not
+own exit evidence. **Slices 1–4 are implemented**; slices 5–6 are specified here and are not
 yet built.
 
 **Phase 1 exit evidence** (from the roadmap):
@@ -146,29 +146,141 @@ yet built.
 - Replicated control-plane needs Spring Session JDBC (see [Scalability and service boundaries](configurable-agent-platform.md#scalability-and-service-boundaries)).
 - IdP-initiated (RP) logout.
 
-## Slice 3 — Model catalog and connection references
+## Slice 3 — Model catalog and connection references (implemented)
 
-- **Model provider connections:** tables `connections` (workspace or enterprise scope, type, status, expiry) and `model_provider_connections`. Only enterprise admins create them.
-  - Secrets are stored as references resolved through `SecretsPort`, never as values in a row, prompt or DTO.
-- **Model catalog:** `models` rows (provider connection, model id, display name, enabled) replace the YAML-derived `ModelCatalog`. Publication validation calls the same `authorizedModels()` method, so slice 1 code doesn't change.
-- **Changes without restart:** disabling a model or revoking a connection affects the next run immediately. A pinned run whose model is revoked fails visibly at invocation and does not fall back to another model.
-- **Exit:** an admin adds a model and binds an agent to it without a restart. A revoked connection fails the next invocation with an explicit error.
+This slice adds a `connections` module (`control-plane/.../connections`), following the module
+rules in [Scalability and service boundaries](configurable-agent-platform.md#scalability-and-service-boundaries).
 
-## Slice 4 — Single-agent durable run
+**Schema.** `V16__connections_model_catalog.sql` adds three tables:
 
-- **Workflow:** a new Temporal workflow type, `AgentRunWorkflow`, in `core/.../workflow`, registered on the `REASONING` worker. It is not `FeatureWorkflow`.
-  - Input: workspace, run id, and the resolved bundle (agent id, version, content hash). Never the prompt text.
-- **Runner:** an `AgentRunActivities.invoke` activity in `agents`.
-  1. Load the pinned version from Postgres (read-only) and re-verify its hash.
-  2. Check that required variables are present.
-  3. Render with the existing Mustache engine using a data-only map.
-  4. Call the bound model through Embabel, enforcing `timeoutSeconds` and `maxOutputTokens` where the provider supports them. Unknown token usage is recorded as unknown.
-  5. Validate the output against `outputSchema`.
-- **Run records:** a `platform_runs` projection (status, pinned version and hash, timings, usage-or-unknown, error) and a `platform_run_artifacts` table for outputs.
-  - Large inputs and outputs go to access-controlled storage, never into workflow history.
-- **Working context:** bounded to this run's input plus its own prior turns (none, for single-shot runs). Retrieval and memory arrive in later phases.
-- **API:** `POST /api/workspaces/{ws}/agents/{id}/runs` (OPERATOR), with an idempotency key: the same key returns the same run. Also `GET .../runs/{runId}` and `POST .../runs/{runId}/cancel`.
-- **Exit:** the ALPHA/BETA scenario end to end. Start a run that waits before invoking the model; publish v2; the run outputs ALPHA and records the v1 hash; the next run outputs BETA. A worker restart mid-run resumes.
+- **`connections`:**
+  - Scope is `ENTERPRISE` or `WORKSPACE`; `WORKSPACE` scope must name a workspace.
+  - `kind`: only `MODEL_PROVIDER` for now.
+  - `auth_type`: `API_KEY` or `NONE`.
+  - `secret_ref`, `base_url`, `status` (`ACTIVE` or `REVOKED`), `expires_at`, and who changed it and when.
+- **`models`:**
+  - The catalog id is what an `AgentSpec` binds, e.g. `sonnet` or `anthropic/claude-sonnet`.
+  - Each row also has `connection_id`, `provider_model` (the name sent to the provider), `display_name` and `enabled`.
+- **`platform_imports`:** one row per one-time import from deployment config.
+
+**Credentials.**
+
+- A connection holds only a `kv://name` secret reference. A literal secret is rejected with a 400.
+- No DTO ever returns a secret value.
+- Control-plane does not resolve the reference. The execution adapter that calls the provider does (slice 4, in agents).
+- Rotation replaces the reference. Revocation is terminal: to restore access, create a new connection.
+
+**Availability.** A model is available when three things hold:
+
+- it is enabled;
+- its connection is `ACTIVE`;
+- the connection has not expired.
+
+`ModelCatalog` reads the database on every call, so changes take effect without a restart:
+
+- `authorizedModels()` decides what can be published.
+- `resolve(binding)` tries the bound model first, then only the fallbacks the agent declared. If none is available it fails with a 409 that names the reason for every candidate. There is no silent default.
+
+`AgentRegistryService.resolveForRun` now returns `ResolvedAgentDto`: the pinned version plus `model`, `providerModel`, `connectionId` and `fallback`.
+
+**Seed.** `ModelCatalogSeeder` runs once, recorded in `platform_imports`:
+
+- It creates connection `default-gateway` for `agents.gateway`, with `kv://pdlc-llm-api-key`, i.e. `PDLC_LLM_API_KEY`.
+- It adds one model per distinct `agents.roles.*.model`.
+- Later `pdlc.yaml` edits never overwrite catalog edits.
+
+**REST (`/api/platform`).**
+
+| Method and path | Who |
+|---|---|
+| `GET /connections` | enterprise Admin |
+| `POST /connections` | enterprise Admin |
+| `PUT /connections/{id}` (rotate `secretRef`, `baseUrl`, `expiresAt`) | enterprise Admin |
+| `POST /connections/{id}/revoke` | enterprise Admin |
+| `GET /models` | any signed-in user |
+| `POST /models` | enterprise Admin |
+| `PUT /models/{*id}` (ids may contain `/`) | enterprise Admin |
+
+**Exit evidence:**
+
+| Test | What it proves |
+|---|---|
+| `ModelCatalogTest` | Availability rules (disabled, revoked, expired); fallback order; the explicit error. |
+| `ConnectionServiceTest` | Admin-only writes; secret values rejected; revocation is terminal; models need an active connection. |
+| `ModelCatalogSeederTest` | The import runs once and preserves admin edits. |
+| `AgentRegistryServiceTest` (new cases) | A model added to the catalog is publishable without a restart; a revoked connection fails the next resolution with its reason; a disabled model uses a declared fallback. |
+| `PlatformRegistryIntegrationTest` | The JDBC catalog and one-time imports against real Postgres. |
+
+**Not in this slice:**
+
+- workspace-level model allowlists (every workspace sees the whole enterprise catalog);
+- connection health checks against the provider;
+- the agents runtime reading the catalog. That comes with the run in slice 4, where the model is resolved at invocation time.
+
+## Slice 4 — Single-agent durable run (implemented)
+
+**Workflow.** `AgentRunWorkflow`/`Impl` in `core/.../workflow` is a new workflow type, not `FeatureWorkflow`. It is registered on the agents `REASONING` worker, which is that queue's sole poller.
+
+- **Input:** only `{runId, timeoutSeconds}`. Prompt, inputs and outputs never enter workflow history.
+- **Deadline:** the invocation activity gets the agent's `timeoutSeconds` plus 30s. It retries at most twice, and never retries rejections (type `AgentRunRejected`: tampered definition, bad input, unavailable model, unresolvable secret, output failing its schema).
+- **Cancellation:** abandons the in-flight call and marks the run `CANCELLED` straight away. A reply that arrives later is discarded, because every write is status-guarded. Cancellation never claims to undo a call that already completed.
+
+**Runner.** `agents/.../platform/AgentRunActivitiesImpl.invoke` does these steps:
+
+1. Loads the run's pinned version (`RunStore`, shared Postgres) and re-verifies its content hash.
+2. Re-checks inputs with `AgentInputs`: required variables present, undeclared inputs rejected.
+3. Re-checks, now, that the pinned model is enabled and its connection active and unexpired. A revocation after start stops the run. There is no fallback here, because the model was chosen at start.
+4. Resolves the connection's `kv://` reference with `SecretsPort`, just before the call. The key is never stored or logged.
+5. Renders the pinned Mustache prompt with a data-only view of the inputs. `{{x}}` is inserted verbatim, not HTML-escaped.
+6. Calls the model through Spring AI's `OpenAiChatModel`, built per call from the connection's base URL, key and provider model.
+   - This is the same client Embabel wraps. Embabel itself only routes models registered at startup, which would defeat "no restart".
+   - The call enforces `timeoutSeconds` and `maxOutputTokens`, with client retries off.
+7. Validates the output against `outputSchema`, accepting one ```json fence around it. On failure the run is `FAILED`, and the raw output is kept for inspection.
+8. Records the output and the token usage. Usage is `null` when the provider doesn't report it.
+
+**Output schemas.** `OutputSchema` enforces an exact JSON-Schema subset: `type`, `properties`, `required`, `items`, `enum`, `description`. Publication now rejects any other keyword, instead of the runner silently ignoring it.
+
+**Run records.**
+
+- `V17__platform_runs.sql` stores each run with:
+  - the pin: agent version, content hash, model, provider model, connection, fallback flag;
+  - its inputs, status, output text and JSON, error, token counts and attempt count;
+  - an idempotency key (unique per workspace) and the workflow id.
+- The planned separate `platform_run_artifacts` table isn't needed yet: single-shot output fits on the run row.
+- Object storage for large artifacts arrives with the knowledge work in Phase 3.
+
+**Working context.** The run's own inputs only. Retrieval and memory come in later phases.
+
+**API (runs module, `control-plane/.../runs`).**
+
+| Method and path | Who |
+|---|---|
+| `POST /api/workspaces/{ws}/agents/{id}/runs` with `{inputs, idempotencyKey?}` | OPERATOR |
+| `GET /api/workspaces/{ws}/agents/{id}/runs` | member |
+| `GET /api/workspaces/{ws}/runs/{runId}` | member |
+| `POST /api/workspaces/{ws}/runs/{runId}/cancel` | OPERATOR |
+
+- **Start:** resolves the current version and model, validates inputs, writes the `QUEUED` row (the pin), then starts the workflow `agent-run-<runId>`.
+- **Same idempotency key:** returns the same run and starts nothing new. Reusing the key for another agent is a 409.
+- **Temporal unreachable at start:** 503, and the row is marked `FAILED`.
+
+**Exit evidence:**
+
+| Test | What it proves |
+|---|---|
+| `AgentRunWorkflowImplTest` (TestWorkflowEnvironment) | Success; one retry on a transient error; `FAILED` after two attempts; no retry for a rejection; cancellation. |
+| `AgentRunActivitiesImplTest` | Rendering, key resolution, usage; tampered hash, missing input, revoked connection and unresolvable secret are rejected before any model call; provider errors are retryable; schema validation with a fence; a terminal run is never re-invoked; a late result is discarded. |
+| `OpenAiCompatibleModelInvokerTest` | Real HTTP to a local chat-completions endpoint: key, model, token limit, and usage (unknown stays `null`). |
+| `RunServiceTest` | Pinning across a v2 publish, idempotency, input validation, OPERATOR and workspace isolation, revocation at start, cancel, unreachable Temporal. |
+| `OutputSchemaAndInputsTest`, `AgentSpringWiringTest` (the runner's two constructors) | The schema subset and inputs check; Spring can construct the runner. |
+
+**Live run** (local Postgres, Temporal dev server, a key-checking OpenAI-compatible stub, control-plane and the real agents worker):
+
+- A run started while the agents worker was down, then v2 was published. The run completed with v1's ALPHA prompt. The next run used BETA.
+- Cancelling a 12s call gave `CANCELLED`, and the late reply was discarded.
+- Killing the worker mid-call: the run resumed on a restarted worker and succeeded on attempt 2.
+- Structured output was parsed, and a schema violation failed with the output kept.
+- Revoking the connection refused new starts and failed an already-queued run at invocation.
 
 ## Slice 5 — Agent Studio UI
 

@@ -91,6 +91,9 @@ public final class AgentSpecValidator {
                 errors.add("limits.maxOutputTokens must be between 1 and " + MAX_OUTPUT_TOKENS);
             }
         }
+        if (spec.outputSchema() != null) {
+            errors.addAll(OutputSchema.unsupported(spec.outputSchema()));
+        }
         return errors;
     }
 

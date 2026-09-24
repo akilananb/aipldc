@@ -10,7 +10,7 @@ import java.util.TreeMap;
 
 /** In-process {@link WorkspaceStore} for service tests; {@link JdbcWorkspaceStore} is covered by
  * {@link PlatformRegistryIntegrationTest}. */
-class InMemoryWorkspaceStore implements WorkspaceStore {
+public class InMemoryWorkspaceStore implements WorkspaceStore {
 
     private final Map<String, WorkspaceRow> workspaces = new TreeMap<>();
     private final Map<String, Map<String, Set<Capability>>> members = new TreeMap<>();

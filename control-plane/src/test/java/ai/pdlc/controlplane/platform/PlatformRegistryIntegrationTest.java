@@ -1,5 +1,8 @@
 package ai.pdlc.controlplane.platform;
 
+import ai.pdlc.controlplane.connections.ConnectionStore;
+import ai.pdlc.controlplane.connections.JdbcConnectionStore;
+import ai.pdlc.controlplane.connections.ModelCatalog;
 import ai.pdlc.controlplane.identity.Identity;
 import ai.pdlc.controlplane.web.ConflictException;
 import ai.pdlc.controlplane.web.NotFoundException;
@@ -17,15 +20,12 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.util.EnumSet;
 import java.util.List;
-import java.util.Set;
 
 import static ai.pdlc.controlplane.platform.AgentRegistryServiceTest.AUTHOR;
 import static ai.pdlc.controlplane.platform.AgentRegistryServiceTest.OPERATOR;
 import static ai.pdlc.controlplane.platform.AgentRegistryServiceTest.labelSpec;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
 /**
  * Docker-dependent (Testcontainers Postgres + real Flyway migrations, see AGENTS.md's
@@ -46,6 +46,7 @@ class PlatformRegistryIntegrationTest {
     static JdbcTemplate jdbc;
     static WorkspaceService workspaces;
     static AgentRegistryService agents;
+    static JdbcConnectionStore connections;
 
     @BeforeAll
     static void migrate() {
@@ -54,8 +55,13 @@ class PlatformRegistryIntegrationTest {
                 .load()
                 .migrate();
         jdbc = new JdbcTemplate(new DriverManagerDataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword()));
-        ModelCatalog models = mock(ModelCatalog.class);
-        when(models.authorizedModels()).thenReturn(Set.of("sonnet"));
+        connections = new JdbcConnectionStore(jdbc);
+        connections.insertConnection(new ConnectionStore.ConnectionRow("gw", "ENTERPRISE", null, "MODEL_PROVIDER",
+                "API_KEY", "kv://llm-key", "https://gateway.example/v1", "ACTIVE", null, null, "it@acme", null,
+                "it@acme", null, null));
+        connections.insertModel(new ConnectionStore.ModelRow("sonnet", "gw", "anthropic/claude-sonnet-4", "Sonnet",
+                true, null, "it@acme"));
+        ModelCatalog models = new ModelCatalog(connections);
         workspaces = new WorkspaceService(new JdbcWorkspaceStore(jdbc));
         agents = new AgentRegistryService(new JdbcAgentRegistryStore(jdbc), workspaces, models);
 
@@ -82,7 +88,7 @@ class PlatformRegistryIntegrationTest {
         assertThat(created.draftSpec()).isEqualTo(labelSpec("ALPHA"));
 
         AgentVersionDto v1 = agents.publish("engineering", "labeler", 1, ENG_ADMIN);
-        AgentVersionDto pinned = agents.resolveForRun("engineering", "labeler", OPERATOR);
+        AgentVersionDto pinned = agents.resolveForRun("engineering", "labeler", OPERATOR).definition();
 
         AgentDefinitionDto edited = agents.saveDraft("engineering", "labeler",
                 new AgentDraftRequest(null, "Labeler", labelSpec("BETA"), 1), AUTHOR);
@@ -96,14 +102,14 @@ class PlatformRegistryIntegrationTest {
         assertThat(pinned.version()).isEqualTo(1);
         assertThat(pinned.contentHash()).isEqualTo(v1.contentHash());
         assertThat(v2.version()).isEqualTo(2);
-        assertThat(agents.resolveForRun("engineering", "labeler", OPERATOR).spec().prompt()).contains("BETA");
+        assertThat(agents.resolveForRun("engineering", "labeler", OPERATOR).definition().spec().prompt()).contains("BETA");
         assertThat(agents.version("engineering", "labeler", 1, OPERATOR).spec()).isEqualTo(labelSpec("ALPHA"));
         assertThat(agents.versions("engineering", "labeler", OPERATOR)).extracting(AgentVersionDto::version).containsExactly(1, 2);
         assertThat(v1.publishedAt()).isNotNull();
         assertThat(v1.publishedBy()).isEqualTo(ENG_ADMIN.user());
 
         agents.rollback("engineering", "labeler", 1, ENG_ADMIN);
-        assertThat(agents.resolveForRun("engineering", "labeler", OPERATOR).version()).isEqualTo(1);
+        assertThat(agents.resolveForRun("engineering", "labeler", OPERATOR).definition().version()).isEqualTo(1);
 
         assertThatThrownBy(() -> agents.get("engineering", "labeler", FIN_ADMIN)).isInstanceOf(NotFoundException.class);
     }
@@ -119,5 +125,44 @@ class PlatformRegistryIntegrationTest {
         assertThatThrownBy(() -> agents.resolveForRun("engineering", "tamper", OPERATOR))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("does not match its hash");
+    }
+
+    @Test
+    void theJdbcCatalogResolvesProviderModelsAndRecordsImportsOnce() {
+        AgentDefinitionDto created = agents.create("engineering",
+                new AgentDraftRequest("catalog", "Catalog", labelSpec("C"), null), AUTHOR);
+        agents.publish("engineering", "catalog", created.draftRevision(), ENG_ADMIN);
+
+        var resolved = agents.resolveForRun("engineering", "catalog", OPERATOR);
+
+        assertThat(resolved.providerModel()).isEqualTo("anthropic/claude-sonnet-4");
+        assertThat(resolved.connectionId()).isEqualTo("gw");
+        assertThat(connections.recordImport("test-import", "x")).isTrue();
+        assertThat(connections.recordImport("test-import", "x")).isFalse();
+    }
+
+    @Test
+    void theJdbcRunStorePinsAndGuardsRuns() {
+        AgentDefinitionDto created = agents.create("engineering",
+                new AgentDraftRequest("runnable", "Runnable", labelSpec("R"), null), AUTHOR);
+        agents.publish("engineering", "runnable", created.draftRevision(), ENG_ADMIN);
+        var runs = new ai.pdlc.controlplane.runs.JdbcRunStore(jdbc);
+        java.util.UUID id = java.util.UUID.randomUUID();
+        var row = new ai.pdlc.controlplane.runs.RunStore.RunRow(id, "engineering", "runnable", 1, "sha256:x", "sonnet",
+                "anthropic/claude-sonnet-4", "gw", false, "{\"input\":\"x\"}", "QUEUED", null, null, null, null, null,
+                0, "key-1", "agent-run-" + id, "op@acme", null, null, null);
+
+        assertThat(runs.insert(row)).isTrue();
+        assertThat(runs.insert(new ai.pdlc.controlplane.runs.RunStore.RunRow(java.util.UUID.randomUUID(), "engineering",
+                "runnable", 1, "sha256:x", "sonnet", "p", "gw", false, "{}", "QUEUED", null, null, null, null, null, 0,
+                "key-1", "wf", "op@acme", null, null, null))).isFalse();
+        assertThat(runs.findByIdempotencyKey("engineering", "key-1")).get().extracting(r -> r.id()).isEqualTo(id);
+        assertThat(runs.find(id)).get().satisfies(r -> {
+            assertThat(r.status()).isEqualTo("QUEUED");
+            assertThat(r.createdAt()).isNotNull();
+        });
+        runs.failToStart(id, "no temporal");
+        assertThat(runs.find(id)).get().extracting(r -> r.status()).isEqualTo("FAILED");
+        assertThat(runs.list("engineering", "runnable", 10)).hasSize(1);
     }
 }

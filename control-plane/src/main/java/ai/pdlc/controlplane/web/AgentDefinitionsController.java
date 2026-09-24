@@ -7,6 +7,7 @@ import ai.pdlc.controlplane.web.dto.AgentDraftRequest;
 import ai.pdlc.controlplane.web.dto.AgentLifecycleRequest;
 import ai.pdlc.controlplane.web.dto.AgentValidationDto;
 import ai.pdlc.controlplane.web.dto.AgentVersionDto;
+import ai.pdlc.controlplane.web.dto.ResolvedAgentDto;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -93,9 +94,9 @@ public class AgentDefinitionsController {
         return service.version(workspaceId, agentId, version, identityResolver.resolve(http));
     }
 
-    /** The pinned definition a new run would use right now (OPERATOR only). */
+    /** The pinned definition and model a new run would use right now (OPERATOR only). */
     @GetMapping("/{agentId}/resolved")
-    public AgentVersionDto resolved(@PathVariable String workspaceId, @PathVariable String agentId,
+    public ResolvedAgentDto resolved(@PathVariable String workspaceId, @PathVariable String agentId,
                                     HttpServletRequest http) {
         return service.resolveForRun(workspaceId, agentId, identityResolver.resolve(http));
     }
