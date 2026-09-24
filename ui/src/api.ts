@@ -92,6 +92,7 @@ export const studio = {
   createWorkspace: (body: { id: string; name: string; admins: string[] }) =>
     request<Workspace>('/api/workspaces', { method: 'POST', body: JSON.stringify(body) }),
   models: () => request<CatalogModel[]>('/api/platform/models'),
+  projects: (wsId: string) => request<{ id: string; name: string }[]>(`${ws(wsId)}/projects`),
   agents: (wsId: string) => request<AgentDefinition[]>(`${ws(wsId)}/agents`),
   agent: (wsId: string, agentId: string) => request<AgentDefinition>(agent(wsId, agentId)),
   createAgent: (wsId: string, body: { id: string; name: string; spec: AgentSpec }) =>

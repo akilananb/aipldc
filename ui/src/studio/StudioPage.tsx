@@ -107,6 +107,7 @@ export default function StudioPage() {
 
 function AgentList({ workspace }: { workspace: Workspace }) {
   const agentsQuery = useQuery({ queryKey: ['studio', workspace.id, 'agents'], queryFn: () => studio.agents(workspace.id) });
+  const projectsQuery = useQuery({ queryKey: ['studio', workspace.id, 'projects'], queryFn: () => studio.projects(workspace.id) });
   const canAuthor = can(workspace, 'AUTHOR', 'WORKSPACE_ADMIN');
 
   return (
@@ -122,6 +123,16 @@ function AgentList({ workspace }: { workspace: Workspace }) {
         </Text>
         {canAuthor && <NewAgentDialog workspaceId={workspace.id} />}
       </Flex>
+      {(projectsQuery.data ?? []).length > 0 && (
+        <Text size="2" color="gray" as="p" mb="3">
+          Serves projects:{' '}
+          {(projectsQuery.data ?? []).map((p) => (
+            <Link key={p.id} to={`/projects?id=${encodeURIComponent(p.id)}`} className="meta-tag" style={{ marginRight: 4 }}>
+              {p.name}
+            </Link>
+          ))}
+        </Text>
+      )}
       {agentsQuery.isLoading ? (
         <Skeleton height="160px" />
       ) : agentsQuery.isError ? (

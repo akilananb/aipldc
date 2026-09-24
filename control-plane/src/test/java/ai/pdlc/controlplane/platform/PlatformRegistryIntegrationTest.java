@@ -165,4 +165,21 @@ class PlatformRegistryIntegrationTest {
         assertThat(runs.find(id)).get().extracting(r -> r.status()).isEqualTo("FAILED");
         assertThat(runs.list("engineering", "runnable", 10)).hasSize(1);
     }
+
+    @Test
+    void workspaceProjectLinksAreIdempotentAndFollowProjectDeletion() {
+        jdbc.update("INSERT INTO projects (id, name, config_json) VALUES ('proj-a', 'Project A', '{}'), ('proj-b', 'Project B', '{}')");
+        JdbcWorkspaceStore store = new JdbcWorkspaceStore(jdbc);
+
+        store.linkProject("engineering", "proj-a", "system:test");
+        store.linkProject("engineering", "proj-a", "system:test");
+        store.linkProject("engineering", "proj-b", "system:test");
+        assertThat(store.projects("engineering")).extracting(WorkspaceStore.LinkedProject::name)
+                .containsExactly("Project A", "Project B");
+
+        jdbc.update("DELETE FROM projects WHERE id = 'proj-b'");
+        assertThat(store.projects("engineering")).extracting(WorkspaceStore.LinkedProject::id).containsExactly("proj-a");
+        assertThat(workspaces.projects("engineering", OPERATOR)).hasSize(1);
+        assertThatThrownBy(() -> workspaces.projects("engineering", FIN_ADMIN)).isInstanceOf(NotFoundException.class);
+    }
 }

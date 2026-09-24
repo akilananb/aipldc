@@ -92,7 +92,7 @@ and shows the draft → a PO/SquadLead approves via `POST .../approve-agent-resu
 | `agents/src/main/java/ai/pdlc/agents/{grill,po,plan,review,release,monitor,mention}/` | Per-domain LLM agent components |
 | `agents/src/main/java/ai/pdlc/agents/activities/` | `AgentActivitiesImpl`, `AgentContext` (best-effort reads), `RunRecorder` |
 | `agents/src/main/java/ai/pdlc/agents/templates/` | `PromptTemplates` (Mustache renderer) |
-| `agents/src/main/resources/prompts/*.mustache` | LLM prompt templates, one file per agent-call |
+| `core/src/main/resources/prompts/*.mustache` | LLM prompt templates, one file per agent-call (in `core` so control-plane's `PdlcImportSeeder` can import them as platform agents; agents still loads them from the classpath) |
 | `build-worker/src/` | Standalone Node ACP build agent (`worker.ts`, `poller.ts`, `acp.ts`, `buildTask.ts`, `repo.ts`, `verifier.ts`) |
 | `ui/src/routes/` | `ReviewPage.tsx`, `TaskDetailPage.tsx`, item list |
 | `ui/src/studio/` | Agent Studio (docs/phase-1-execution-spec.md slice 5): workspace-scoped agent list, editor, versions/diff/rollback, test runs; API client is `studio` in `ui/src/api.ts` |

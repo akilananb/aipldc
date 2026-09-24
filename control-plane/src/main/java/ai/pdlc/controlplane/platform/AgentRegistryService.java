@@ -174,6 +174,30 @@ public class AgentRegistryService {
         return new ResolvedAgentDto(toDto(version), model.model(), model.providerModel(), model.connectionId(), model.fallback());
     }
 
+    /** Outcome of a system import: {@code version} is null when only a draft was created. */
+    record ImportResult(String agentId, Integer version, String contentHash, List<String> errors) {
+    }
+
+    /**
+     * System import (no caller identity; {@code PdlcImportSeeder} only): creates the agent's draft
+     * and, when it passes the same publication rules as {@link #publish}, publishes it as v1. A
+     * definition that does not validate stays a draft, and the reasons are returned.
+     */
+    @Transactional
+    ImportResult importPublished(String workspaceId, String id, String name, AgentSpec spec, String actor) {
+        if (!store.insert(workspaceId, id, name, ContentHash.canonicalJson(spec), actor)) {
+            throw new ConflictException("Agent " + id + " already exists in " + workspaceId);
+        }
+        List<String> errors = AgentSpecValidator.validate(name, spec, models.authorizedModels());
+        if (!errors.isEmpty()) {
+            return new ImportResult(id, null, null, errors);
+        }
+        String hash = ContentHash.ofAgent(name, spec);
+        store.insertVersion(new VersionRow(workspaceId, id, 1, name, ContentHash.canonicalJson(spec), hash, null, actor));
+        store.setCurrentVersion(workspaceId, id, 1, actor);
+        return new ImportResult(id, 1, hash, List.of());
+    }
+
     private AgentRow find(String workspaceId, String id) {
         return store.find(workspaceId, id).orElseThrow(() -> new NotFoundException("No agent " + id + " in " + workspaceId));
     }

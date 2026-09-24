@@ -104,4 +104,9 @@ public class JdbcConnectionStore implements ConnectionStore {
     public boolean recordImport(String id, String details) {
         return jdbc.update("INSERT INTO platform_imports (id, details) VALUES (?, ?) ON CONFLICT (id) DO NOTHING", id, details) == 1;
     }
+
+    @Override
+    public void updateImport(String id, String details) {
+        jdbc.update("UPDATE platform_imports SET details = ? WHERE id = ?", details, id);
+    }
 }

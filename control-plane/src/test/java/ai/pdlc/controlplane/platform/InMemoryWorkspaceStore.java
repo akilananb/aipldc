@@ -55,4 +55,16 @@ public class InMemoryWorkspaceStore implements WorkspaceStore {
             ws.put(userId, EnumSet.copyOf(capabilities));
         }
     }
+
+    private final Map<String, Set<String>> links = new TreeMap<>();
+
+    @Override
+    public void linkProject(String workspaceId, String projectId, String linkedBy) {
+        links.computeIfAbsent(workspaceId, k -> new java.util.TreeSet<>()).add(projectId);
+    }
+
+    @Override
+    public List<LinkedProject> projects(String workspaceId) {
+        return links.getOrDefault(workspaceId, Set.of()).stream().map(id -> new LinkedProject(id, id)).toList();
+    }
 }

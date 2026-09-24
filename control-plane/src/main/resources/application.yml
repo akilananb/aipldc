@@ -37,6 +37,9 @@ pdlc:
     allowed-origins: ${PDLC_IDENTITY_ALLOWED_ORIGINS:http://localhost:*}
     service-token: ${PDLC_SERVICE_TOKEN:}
     webhook-token: ${PDLC_WEBHOOK_TOKEN:}
+  platform:
+    # Users granted WORKSPACE_ADMIN in the imported `pdlc` workspace on every startup (additive).
+    pdlc-workspace-admins: ${PDLC_WORKSPACE_ADMINS:}
 
 temporal:
   target: ${TEMPORAL_TARGET:127.0.0.1:7233}

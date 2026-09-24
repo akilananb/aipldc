@@ -33,6 +33,9 @@ spec:
             # application.yml). Production enables OIDC instead - docs/phase-1-execution-spec.md slice 2.
             - name: PDLC_IDENTITY_DEV_HEADERS
               value: "true"
+            # Local stack: who administers the imported `pdlc` workspace in the Agent Studio.
+            - name: PDLC_WORKSPACE_ADMINS
+              value: "admin@acme,lead@acme"
             # Shared secret the standalone build agent sends as X-Agent-Token; empty (default) = open
             # while dev headers are on.
             - name: BUILD_AGENT_TOKEN
