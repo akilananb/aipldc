@@ -197,8 +197,14 @@ scripts/e2e-demo-phase4.sh   # + release pack -> gate 3 -> deploy -> monitor
 - **UI mutations:** `@tanstack/react-query` `useMutation` per action, `onSuccess` invalidates
   `['artifact', id]` and/or `['item', id]`; artifact/item queries poll every 2s
   (`refetchInterval: 2000`) so async workflow state transitions (e.g. `running`→`pending`)
-  surface without extra wiring. Identity is `useIdentity()`/`setIdentity()` from `ui/src/identity.ts`
-  (dev-only `X-User`/`X-Role` header shim, no real auth).
+  surface without extra wiring. Identity is `useIdentity()` from `ui/src/identity.ts`, fed either by the dev
+  `X-User`/`X-Role` switcher (only when `/api/me` reports `dev-headers`) or by the OIDC session via
+  `useAuth()`; `api.ts` sends `credentials: 'include'` and the `X-XSRF-TOKEN` CSRF header.
+- **Authentication (control-plane `identity/`).** `SecurityConfig` owns all authentication:
+  enterprise OIDC login, service client-credentials JWTs (scopes `pdlc.build`/`pdlc.board.read`/
+  `pdlc.webhook`), shared tokens, and the dev header shim (`PDLC_IDENTITY_DEV_HEADERS=true`, off by
+  default, on in the local k8s manifest). Controllers only call `IdentityResolver.resolve(...)`;
+  never read `X-User`/tokens directly. See docs/phase-1-execution-spec.md slice 2.
 - **No linter/formatter configured anywhere** (no ESLint, Prettier, Checkstyle, Spotless,
   `.editorconfig`). Match surrounding code style by hand; TypeScript's only enforced gate is
   `tsc --noEmit` (strict mode) inside `npm run build`.

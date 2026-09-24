@@ -5,6 +5,7 @@ import ai.pdlc.adapters.github.GitHubRepoAdapter;
 import ai.pdlc.adapters.inmemory.InMemoryRepoAdapter;
 import ai.pdlc.adapters.localgit.LocalGitRepoAdapter;
 import ai.pdlc.adapters.remoteboard.RemoteBoardPort;
+import ai.pdlc.adapters.serviceauth.ServiceCredentials;
 import ai.pdlc.core.config.Profile;
 import ai.pdlc.core.config.ProjectDirectory;
 import ai.pdlc.core.config.RepoConfig;
@@ -29,15 +30,18 @@ public class PortRegistry {
     private final ProjectDirectory projects;
     private final SecretsPort secretsPort;
     private final String controlPlaneUrl;
+    private final ServiceCredentials serviceCredentials;
 
     private final Map<String, BoardPort> boardCache = new ConcurrentHashMap<>();
     private final Map<String, RepoPort> repoCache = new ConcurrentHashMap<>();
 
     public PortRegistry(ProjectDirectory projects, SecretsPort secretsPort,
-                         @Value("${pdlc.control-plane-url:http://control-plane:8081}") String controlPlaneUrl) {
+                         @Value("${pdlc.control-plane-url:http://control-plane:8081}") String controlPlaneUrl,
+                         ServiceCredentials serviceCredentials) {
         this.projects = projects;
         this.secretsPort = secretsPort;
         this.controlPlaneUrl = controlPlaneUrl;
+        this.serviceCredentials = serviceCredentials;
     }
 
     public BoardPort board(String projectId) {
@@ -71,7 +75,7 @@ public class PortRegistry {
             // (orchestration-decision §6: agents is a separate process); reading through its REST
             // API is how the grill/PO agents actually see real title/description/comments instead
             // of an empty local map. See RemoteBoardPort's javadoc for the bug this fixes.
-            default -> new RemoteBoardPort(controlPlaneUrl);
+            default -> new RemoteBoardPort(controlPlaneUrl, serviceCredentials);
         };
     }
 

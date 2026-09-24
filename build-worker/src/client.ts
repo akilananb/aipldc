@@ -1,10 +1,15 @@
 import type { AgentConfig } from './config';
+import { ClientCredentialsToken } from './serviceToken';
 import type { AgentPresenceReport, BuildResult, ClaimedTask, Lease, PlanConsultationReport } from './types';
 
 /** Thin REST wrapper over control-plane's `/api/build-tasks/*` — the agent's only Temporal
  * boundary (control-plane owns the actual Temporal client and async activity completion). */
 export class ApiClient {
-  constructor(public readonly cfg: AgentConfig) {}
+  private readonly token?: ClientCredentialsToken;
+
+  constructor(public readonly cfg: AgentConfig) {
+    this.token = cfg.oauth ? new ClientCredentialsToken(cfg.oauth) : undefined;
+  }
 
   async claim(presence?: AgentPresenceReport): Promise<ClaimedTask | null> {
     const res = await this.post('/api/build-tasks/claim', { agent: this.cfg.agentName, filters: this.cfg.filters, presence });
@@ -50,9 +55,11 @@ export class ApiClient {
     await this.assertOk(res);
   }
 
-  private post(pathname: string, body?: unknown, lease?: Lease): Promise<Response> {
+  private async post(pathname: string, body?: unknown, lease?: Lease): Promise<Response> {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (this.cfg.agentToken) {
+    if (this.token) {
+      headers['Authorization'] = `Bearer ${await this.token.get()}`;
+    } else if (this.cfg.agentToken) {
       headers['X-Agent-Token'] = this.cfg.agentToken;
     }
     if (lease) {
