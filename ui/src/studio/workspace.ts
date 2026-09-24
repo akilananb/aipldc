@@ -60,7 +60,17 @@ export function statusVariant(status: string): string {
     case 'RETIRED':
       return 'fail';
     case 'CANCELLED':
+    case 'AWAITING_APPROVAL':
+    case 'NEEDS_OPERATOR':
+    case 'PENDING':
+    case 'PENDING_APPROVAL':
+    case 'UNKNOWN':
       return 'review';
+    case 'APPROVED':
+      return 'pass';
+    case 'REJECTED':
+    case 'EXPIRED':
+      return 'fail';
     default:
       return 'info';
   }

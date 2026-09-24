@@ -1,5 +1,5 @@
 import { getIdentity, sendsDevHeaders, type AuthState } from './identity';
-import type { AgentDefinition, AgentSpec, AgentValidation, AgentVersion, CatalogModel, PlatformRun, ToolCallRecord, ToolDefinition, ToolSpec, ToolVersion, Workspace, WorkspaceConnection } from './types';
+import type { AgentDefinition, AgentSpec, AgentValidation, AgentVersion, Approval, CatalogModel, Effect, PlatformRun, ToolCallRecord, ToolDefinition, ToolSpec, ToolVersion, Workspace, WorkspaceConnection } from './types';
 import type { AgentRun, AgentsStatus, ArtifactVersion, BoardComment, Comment, CommentIntent, DemoStatus, GrillQuestions, ItemDetail, ItemSummary, Project, ProjectRequest, QualityReport, ReleaseDocument, ScenarioReview, SpecDocs } from './types';
 
 export const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8081';
@@ -130,6 +130,20 @@ export const studio = {
     request<ToolVersion>(`${tool(wsId, toolId)}/publish`, { method: 'POST', body: JSON.stringify({ revision }) }),
   retireTool: (wsId: string, toolId: string) => request<ToolDefinition>(`${tool(wsId, toolId)}/retire`, { method: 'POST' }),
   toolVersions: (wsId: string, toolId: string) => request<ToolVersion[]>(`${tool(wsId, toolId)}/versions`),
+  // Write approvals and effects (docs/phase-2-execution-spec.md slice 2.2)
+  approvals: (wsId: string, status?: string) =>
+    request<Approval[]>(`${ws(wsId)}/approvals${status ? `?status=${encodeURIComponent(status)}` : ''}`),
+  decideApproval: (wsId: string, approvalId: string, decision: 'approve' | 'reject', reason: string) =>
+    request<Approval>(`${ws(wsId)}/approvals/${encodeURIComponent(approvalId)}/${decision}`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    }),
+  effects: (wsId: string, runId: string) => request<Effect[]>(`${ws(wsId)}/runs/${encodeURIComponent(runId)}/effects`),
+  resolveEffect: (wsId: string, runId: string, effectId: string, outcome: 'SUCCEEDED' | 'FAILED' | 'RETRY', note: string) =>
+    request<Effect>(`${ws(wsId)}/runs/${encodeURIComponent(runId)}/effects/${encodeURIComponent(effectId)}/resolve`, {
+      method: 'POST',
+      body: JSON.stringify({ outcome, note }),
+    }),
 };
 
 export const api = {

@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Box, Button, Callout, Flex, Table, Text, TextArea } from '@radix-ui/themes';
 import { Play, Square } from 'lucide-react';
 import { toast } from 'sonner';
 import { errorMessage, studio } from '../api';
-import type { AgentVersion, PlatformRun, ToolCallRecord } from '../types';
+import type { AgentVersion, Effect, PlatformRun, ToolCallRecord } from '../types';
 import EmptyState from '../components/EmptyState';
 import ErrorCallout from '../components/ErrorCallout';
 import RelativeTime from '../components/RelativeTime';
@@ -206,6 +207,13 @@ function RunDetail({
     refetchInterval: active ? 2000 : false,
   });
   const calls = callsQuery.data ?? [];
+  const effectsQuery = useQuery({
+    queryKey: ['studio', run.workspaceId, 'run', run.id, 'effects'],
+    queryFn: () => studio.effects(run.workspaceId, run.id),
+    enabled: usesTools,
+    refetchInterval: active ? 2000 : false,
+  });
+  const effects = effectsQuery.data ?? [];
   return (
     <Box style={{ border: '1px solid var(--line)', borderRadius: 8, padding: 14 }} aria-live="polite">
       <Flex justify="between" align="center" gap="2" wrap="wrap" mb="2">
@@ -243,6 +251,21 @@ function RunDetail({
         <Box style={{ whiteSpace: 'pre-wrap', fontFamily: 'var(--code-font-family, monospace)', fontSize: 13, background: 'var(--s2)', padding: 10, borderRadius: 6 }}>
           {run.outputText}
         </Box>
+      ) : run.status === 'AWAITING_APPROVAL' ? (
+        <Callout.Root color="amber" size="1">
+          <Callout.Text>
+            Paused: a write needs approval before it runs.{' '}
+            <Link to="/studio?view=approvals">Open the approval inbox</Link>. Undecided requests escalate, then expire
+            as a denial — never approved by time.
+          </Callout.Text>
+        </Callout.Root>
+      ) : run.status === 'NEEDS_OPERATOR' ? (
+        <Callout.Root color="red" size="1">
+          <Callout.Text>
+            Paused: a write may or may not have reached its target and cannot be resent safely. An operator must check the
+            target and resolve the effect below.
+          </Callout.Text>
+        </Callout.Root>
       ) : (
         active && (
           <Text size="2" color="gray">
@@ -250,7 +273,98 @@ function RunDetail({
           </Text>
         )
       )}
+      {effects.length > 0 && <EffectsTable run={run} effects={effects} canResolve={canCancel} />}
       {(usesTools || calls.length > 0) && <ToolTrace calls={calls} error={callsQuery.error} />}
+    </Box>
+  );
+}
+
+/** Approved writes of this run: their idempotency key, state, and - when UNKNOWN - operator resolution. */
+function EffectsTable({ run, effects, canResolve }: { run: PlatformRun; effects: Effect[]; canResolve: boolean }) {
+  const queryClient = useQueryClient();
+  const [note, setNote] = useState('');
+  const resolve = useMutation({
+    mutationFn: ({ id, outcome }: { id: string; outcome: 'SUCCEEDED' | 'FAILED' | 'RETRY' }) =>
+      studio.resolveEffect(run.workspaceId, run.id, id, outcome, note),
+    onSuccess: (e) => {
+      void queryClient.invalidateQueries({ queryKey: ['studio', run.workspaceId, 'run', run.id] });
+      toast.success(`Effect resolved: ${e.resolution}`);
+    },
+    onError: (e) => toast.error(errorMessage(e)),
+  });
+  return (
+    <Box mt="3">
+      <Text size="2" weight="medium" as="div" mb="1">
+        Writes
+      </Text>
+      <Box style={{ overflowX: 'auto' }}>
+        <Table.Root variant="surface" size="1">
+          <Table.Header>
+            <Table.Row>
+              <Table.ColumnHeaderCell>Tool</Table.ColumnHeaderCell>
+              <Table.ColumnHeaderCell>State</Table.ColumnHeaderCell>
+              <Table.ColumnHeaderCell>Sent</Table.ColumnHeaderCell>
+              <Table.ColumnHeaderCell>Idempotency key</Table.ColumnHeaderCell>
+            </Table.Row>
+          </Table.Header>
+          <Table.Body>
+            {effects.map((e) => (
+              <Table.Row key={e.id}>
+                <Table.Cell>
+                  {e.toolId} v{e.toolVersion}
+                </Table.Cell>
+                <Table.Cell>
+                  <span className={`pill ${e.state === 'SUCCEEDED' ? 'pass' : e.state === 'FAILED' ? 'fail' : 'review'}`}>{e.state}</span>
+                  {e.httpStatus != null && <Text size="1"> HTTP {e.httpStatus}</Text>}
+                  {e.resolution && (
+                    <Text size="1" color="gray" as="div">
+                      resolved {e.resolution} by {e.resolvedBy}
+                      {e.note ? ` — ${e.note}` : ''}
+                    </Text>
+                  )}
+                </Table.Cell>
+                <Table.Cell>{e.sendCount}×</Table.Cell>
+                <Table.Cell>
+                  <code style={{ fontSize: 12, wordBreak: 'break-all' }}>{e.idempotencyKey}</code>
+                </Table.Cell>
+              </Table.Row>
+            ))}
+          </Table.Body>
+        </Table.Root>
+      </Box>
+      {effects.some((e) => e.state === 'UNKNOWN') && (
+        <Flex direction="column" gap="2" mt="2">
+          <TextArea
+            aria-label="Resolution note"
+            rows={2}
+            placeholder="What you found at the target"
+            value={note}
+            disabled={!canResolve}
+            onChange={(e) => setNote(e.target.value)}
+          />
+          {effects
+            .filter((e) => e.state === 'UNKNOWN')
+            .map((e) => (
+              <Flex key={e.id} gap="2" wrap="wrap" align="center">
+                <Text size="1">{e.toolId}:</Text>
+                <Button size="1" disabled={!canResolve} onClick={() => resolve.mutate({ id: e.id, outcome: 'SUCCEEDED' })}>
+                  It happened
+                </Button>
+                <Button size="1" color="red" variant="soft" disabled={!canResolve} onClick={() => resolve.mutate({ id: e.id, outcome: 'FAILED' })}>
+                  It did not happen
+                </Button>
+                <Button size="1" variant="soft" disabled={!canResolve} onClick={() => resolve.mutate({ id: e.id, outcome: 'RETRY' })}>
+                  Send again
+                </Button>
+              </Flex>
+            ))}
+          {!canResolve && (
+            <Text size="1" color="gray">
+              Resolving needs the OPERATOR capability.
+            </Text>
+          )}
+        </Flex>
+      )}
     </Box>
   );
 }
@@ -292,7 +406,9 @@ function ToolTrace({ calls, error }: { calls: ToolCallRecord[]; error: unknown }
                     {c.toolVersion != null ? ` v${c.toolVersion}` : ''}
                   </Table.Cell>
                   <Table.Cell>
-                    <span className={`pill ${c.decision === 'ALLOWED' ? 'pass' : 'fail'}`}>{c.decision}</span>
+                    <span className={`pill ${c.decision === 'ALLOWED' ? 'pass' : c.decision === 'DENIED' ? 'fail' : 'review'}`}>
+                      {c.decision}
+                    </span>
                     {c.reason && (
                       <Text size="1" color="gray" as="div" style={{ maxWidth: 320 }}>
                         {c.reason}
@@ -300,7 +416,7 @@ function ToolTrace({ calls, error }: { calls: ToolCallRecord[]; error: unknown }
                     )}
                   </Table.Cell>
                   <Table.Cell>
-                    {c.decision === 'DENIED' ? (
+                    {c.decision !== 'ALLOWED' ? (
                       <Text size="1" color="gray">
                         not executed
                       </Text>

@@ -88,6 +88,7 @@ and shows the draft → a PO/SquadLead approves via `POST .../approve-agent-resu
 | `control-plane/src/main/java/ai/pdlc/controlplane/platform/` + `core/.../platform/` | Configurable agent platform (docs/phase-1-execution-spec.md): workspaces, capabilities, versioned `AgentSpec` registry, `ContentHash` |
 | `control-plane/src/main/java/ai/pdlc/controlplane/connections/` | Connections (secret *references* only) and the DB-backed `ModelCatalog`, seeded once from `pdlc.yaml` by `ModelCatalogSeeder` |
 | `control-plane/.../platform/{ToolRegistryService,VersionedDefinitions,DefinitionStore}` + `agents/.../platform/{ToolExecutor,ToolStore}` + `core/.../platform/{ToolSpec*,ToolArgs,EgressPolicy}` | Governed API tools (docs/phase-2-execution-spec.md slice 2.1): versioned tool registry sharing the agent lifecycle, `HTTP_API` connections granted per workspace (`connection_grants`), the bounded tool loop and its `platform_tool_calls` trace |
+| `control-plane/.../runs/{ApprovalService,JdbcApprovalStore}` + `ui/src/studio/ApprovalsSection.tsx` | Write approvals inbox and effect resolution (docs/phase-2-execution-spec.md slice 2.2) |
 | `control-plane/.../runs/` + `agents/.../platform/` + `core/.../workflow/AgentRunWorkflow*` | Durable single-agent runs: `RunService` pins version+model on a `platform_runs` row and starts `AgentRunWorkflow`; the agents-side `AgentRunActivitiesImpl` renders, calls the model at runtime (`OpenAiCompatibleModelInvoker`) and records the outcome |
 | `control-plane/src/main/resources/db/migration/` | Flyway `V1__schema.sql` … `V6__agent_mention_columns.sql` |
 | `agents/src/main/java/ai/pdlc/agents/{grill,po,plan,review,release,monitor,mention}/` | Per-domain LLM agent components |
@@ -214,6 +215,12 @@ scripts/e2e-demo-phase4.sh   # + release pack -> gate 3 -> deploy -> monitor
   applies `EgressPolicy` (http(s) only; every resolved address public unless in
   `pdlc.egress.allowed-private-hosts`), never follows redirects, and records every decision. Never add another way
   to make a tool's HTTP call, and never let Spring AI execute tool callbacks.
+- **Writes need an approval and an effect intent** (slice 2.2). A WRITE runs only under an `APPROVED`
+  `platform_approvals` row matching its tool version and args hash, decided by a workspace `REVIEWER` who did not
+  start the run; an `INTENDED` `platform_effects` row keyed `run:turn:callId` is recorded before sending. Never resend
+  an effect whose outcome is known; resend an `UNKNOWN` one only for `idempotency: HEADER` tools, otherwise pause for
+  an operator. Runs pause and resume through `AgentRunWorkflow` signals, with the conversation in
+  `platform_run_messages` - never put prompt/tool content in workflow history.
 - **No linter/formatter configured anywhere** (no ESLint, Prettier, Checkstyle, Spotless,
   `.editorconfig`). Match surrounding code style by hand; TypeScript's only enforced gate is
   `tsc --noEmit` (strict mode) inside `npm run build`.

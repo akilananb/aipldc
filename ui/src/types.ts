@@ -358,6 +358,52 @@ export interface ToolSpec {
   effect: 'READ' | 'WRITE' | null;
   timeoutSeconds: number | null;
   maxResponseBytes: number | null;
+  /** WRITE tools (slice 2.2): HEADER = the target honors Idempotency-Key. Omitted = NONE. */
+  idempotency?: 'HEADER' | 'NONE' | null;
+  approval?: { escalateAfterMinutes: number | null; expireAfterMinutes: number | null } | null;
+}
+
+/** docs/phase-2-execution-spec.md slice 2.2: a WRITE call waiting for (or past) a human decision. */
+export interface Approval {
+  id: string;
+  workspaceId: string;
+  runId: string;
+  agentId: string;
+  agentVersion: number;
+  runCreatedBy: string;
+  turn: number;
+  callId: string;
+  toolId: string;
+  toolVersion: number;
+  method: string | null;
+  path: string | null;
+  connectionId: string | null;
+  argsJson: string;
+  argsHash: string;
+  status: 'PENDING' | 'APPROVED' | 'REJECTED' | 'EXPIRED' | 'CANCELLED';
+  requestedAt: string;
+  escalatedAt: string | null;
+  decidedBy: string | null;
+  decidedAt: string | null;
+  reason: string | null;
+}
+
+export interface Effect {
+  id: string;
+  runId: string;
+  approvalId: string;
+  toolId: string;
+  toolVersion: number;
+  idempotencyKey: string;
+  state: 'INTENDED' | 'SENT' | 'SUCCEEDED' | 'FAILED' | 'UNKNOWN';
+  sendCount: number;
+  httpStatus: number | null;
+  resolution: string | null;
+  resolvedBy: string | null;
+  resolvedAt: string | null;
+  note: string | null;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface ToolDefinition {
@@ -402,7 +448,7 @@ export interface ToolCallRecord {
   toolVersion: number | null;
   argsJson: string | null;
   argsHash: string | null;
-  decision: 'ALLOWED' | 'DENIED';
+  decision: 'ALLOWED' | 'DENIED' | 'PENDING_APPROVAL';
   reason: string | null;
   httpStatus: number | null;
   durationMs: number | null;
@@ -453,7 +499,7 @@ export interface CatalogModel {
   unavailableReason: string | null;
 }
 
-export type RunStatus = 'QUEUED' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'CANCELLED';
+export type RunStatus = 'QUEUED' | 'RUNNING' | 'AWAITING_APPROVAL' | 'NEEDS_OPERATOR' | 'SUCCEEDED' | 'FAILED' | 'CANCELLED';
 
 export interface PlatformRun {
   id: string;
