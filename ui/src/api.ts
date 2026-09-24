@@ -1,5 +1,5 @@
 import { getIdentity, sendsDevHeaders, type AuthState } from './identity';
-import type { AgentDefinition, AgentSpec, AgentValidation, AgentVersion, Approval, CatalogModel, Effect, McpDiscovery, PlatformRun, SandboxImage, ToolCallRecord, ToolDefinition, ToolSpec, ToolVersion, Workspace, WorkspaceConnection } from './types';
+import type { A2aCard, AgentDefinition, AgentSpec, AgentValidation, AgentVersion, Approval, CatalogModel, Effect, McpDiscovery, PlatformRun, SandboxImage, ToolCallRecord, ToolDefinition, ToolSpec, ToolVersion, Workspace, WorkspaceConnection } from './types';
 import type { AgentRun, AgentsStatus, ArtifactVersion, BoardComment, Comment, CommentIntent, DemoStatus, GrillQuestions, ItemDetail, ItemSummary, Project, ProjectRequest, QualityReport, ReleaseDocument, ScenarioReview, SpecDocs } from './types';
 
 export const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8081';
@@ -130,6 +130,11 @@ export const studio = {
     request<ToolVersion>(`${tool(wsId, toolId)}/publish`, { method: 'POST', body: JSON.stringify({ revision }) }),
   retireTool: (wsId: string, toolId: string) => request<ToolDefinition>(`${tool(wsId, toolId)}/retire`, { method: 'POST' }),
   toolVersions: (wsId: string, toolId: string) => request<ToolVersion[]>(`${tool(wsId, toolId)}/versions`),
+  // Remote A2A agents (docs/phase-2-execution-spec.md slice 2.5)
+  a2aCard: (wsId: string, connectionId: string) =>
+    request<A2aCard>(`${ws(wsId)}/connections/${encodeURIComponent(connectionId)}/a2a-card`, { method: 'POST' }),
+  replyToRun: (wsId: string, runId: string, text: string) =>
+    request<PlatformRun>(`${ws(wsId)}/runs/${encodeURIComponent(runId)}/input`, { method: 'POST', body: JSON.stringify({ text }) }),
   // Enterprise sandbox image catalog (docs/phase-2-execution-spec.md slice 2.4)
   sandboxImages: () => request<SandboxImage[]>('/api/platform/sandbox-images'),
   // Remote MCP tools (docs/phase-2-execution-spec.md slice 2.3)

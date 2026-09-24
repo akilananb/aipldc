@@ -35,6 +35,7 @@ export default function AgentEditorPage() {
   const versionsQuery = useQuery({ queryKey: [...agentKey, 'versions'], queryFn: () => studio.versions(ws, agentId) });
   const modelsQuery = useQuery({ queryKey: ['platform', 'models'], queryFn: studio.models });
   const toolsQuery = useQuery({ queryKey: ['studio', ws, 'tools'], queryFn: () => studio.tools(ws) });
+  const connectionsQuery = useQuery({ queryKey: ['studio', ws, 'connections'], queryFn: () => studio.connections(ws) });
 
   const agent = agentQuery.data;
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -278,6 +279,8 @@ export default function AgentEditorPage() {
             models={modelsQuery.data ?? []}
             tools={toolsQuery.data ?? []}
             readOnly={!canEdit}
+            workspaceId={ws}
+            connections={connectionsQuery.data ?? []}
           />
         )}
         {tab === 'versions' && (

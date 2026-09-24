@@ -92,6 +92,7 @@ public class A2aRunner {
             RemoteTask known = runs.remoteTask(id).orElse(null);
             A2aClient.Task task = advance(run, remote, known, prompt, deadline);
             task = follow(id, remote, task, deadline);
+            record(id, remote, task); // the state the run is decided on is the state on record
             return finish(run, spec, remote, task);
         } finally {
             runs.addActiveMs(id, Duration.between(started, clock.instant()).toMillis());
@@ -185,6 +186,11 @@ public class A2aRunner {
                 throw reject(error);
             }
             sleep(wait);
+            String status = runs.load(id).map(Invocation::status).orElse("UNKNOWN");
+            if (!"RUNNING".equals(status)) {
+                // Cancelled (or otherwise ended) while we were following: stop calling the remote agent.
+                throw reject("the run is " + status + "; stopped following remote task " + task.id());
+            }
             try {
                 A2aClient.Task next = remote.session().get(task.id());
                 failures = 0;

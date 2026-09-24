@@ -51,7 +51,11 @@ class A2aRunnerTest {
 
         @Override
         public Optional<Invocation> load(UUID runId) {
-            return Optional.of(invocation);
+            Invocation i = invocation;
+            return Optional.of(new Invocation(i.runId(), i.workspaceId(), status, i.agentId(), i.version(), i.contentHash(), i.name(),
+                    i.specJson(), i.inputs(), i.model(), i.providerModel(), i.modelEnabled(), i.connectionId(), i.connectionStatus(),
+                    i.connectionExpiresAt(), i.authType(), i.secretRef(), i.baseUrl(), i.attempts(), i.activeMs(), i.connectionKind(),
+                    i.oauthClientId(), i.granted()));
         }
 
         @Override
@@ -159,6 +163,16 @@ class A2aRunnerTest {
         return invoke(spec(skill, 30, null), true);
     }
 
+    @Test
+    void stopsFollowingOnceTheRunIsCancelled() {
+        server.streaming = false;
+        runs.status = "CANCELLED";
+
+        assertThatThrownBy(() -> invoke(spec("hold", 30, null), true)).isInstanceOfSatisfying(ApplicationFailure.class,
+                f -> assertThat(f.getOriginalMessage()).contains("stopped following remote task"));
+        assertThat(server.calls).noneMatch(c -> c.startsWith("get "));
+    }
+
     private AgentRunOutcome invoke(AgentSpec spec, boolean granted) {
         runs.invocation = new Invocation(RUN, "engineering", "RUNNING", "delegate", 1, ContentHash.ofAgent("Delegate", spec),
                 "Delegate", ContentHash.canonicalJson(spec), Map.of("input", "Q3"), null, null, null, "partner-agent", "ACTIVE",
@@ -244,6 +258,7 @@ class A2aRunnerTest {
         assertThat(invoke("slow").status()).isEqualTo("SUCCEEDED");
 
         assertThat(server.calls).noneMatch(c -> c.startsWith("send") || c.startsWith("stream"));
+        assertThat(runs.remote.state()).isEqualTo("COMPLETED");
     }
 
     @Test
