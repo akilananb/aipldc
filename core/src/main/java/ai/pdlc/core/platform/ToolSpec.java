@@ -27,6 +27,9 @@ import java.util.Map;
  * @param mcpTool          kind {@code mcp} (slice 2.3): the remote tool's name on the MCP server
  * @param mcpFingerprint   kind {@code mcp}: {@link McpFingerprint} of the server's definition that was
  *                         reviewed; a call is refused when the server's current definition differs
+ * @param sandboxImage     kind {@code sandbox} (slice 2.4): the enterprise catalog entry the tool runs
+ * @param sandboxImageRef  kind {@code sandbox}: the digest-pinned image reference reviewed with it; a call
+ *                         is refused if the catalog entry no longer carries exactly this reference
  */
 public record ToolSpec(
         String description,
@@ -41,10 +44,13 @@ public record ToolSpec(
         @JsonInclude(JsonInclude.Include.NON_NULL) String idempotency,
         @JsonInclude(JsonInclude.Include.NON_NULL) Approval approval,
         @JsonInclude(JsonInclude.Include.NON_NULL) String mcpTool,
-        @JsonInclude(JsonInclude.Include.NON_NULL) String mcpFingerprint) {
+        @JsonInclude(JsonInclude.Include.NON_NULL) String mcpFingerprint,
+        @JsonInclude(JsonInclude.Include.NON_NULL) String sandboxImage,
+        @JsonInclude(JsonInclude.Include.NON_NULL) String sandboxImageRef) {
 
     public static final String KIND_HTTP = "http";
     public static final String KIND_MCP = "mcp";
+    public static final String KIND_SANDBOX = "sandbox";
     public static final String READ = "READ";
     public static final String WRITE = "WRITE";
     public static final String IDEMPOTENCY_HEADER = "HEADER";
@@ -62,6 +68,19 @@ public record ToolSpec(
                     String idempotency, Approval approval) {
         this(description, kind, connectionId, method, path, inputSchema, effect, timeoutSeconds, maxResponseBytes,
                 idempotency, approval, null, null);
+    }
+
+    /** Slice 2.3 shape (no sandbox fields); keeps those versions' hashes. */
+    public ToolSpec(String description, String kind, String connectionId, String method, String path,
+                    Map<String, Object> inputSchema, String effect, Integer timeoutSeconds, Integer maxResponseBytes,
+                    String idempotency, Approval approval, String mcpTool, String mcpFingerprint) {
+        this(description, kind, connectionId, method, path, inputSchema, effect, timeoutSeconds, maxResponseBytes,
+                idempotency, approval, mcpTool, mcpFingerprint, null, null);
+    }
+
+    @JsonIgnore
+    public boolean isSandbox() {
+        return KIND_SANDBOX.equals(kind);
     }
 
     @JsonIgnore
