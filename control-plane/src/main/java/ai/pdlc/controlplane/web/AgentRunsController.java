@@ -3,6 +3,7 @@ package ai.pdlc.controlplane.web;
 import ai.pdlc.controlplane.identity.IdentityResolver;
 import ai.pdlc.controlplane.runs.RunService;
 import ai.pdlc.controlplane.web.dto.RunDto;
+import ai.pdlc.controlplane.web.dto.ToolCallDto;
 import ai.pdlc.controlplane.web.dto.StartRunRequest;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -39,6 +40,11 @@ public class AgentRunsController {
     @GetMapping("/api/workspaces/{workspaceId}/runs/{runId}")
     public RunDto get(@PathVariable String workspaceId, @PathVariable String runId, HttpServletRequest http) {
         return service.get(workspaceId, runId, identityResolver.resolve(http));
+    }
+
+    @GetMapping("/api/workspaces/{workspaceId}/runs/{runId}/tool-calls")
+    public List<ToolCallDto> toolCalls(@PathVariable String workspaceId, @PathVariable String runId, HttpServletRequest http) {
+        return service.toolCalls(workspaceId, runId, identityResolver.resolve(http));
     }
 
     @PostMapping("/api/workspaces/{workspaceId}/runs/{runId}/cancel")

@@ -5,13 +5,15 @@ import { EditorView } from '@codemirror/view';
 import { Box, Button, Callout, Checkbox, Flex, IconButton, Select, Text, TextArea, TextField } from '@radix-ui/themes';
 import { Plus, Trash2, Wand2 } from 'lucide-react';
 import { useAppearance } from '../theme';
-import type { CatalogModel } from '../types';
+import type { CatalogModel, ToolDefinition } from '../types';
 import { referencedVariables, type Draft } from './draft';
 
 interface Props {
   draft: Draft;
   onChange: (next: Draft) => void;
   models: CatalogModel[];
+  /** The workspace's tools; only published, active ones can be pinned. */
+  tools: ToolDefinition[];
   readOnly: boolean;
 }
 
@@ -36,7 +38,7 @@ function Field({ label, hint, children, htmlFor }: { label: string; hint?: strin
  * the prompt uses CodeMirror, which is also keyboard-operable. Unavailable catalog models are listed
  * but disabled, with the reason, so an author sees why a binding would not publish.
  */
-export default function AgentForm({ draft, onChange, models, readOnly }: Props) {
+export default function AgentForm({ draft, onChange, models, tools, readOnly }: Props) {
   const appearance = useAppearance();
   const set = <K extends keyof Draft>(key: K, value: Draft[K]) => onChange({ ...draft, [key]: value });
   const extensions = useMemo(() => [markdownLang(), EditorView.lineWrapping], []);
@@ -44,6 +46,15 @@ export default function AgentForm({ draft, onChange, models, readOnly }: Props) 
   const declared = new Set(draft.variables.map((v) => v.name));
   const missing = referencedVariables(draft.prompt).filter((n) => !declared.has(n));
   const selectedModel = models.find((m) => m.id === draft.model);
+  const pinnable = tools.filter((t) => t.status === 'ACTIVE' && t.currentVersion != null);
+  const unknownPins = draft.tools.filter((p) => !pinnable.some((t) => t.id === p.tool));
+  const pin = (toolId: string, version: number | null) =>
+    set(
+      'tools',
+      version == null
+        ? draft.tools.filter((p) => p.tool !== toolId)
+        : [...draft.tools.filter((p) => p.tool !== toolId), { tool: toolId, version }].sort((a, b) => a.tool.localeCompare(b.tool)),
+    );
 
   return (
     <Flex direction="column" gap="4">
@@ -237,6 +248,81 @@ export default function AgentForm({ draft, onChange, models, readOnly }: Props) 
           </Field>
         </Box>
       </Flex>
+
+      <Field
+        label="Tools"
+        hint="Pin exact published tool versions. The model can call only these, and every call is checked by policy when it happens: write tools are refused until approvals arrive, and a revoked connection or grant denies the next call."
+      >
+        <Flex direction="column" gap="1">
+          {pinnable.map((t) => {
+            const pinned = draft.tools.find((p) => p.tool === t.id);
+            return (
+              <Flex key={t.id} gap="2" align="center" wrap="wrap">
+                <Text as="label" size="2">
+                  <Flex gap="2" align="center">
+                    <Checkbox
+                      checked={pinned != null}
+                      disabled={readOnly}
+                      onCheckedChange={(c) => pin(t.id, c === true ? t.currentVersion : null)}
+                    />
+                    {t.draftName} ({t.id}) · {t.draftSpec?.method} · {t.draftSpec?.effect}
+                  </Flex>
+                </Text>
+                {pinned && <span className="meta-tag">pinned v{pinned.version}</span>}
+                {pinned && pinned.version !== t.currentVersion && !readOnly && (
+                  <Button size="1" variant="soft" onClick={() => pin(t.id, t.currentVersion)}>
+                    Pin v{t.currentVersion}
+                  </Button>
+                )}
+              </Flex>
+            );
+          })}
+          {unknownPins.map((p) => (
+            <Flex key={p.tool} gap="2" align="center">
+              <Text size="2" color="amber">
+                {p.tool} v{p.version} is not a published, active tool here
+              </Text>
+              {!readOnly && (
+                <Button size="1" variant="ghost" color="red" onClick={() => pin(p.tool, null)}>
+                  Remove
+                </Button>
+              )}
+            </Flex>
+          ))}
+          {pinnable.length === 0 && unknownPins.length === 0 && (
+            <Text size="1" color="gray">
+              No published tools in this workspace.
+            </Text>
+          )}
+        </Flex>
+      </Field>
+
+      {draft.tools.length > 0 && (
+        <Flex gap="3" wrap="wrap">
+          <Box style={{ flex: '1 1 180px' }}>
+            <Field label="Max model turns" htmlFor="agent-max-turns" hint="1–32; empty = 8. Running out fails the run.">
+              <TextField.Root
+                id="agent-max-turns"
+                inputMode="numeric"
+                value={draft.maxModelTurns}
+                disabled={readOnly}
+                onChange={(e) => set('maxModelTurns', e.target.value)}
+              />
+            </Field>
+          </Box>
+          <Box style={{ flex: '1 1 180px' }}>
+            <Field label="Max tool calls" htmlFor="agent-max-calls" hint="1–64; empty = 16. Exceeding it fails the run.">
+              <TextField.Root
+                id="agent-max-calls"
+                inputMode="numeric"
+                value={draft.maxToolCalls}
+                disabled={readOnly}
+                onChange={(e) => set('maxToolCalls', e.target.value)}
+              />
+            </Field>
+          </Box>
+        </Flex>
+      )}
 
       <Field
         label="Output schema (JSON, optional)"

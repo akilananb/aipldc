@@ -1,5 +1,7 @@
 package ai.pdlc.controlplane.runs;
 
+import ai.pdlc.controlplane.web.dto.ToolCallDto;
+
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
@@ -66,5 +68,25 @@ public class JdbcRunStore implements RunStore {
     public void failToStart(UUID id, String error) {
         jdbc.update("UPDATE platform_runs SET status = 'FAILED', error = ?, finished_at = now() WHERE id = ? AND status = 'QUEUED'",
                 error, id);
+    }
+
+    @Override
+    public List<ToolCallDto> toolCalls(UUID runId) {
+        return jdbc.query("SELECT * FROM platform_tool_calls WHERE run_id = ? ORDER BY id", (rs, n) -> new ToolCallDto(
+                rs.getLong("id"),
+                rs.getInt("attempt"),
+                rs.getInt("turn"),
+                rs.getString("tool_id"),
+                (Integer) rs.getObject("tool_version"),
+                rs.getString("args_json"),
+                rs.getString("args_hash"),
+                rs.getString("decision"),
+                rs.getString("reason"),
+                (Integer) rs.getObject("http_status"),
+                (Long) rs.getObject("duration_ms"),
+                (Long) rs.getObject("response_bytes"),
+                rs.getBoolean("truncated"),
+                rs.getString("error"),
+                rs.getObject("created_at", java.time.OffsetDateTime.class)), runId);
     }
 }

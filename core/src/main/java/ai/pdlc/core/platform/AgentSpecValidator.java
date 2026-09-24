@@ -22,6 +22,8 @@ public final class AgentSpecValidator {
 
     public static final int MAX_OUTPUT_TOKENS = 200_000;
     public static final int MAX_TIMEOUT_SECONDS = 3_600;
+    public static final int MAX_MODEL_TURNS = 32;
+    public static final int MAX_TOOL_CALLS = 64;
 
     private static final Pattern NAME = Pattern.compile("^[A-Za-z_][A-Za-z0-9_]{0,63}$");
     private static final Pattern TAG = Pattern.compile("\\{\\{(\\{?)\\s*([#^/&>=!]?)\\s*([^}]*?)\\s*}?}}");
@@ -89,6 +91,22 @@ public final class AgentSpecValidator {
             if (limits.maxOutputTokens() != null
                     && (limits.maxOutputTokens() < 1 || limits.maxOutputTokens() > MAX_OUTPUT_TOKENS)) {
                 errors.add("limits.maxOutputTokens must be between 1 and " + MAX_OUTPUT_TOKENS);
+            }
+            if (limits.maxModelTurns() != null && (limits.maxModelTurns() < 1 || limits.maxModelTurns() > MAX_MODEL_TURNS)) {
+                errors.add("limits.maxModelTurns must be between 1 and " + MAX_MODEL_TURNS);
+            }
+            if (limits.maxToolCalls() != null && (limits.maxToolCalls() < 1 || limits.maxToolCalls() > MAX_TOOL_CALLS)) {
+                errors.add("limits.maxToolCalls must be between 1 and " + MAX_TOOL_CALLS);
+            }
+        }
+        Set<String> tools = new HashSet<>();
+        for (AgentSpec.ToolRef ref : spec.toolsOrEmpty()) {
+            if (ref == null || ref.tool() == null || ref.tool().isBlank()) {
+                errors.add("tools[].tool is required");
+            } else if (ref.version() == null || ref.version() < 1) {
+                errors.add("tool \"" + ref.tool() + "\" must pin a published version");
+            } else if (!tools.add(ref.tool())) {
+                errors.add("tool \"" + ref.tool() + "\" is listed more than once");
             }
         }
         if (spec.outputSchema() != null) {

@@ -7,6 +7,7 @@ import ai.pdlc.controlplane.web.dto.ConnectionRequest;
 import ai.pdlc.controlplane.web.dto.ModelDto;
 import ai.pdlc.controlplane.web.dto.ModelRequest;
 import jakarta.servlet.http.HttpServletRequest;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -53,6 +54,22 @@ public class PlatformCatalogController {
     @PostMapping("/connections/{id}/revoke")
     public ConnectionDto revokeConnection(@PathVariable String id, HttpServletRequest http) {
         return service.revokeConnection(id, identityResolver.resolve(http));
+    }
+
+    /** Workspaces whose tools may use this HTTP_API connection (enterprise Admin). */
+    @GetMapping("/connections/{id}/grants")
+    public List<String> grants(@PathVariable String id, HttpServletRequest http) {
+        return service.grants(id, identityResolver.resolve(http));
+    }
+
+    @PostMapping("/connections/{id}/grants/{workspaceId}")
+    public List<String> grant(@PathVariable String id, @PathVariable String workspaceId, HttpServletRequest http) {
+        return service.grant(id, workspaceId, identityResolver.resolve(http));
+    }
+
+    @DeleteMapping("/connections/{id}/grants/{workspaceId}")
+    public List<String> revokeGrant(@PathVariable String id, @PathVariable String workspaceId, HttpServletRequest http) {
+        return service.revokeGrant(id, workspaceId, identityResolver.resolve(http));
     }
 
     /** Any signed-in user: the agent editor lists bindable models. */

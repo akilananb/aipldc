@@ -109,4 +109,37 @@ public class JdbcConnectionStore implements ConnectionStore {
     public void updateImport(String id, String details) {
         jdbc.update("UPDATE platform_imports SET details = ? WHERE id = ?", details, id);
     }
+
+    @Override
+    public boolean grant(String connectionId, String workspaceId, String grantedBy) {
+        return jdbc.update("""
+                INSERT INTO connection_grants (connection_id, workspace_id, granted_by) VALUES (?, ?, ?)
+                ON CONFLICT (connection_id, workspace_id) DO NOTHING""", connectionId, workspaceId, grantedBy) == 1;
+    }
+
+    @Override
+    public boolean revokeGrant(String connectionId, String workspaceId) {
+        return jdbc.update("DELETE FROM connection_grants WHERE connection_id = ? AND workspace_id = ?",
+                connectionId, workspaceId) == 1;
+    }
+
+    @Override
+    public boolean granted(String connectionId, String workspaceId) {
+        Integer n = jdbc.queryForObject("SELECT count(*) FROM connection_grants WHERE connection_id = ? AND workspace_id = ?",
+                Integer.class, connectionId, workspaceId);
+        return n != null && n > 0;
+    }
+
+    @Override
+    public List<String> grantedWorkspaces(String connectionId) {
+        return jdbc.queryForList("SELECT workspace_id FROM connection_grants WHERE connection_id = ? ORDER BY workspace_id",
+                String.class, connectionId);
+    }
+
+    @Override
+    public List<ConnectionRow> grantedTo(String workspaceId) {
+        return jdbc.query("""
+                SELECT c.* FROM connections c JOIN connection_grants g ON g.connection_id = c.id
+                WHERE g.workspace_id = ? ORDER BY c.id""", CONNECTION, workspaceId);
+    }
 }

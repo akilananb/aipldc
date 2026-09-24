@@ -4,7 +4,7 @@ import { Box, Button, Callout, Flex, Table, Text, TextArea } from '@radix-ui/the
 import { Play, Square } from 'lucide-react';
 import { toast } from 'sonner';
 import { errorMessage, studio } from '../api';
-import type { AgentVersion, PlatformRun } from '../types';
+import type { AgentVersion, PlatformRun, ToolCallRecord } from '../types';
 import EmptyState from '../components/EmptyState';
 import ErrorCallout from '../components/ErrorCallout';
 import RelativeTime from '../components/RelativeTime';
@@ -120,7 +120,15 @@ export default function RunsPanel({ workspaceId, agentId, current, canRun, retir
         </form>
       </Box>
 
-      {runQuery.data && <RunDetail run={runQuery.data} canCancel={canRun} onCancel={() => cancel.mutate(runQuery.data.id)} cancelling={cancel.isPending} />}
+      {runQuery.data && (
+        <RunDetail
+          run={runQuery.data}
+          canCancel={canRun}
+          onCancel={() => cancel.mutate(runQuery.data.id)}
+          cancelling={cancel.isPending}
+          usesTools={(current.spec.tools ?? []).length > 0}
+        />
+      )}
 
       <Box>
         <Text size="2" weight="medium" as="div" mb="2">
@@ -178,8 +186,26 @@ function tokens(n: number | null): string {
   return n == null ? 'unknown' : String(n);
 }
 
-function RunDetail({ run, canCancel, onCancel, cancelling }: { run: PlatformRun; canCancel: boolean; onCancel: () => void; cancelling: boolean }) {
+function RunDetail({
+  run,
+  canCancel,
+  onCancel,
+  cancelling,
+  usesTools,
+}: {
+  run: PlatformRun;
+  canCancel: boolean;
+  onCancel: () => void;
+  cancelling: boolean;
+  usesTools: boolean;
+}) {
   const active = !TERMINAL.has(run.status);
+  const callsQuery = useQuery({
+    queryKey: ['studio', run.workspaceId, 'run', run.id, 'tool-calls'],
+    queryFn: () => studio.toolCalls(run.workspaceId, run.id),
+    refetchInterval: active ? 2000 : false,
+  });
+  const calls = callsQuery.data ?? [];
   return (
     <Box style={{ border: '1px solid var(--line)', borderRadius: 8, padding: 14 }} aria-live="polite">
       <Flex justify="between" align="center" gap="2" wrap="wrap" mb="2">
@@ -223,6 +249,79 @@ function RunDetail({ run, canCancel, onCancel, cancelling }: { run: PlatformRun;
             Waiting for the model…
           </Text>
         )
+      )}
+      {(usesTools || calls.length > 0) && <ToolTrace calls={calls} error={callsQuery.error} />}
+    </Box>
+  );
+}
+
+/** Every tool call the model requested in this run, with the policy decision and outcome. */
+function ToolTrace({ calls, error }: { calls: ToolCallRecord[]; error: unknown }) {
+  return (
+    <Box mt="3">
+      <Text size="2" weight="medium" as="div" mb="1">
+        Tool calls
+      </Text>
+      {error ? (
+        <ErrorCallout title="Failed to load tool calls" error={error} />
+      ) : calls.length === 0 ? (
+        <Text size="1" color="gray">
+          No tool calls recorded.
+        </Text>
+      ) : (
+        <Box style={{ overflowX: 'auto' }}>
+          <Table.Root variant="surface" size="1">
+            <Table.Header>
+              <Table.Row>
+                <Table.ColumnHeaderCell>Turn</Table.ColumnHeaderCell>
+                <Table.ColumnHeaderCell>Tool</Table.ColumnHeaderCell>
+                <Table.ColumnHeaderCell>Decision</Table.ColumnHeaderCell>
+                <Table.ColumnHeaderCell>Result</Table.ColumnHeaderCell>
+                <Table.ColumnHeaderCell>Arguments</Table.ColumnHeaderCell>
+              </Table.Row>
+            </Table.Header>
+            <Table.Body>
+              {calls.map((c) => (
+                <Table.Row key={c.id}>
+                  <Table.Cell>
+                    {c.turn}
+                    {c.attempt > 1 ? <Text size="1" color="gray"> (attempt {c.attempt})</Text> : null}
+                  </Table.Cell>
+                  <Table.Cell>
+                    {c.toolId}
+                    {c.toolVersion != null ? ` v${c.toolVersion}` : ''}
+                  </Table.Cell>
+                  <Table.Cell>
+                    <span className={`pill ${c.decision === 'ALLOWED' ? 'pass' : 'fail'}`}>{c.decision}</span>
+                    {c.reason && (
+                      <Text size="1" color="gray" as="div" style={{ maxWidth: 320 }}>
+                        {c.reason}
+                      </Text>
+                    )}
+                  </Table.Cell>
+                  <Table.Cell>
+                    {c.decision === 'DENIED' ? (
+                      <Text size="1" color="gray">
+                        not executed
+                      </Text>
+                    ) : (
+                      <Text size="1">
+                        {c.httpStatus != null ? `HTTP ${c.httpStatus}` : 'no response'}
+                        {c.durationMs != null ? ` · ${c.durationMs} ms` : ''}
+                        {c.responseBytes != null ? ` · ${c.responseBytes} B` : ''}
+                        {c.truncated ? ' · truncated' : ''}
+                        {c.error ? ` · ${c.error}` : ''}
+                      </Text>
+                    )}
+                  </Table.Cell>
+                  <Table.Cell>
+                    <code style={{ fontSize: 12, wordBreak: 'break-all' }}>{c.argsJson ?? '—'}</code>
+                  </Table.Cell>
+                </Table.Row>
+              ))}
+            </Table.Body>
+          </Table.Root>
+        </Box>
       )}
     </Box>
   );

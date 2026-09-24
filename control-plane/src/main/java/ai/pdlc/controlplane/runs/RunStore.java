@@ -1,5 +1,7 @@
 package ai.pdlc.controlplane.runs;
 
+import ai.pdlc.controlplane.web.dto.ToolCallDto;
+
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
@@ -23,6 +25,9 @@ public interface RunStore {
     Optional<RunRow> findByIdempotencyKey(String workspaceId, String idempotencyKey);
 
     List<RunRow> list(String workspaceId, String agentId, int limit);
+
+    /** The run's recorded tool calls in call order (written by the agents worker's ToolExecutor). */
+    List<ToolCallDto> toolCalls(UUID runId);
 
     /** QUEUED → FAILED when the workflow could not even be started. */
     void failToStart(UUID id, String error);

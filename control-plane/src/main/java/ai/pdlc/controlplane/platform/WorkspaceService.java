@@ -106,6 +106,11 @@ public class WorkspaceService {
         return new WorkspaceMemberDto(userId, caps);
     }
 
+    /** Existence only, for enterprise-level callers (no membership implied). */
+    public boolean exists(String workspaceId) {
+        return workspaceId != null && store.find(workspaceId).isPresent();
+    }
+
     /**
      * Resolves the caller's capabilities in the workspace, or throws 404 when the workspace does
      * not exist or the caller is not a member (indistinguishable on purpose).

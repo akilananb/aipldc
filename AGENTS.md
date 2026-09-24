@@ -87,6 +87,7 @@ and shows the draft → a PO/SquadLead approves via `POST .../approve-agent-resu
 | `control-plane/src/main/java/ai/pdlc/controlplane/review/` | `ReviewTrailService`, `CommentReanchorer`, `AgentMentions` |
 | `control-plane/src/main/java/ai/pdlc/controlplane/platform/` + `core/.../platform/` | Configurable agent platform (docs/phase-1-execution-spec.md): workspaces, capabilities, versioned `AgentSpec` registry, `ContentHash` |
 | `control-plane/src/main/java/ai/pdlc/controlplane/connections/` | Connections (secret *references* only) and the DB-backed `ModelCatalog`, seeded once from `pdlc.yaml` by `ModelCatalogSeeder` |
+| `control-plane/.../platform/{ToolRegistryService,VersionedDefinitions,DefinitionStore}` + `agents/.../platform/{ToolExecutor,ToolStore}` + `core/.../platform/{ToolSpec*,ToolArgs,EgressPolicy}` | Governed API tools (docs/phase-2-execution-spec.md slice 2.1): versioned tool registry sharing the agent lifecycle, `HTTP_API` connections granted per workspace (`connection_grants`), the bounded tool loop and its `platform_tool_calls` trace |
 | `control-plane/.../runs/` + `agents/.../platform/` + `core/.../workflow/AgentRunWorkflow*` | Durable single-agent runs: `RunService` pins version+model on a `platform_runs` row and starts `AgentRunWorkflow`; the agents-side `AgentRunActivitiesImpl` renders, calls the model at runtime (`OpenAiCompatibleModelInvoker`) and records the outcome |
 | `control-plane/src/main/resources/db/migration/` | Flyway `V1__schema.sql` … `V6__agent_mention_columns.sql` |
 | `agents/src/main/java/ai/pdlc/agents/{grill,po,plan,review,release,monitor,mention}/` | Per-domain LLM agent components |
@@ -110,7 +111,7 @@ mvn test                                                    # full reactor test 
 mvn -pl control-plane -am test                              # one module + its deps
 mvn -pl control-plane test -Dtest=AgentMentionsTest         # one test class
 mvn -pl control-plane test -Dtest=AgentMentionsTest#parsesEachSupportedAgentCaseInsensitively  # one method
-mvn -q -o test -pl core,control-plane,agents -Dtest='!BoardSideEffectsImplTest,!PersistenceIntegrationTest,!BuildTaskLeaseTest,!PlatformRegistryIntegrationTest'  # skip Docker-dependent tests (see Testing & QA)
+mvn -q -o test -pl core,control-plane,agents -Dtest='!BoardSideEffectsImplTest,!PersistenceIntegrationTest,!BuildTaskLeaseTest,!PlatformRegistryIntegrationTest,!JdbcProjectDirectoryTest,!DemoReadOnlyTest,!DemoInitializerIntegrationTest,!LocalBoardAdapterIntegrationTest'  # skip Docker-dependent tests (see Testing & QA)
 ```
 
 **UI (`ui/`, Node/Vite):**
@@ -208,6 +209,11 @@ scripts/e2e-demo-phase4.sh   # + release pack -> gate 3 -> deploy -> monitor
   `pdlc.webhook`), shared tokens, and the dev header shim (`PDLC_IDENTITY_DEV_HEADERS=true`, off by
   default, on in the local k8s manifest). Controllers only call `IdentityResolver.resolve(...)`;
   never read `X-User`/tokens directly. See docs/phase-1-execution-spec.md slice 2.
+- **Tools run only through `ToolExecutor`** (agents, docs/phase-2-execution-spec.md slice 2.1). It re-checks the
+  pin, content hash, args, effect (WRITE is denied until approvals in slice 2.2), connection and grant *at call time*,
+  applies `EgressPolicy` (http(s) only; every resolved address public unless in
+  `pdlc.egress.allowed-private-hosts`), never follows redirects, and records every decision. Never add another way
+  to make a tool's HTTP call, and never let Spring AI execute tool callbacks.
 - **No linter/formatter configured anywhere** (no ESLint, Prettier, Checkstyle, Spotless,
   `.editorconfig`). Match surrounding code style by hand; TypeScript's only enforced gate is
   `tsc --noEmit` (strict mode) inside `npm run build`.
@@ -290,7 +296,7 @@ scripts/e2e-demo-phase4.sh   # + release pack -> gate 3 -> deploy -> monitor
      `control-plane/src/test/java/ai/pdlc/controlplane/review/AgentMentionsTest.java`.
 - **Docker-unavailable environments:** exclude the Testcontainers-backed classes:
   ```bash
-  mvn -q -o test -pl core,control-plane,agents -Dtest='!BoardSideEffectsImplTest,!PersistenceIntegrationTest,!BuildTaskLeaseTest,!PlatformRegistryIntegrationTest'
+  mvn -q -o test -pl core,control-plane,agents -Dtest='!BoardSideEffectsImplTest,!PersistenceIntegrationTest,!BuildTaskLeaseTest,!PlatformRegistryIntegrationTest,!JdbcProjectDirectoryTest,!DemoReadOnlyTest,!DemoInitializerIntegrationTest,!LocalBoardAdapterIntegrationTest'
   ```
   (this is an informal, comment-documented convention — see
   `agents/src/test/java/ai/pdlc/agents/AgentSpringWiringTest.java:34-38` — not a pom-level

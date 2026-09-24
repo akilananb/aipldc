@@ -37,6 +37,14 @@ public final class ContentHash {
         return of(content);
     }
 
+    /** Hash of a tool version: its display name plus its spec. */
+    public static String ofTool(String name, ToolSpec spec) {
+        Map<String, Object> content = new LinkedHashMap<>();
+        content.put("name", name);
+        content.put("spec", spec);
+        return of(content);
+    }
+
     public static String of(Object content) {
         try {
             byte[] json = CANONICAL.writeValueAsBytes(content);

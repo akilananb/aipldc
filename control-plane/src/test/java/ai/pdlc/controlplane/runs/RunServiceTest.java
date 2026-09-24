@@ -5,7 +5,7 @@ import ai.pdlc.controlplane.connections.ModelCatalog;
 import ai.pdlc.controlplane.identity.Identity;
 import ai.pdlc.controlplane.platform.AgentRegistryService;
 import ai.pdlc.controlplane.platform.Capability;
-import ai.pdlc.controlplane.platform.InMemoryAgentRegistryStore;
+import ai.pdlc.controlplane.platform.TestRegistries;
 import ai.pdlc.controlplane.platform.InMemoryWorkspaceStore;
 import ai.pdlc.controlplane.platform.WorkspaceService;
 import ai.pdlc.controlplane.web.ConflictException;
@@ -60,8 +60,7 @@ class RunServiceTest {
 
     private final InMemoryConnectionStore connections = InMemoryConnectionStore.withModels("gw", "sonnet");
     private final WorkspaceService workspaces = new WorkspaceService(new InMemoryWorkspaceStore());
-    private final AgentRegistryService registry =
-            new AgentRegistryService(new InMemoryAgentRegistryStore(), workspaces, new ModelCatalog(connections));
+    private final AgentRegistryService registry = TestRegistries.over(workspaces, connections).agents();
     private final InMemoryRunStore runs = new InMemoryRunStore();
     private final FakeLauncher launcher = new FakeLauncher();
     private final RunService service = new RunService(runs, launcher, registry, workspaces);

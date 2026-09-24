@@ -40,6 +40,10 @@ pdlc:
   platform:
     # Users granted WORKSPACE_ADMIN in the imported `pdlc` workspace on every startup (additive).
     pdlc-workspace-admins: ${PDLC_WORKSPACE_ADMINS:}
+  # Phase 2 slice 2.1: internal hosts HTTP_API tool connections may target (comma-separated).
+  # Everything else must resolve only to public addresses.
+  egress:
+    allowed-private-hosts: ${PDLC_EGRESS_ALLOWED_PRIVATE_HOSTS:}
 
 temporal:
   target: ${TEMPORAL_TARGET:127.0.0.1:7233}

@@ -27,7 +27,7 @@ public class RunStore {
                              String contentHash, String name, String specJson, Map<String, String> inputs,
                              String model, String providerModel, Boolean modelEnabled, String connectionId,
                              String connectionStatus, OffsetDateTime connectionExpiresAt, String authType,
-                             String secretRef, String baseUrl) {
+                             String secretRef, String baseUrl, int attempts) {
     }
 
     private final JdbcTemplate jdbc;
@@ -39,7 +39,7 @@ public class RunStore {
 
     public Optional<Invocation> load(UUID runId) {
         List<Invocation> rows = jdbc.query("""
-                SELECT r.id, r.workspace_id, r.status, r.agent_id, r.agent_version, r.content_hash, r.input_json,
+                SELECT r.id, r.workspace_id, r.status, r.attempts, r.agent_id, r.agent_version, r.content_hash, r.input_json,
                        r.model, r.provider_model, r.connection_id,
                        v.name, v.spec_json,
                        m.enabled AS model_enabled,
@@ -56,7 +56,7 @@ public class RunStore {
                 rs.getString("model"), rs.getString("provider_model"), (Boolean) rs.getObject("model_enabled"),
                 rs.getString("connection_id"), rs.getString("connection_status"),
                 rs.getObject("expires_at", OffsetDateTime.class), rs.getString("auth_type"),
-                rs.getString("secret_ref"), rs.getString("base_url")), runId);
+                rs.getString("secret_ref"), rs.getString("base_url"), rs.getInt("attempts")), runId);
         return rows.stream().findFirst();
     }
 

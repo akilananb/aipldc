@@ -37,6 +37,18 @@ public interface ConnectionStore {
 
     void updateModel(ModelRow row);
 
+    /** Grants an HTTP_API connection to a workspace; returns false if already granted. */
+    boolean grant(String connectionId, String workspaceId, String grantedBy);
+
+    /** Returns false when there was no such grant. */
+    boolean revokeGrant(String connectionId, String workspaceId);
+
+    boolean granted(String connectionId, String workspaceId);
+
+    List<String> grantedWorkspaces(String connectionId);
+
+    List<ConnectionRow> grantedTo(String workspaceId);
+
     /** Records a one-time import; returns false if it was already recorded. */
     boolean recordImport(String id, String details);
 

@@ -30,6 +30,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 import ai.pdlc.agents.platform.AgentRunActivitiesImpl;
 import ai.pdlc.agents.platform.OpenAiCompatibleModelInvoker;
+import ai.pdlc.agents.platform.ToolExecutor;
 import ai.pdlc.agents.platform.RunStore;
 import ai.pdlc.core.port.SecretsPort;
 
@@ -70,6 +71,16 @@ class AgentSpringWiringTest {
         }
 
         @Bean
+        ai.pdlc.agents.platform.ToolStore toolStore() {
+            return mock(ai.pdlc.agents.platform.ToolStore.class);
+        }
+
+        @Bean
+        ai.pdlc.core.platform.EgressPolicy egressPolicy() {
+            return new ai.pdlc.core.platform.EgressPolicy(java.util.Set.of());
+        }
+
+        @Bean
         SecretsPort secretsPort() {
             return mock(SecretsPort.class);
         }
@@ -86,11 +97,11 @@ class AgentSpringWiringTest {
         }
     }
 
-    /** {@link AgentRunActivitiesImpl} also has two constructors (public + clock-injecting for tests). */
+    /** {@link AgentRunActivitiesImpl} and {@link ToolExecutor} also have two constructors (public + clock-injecting for tests). */
     @Test
     void springContainerConstructsThePlatformRunner() {
         try (AnnotationConfigApplicationContext ctx = new AnnotationConfigApplicationContext()) {
-            ctx.register(TestBeans.class, OpenAiCompatibleModelInvoker.class, AgentRunActivitiesImpl.class);
+            ctx.register(TestBeans.class, OpenAiCompatibleModelInvoker.class, ToolExecutor.class, AgentRunActivitiesImpl.class);
             ctx.refresh();
 
             assertThat(ctx.getBean(AgentRunActivitiesImpl.class)).isNotNull();

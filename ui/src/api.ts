@@ -1,5 +1,5 @@
 import { getIdentity, sendsDevHeaders, type AuthState } from './identity';
-import type { AgentDefinition, AgentSpec, AgentValidation, AgentVersion, CatalogModel, PlatformRun, Workspace } from './types';
+import type { AgentDefinition, AgentSpec, AgentValidation, AgentVersion, CatalogModel, PlatformRun, ToolCallRecord, ToolDefinition, ToolSpec, ToolVersion, Workspace, WorkspaceConnection } from './types';
 import type { AgentRun, AgentsStatus, ArtifactVersion, BoardComment, Comment, CommentIntent, DemoStatus, GrillQuestions, ItemDetail, ItemSummary, Project, ProjectRequest, QualityReport, ReleaseDocument, ScenarioReview, SpecDocs } from './types';
 
 export const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8081';
@@ -85,6 +85,7 @@ export interface AddCommentBody {
 
 const ws = (id: string) => `/api/workspaces/${encodeURIComponent(id)}`;
 const agent = (wsId: string, agentId: string) => `${ws(wsId)}/agents/${encodeURIComponent(agentId)}`;
+const tool = (wsId: string, toolId: string) => `${ws(wsId)}/tools/${encodeURIComponent(toolId)}`;
 
 /** Agent Studio: workspace-scoped registry, catalog and runs (docs/phase-1-execution-spec.md slices 1–5). */
 export const studio = {
@@ -113,6 +114,22 @@ export const studio = {
     request<PlatformRun>(`${agent(wsId, agentId)}/runs`, { method: 'POST', body: JSON.stringify({ inputs }) }),
   cancelRun: (wsId: string, runId: string) =>
     request<PlatformRun>(`${ws(wsId)}/runs/${encodeURIComponent(runId)}/cancel`, { method: 'POST' }),
+  toolCalls: (wsId: string, runId: string) =>
+    request<ToolCallRecord[]>(`${ws(wsId)}/runs/${encodeURIComponent(runId)}/tool-calls`),
+  // Tools (docs/phase-2-execution-spec.md slice 2.1)
+  connections: (wsId: string) => request<WorkspaceConnection[]>(`${ws(wsId)}/connections`),
+  tools: (wsId: string) => request<ToolDefinition[]>(`${ws(wsId)}/tools`),
+  tool: (wsId: string, toolId: string) => request<ToolDefinition>(tool(wsId, toolId)),
+  createTool: (wsId: string, body: { id: string; name: string; spec: ToolSpec }) =>
+    request<ToolDefinition>(`${ws(wsId)}/tools`, { method: 'POST', body: JSON.stringify(body) }),
+  saveToolDraft: (wsId: string, toolId: string, body: { name: string; spec: ToolSpec; revision: number }) =>
+    request<ToolDefinition>(`${tool(wsId, toolId)}/draft`, { method: 'PUT', body: JSON.stringify(body) }),
+  validateTool: (wsId: string, toolId: string) =>
+    request<AgentValidation>(`${tool(wsId, toolId)}/validate`, { method: 'POST' }),
+  publishTool: (wsId: string, toolId: string, revision: number) =>
+    request<ToolVersion>(`${tool(wsId, toolId)}/publish`, { method: 'POST', body: JSON.stringify({ revision }) }),
+  retireTool: (wsId: string, toolId: string) => request<ToolDefinition>(`${tool(wsId, toolId)}/retire`, { method: 'POST' }),
+  toolVersions: (wsId: string, toolId: string) => request<ToolVersion[]>(`${tool(wsId, toolId)}/versions`),
 };
 
 export const api = {

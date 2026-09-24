@@ -2,11 +2,9 @@ package ai.pdlc.controlplane.platform;
 
 import ai.pdlc.controlplane.connections.ModelCatalog;
 import ai.pdlc.controlplane.identity.Identity;
-import ai.pdlc.controlplane.platform.AgentRegistryStore.AgentRow;
-import ai.pdlc.controlplane.platform.AgentRegistryStore.Status;
-import ai.pdlc.controlplane.platform.AgentRegistryStore.VersionRow;
+import ai.pdlc.controlplane.platform.DefinitionStore.DefinitionRow;
+import ai.pdlc.controlplane.platform.DefinitionStore.VersionRow;
 import ai.pdlc.controlplane.web.ConflictException;
-import ai.pdlc.controlplane.web.NotFoundException;
 import ai.pdlc.controlplane.web.dto.AgentDefinitionDto;
 import ai.pdlc.controlplane.web.dto.AgentDraftRequest;
 import ai.pdlc.controlplane.web.dto.AgentValidationDto;
@@ -18,6 +16,7 @@ import ai.pdlc.core.platform.ContentHash;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -34,20 +33,28 @@ import java.util.List;
  *   <li>Retiring stops new runs and edits; existing versions stay readable for provenance.</li>
  * </ul>
  *
- * Every entry point first goes through {@link WorkspaceService#require}, so a non-member cannot
+ * Agents that pin tools (Phase 2 slice 2.1) are publishable and runnable only while every pinned
+ * tool version is usable in the workspace ({@link ToolRegistryService#pinProblems}).
+ *
+ * <p>Every entry point first goes through {@link WorkspaceService#require}, so a non-member cannot
  * distinguish another workspace's agent from a missing one.
  */
 @Service
 public class AgentRegistryService {
 
+    private final VersionedDefinitions<AgentSpec> registry;
     private final AgentRegistryStore store;
     private final WorkspaceService workspaces;
     private final ModelCatalog models;
+    private final ToolRegistryService tools;
 
-    public AgentRegistryService(AgentRegistryStore store, WorkspaceService workspaces, ModelCatalog models) {
+    public AgentRegistryService(AgentRegistryStore store, WorkspaceService workspaces, ModelCatalog models,
+                                ToolRegistryService tools) {
+        this.registry = new VersionedDefinitions<>(store, "Agent", AgentSpec.class, ContentHash::ofAgent);
         this.store = store;
         this.workspaces = workspaces;
         this.models = models;
+        this.tools = tools;
     }
 
     public List<AgentDefinitionDto> list(String workspaceId, Identity identity) {
@@ -57,39 +64,26 @@ public class AgentRegistryService {
 
     public AgentDefinitionDto get(String workspaceId, String id, Identity identity) {
         workspaces.requireMember(workspaceId, identity);
-        return toDto(find(workspaceId, id));
+        return toDto(registry.find(workspaceId, id));
     }
 
     @Transactional
     public AgentDefinitionDto create(String workspaceId, AgentDraftRequest request, Identity identity) {
         workspaces.require(workspaceId, identity, Capability.AUTHOR, Capability.WORKSPACE_ADMIN);
-        if (request.id() == null || !WorkspaceService.ID.matcher(request.id()).matches()) {
-            throw new IllegalArgumentException("id must match " + WorkspaceService.ID.pattern());
-        }
-        requireName(request.name());
-        if (!store.insert(workspaceId, request.id(), request.name(), ContentHash.canonicalJson(request.spec()), identity.user())) {
-            throw new ConflictException("Agent " + request.id() + " already exists in " + workspaceId);
-        }
-        return toDto(find(workspaceId, request.id()));
+        return toDto(registry.create(workspaceId, request.id(), request.name(), request.spec(), identity.user()));
     }
 
     @Transactional
     public AgentDefinitionDto saveDraft(String workspaceId, String id, AgentDraftRequest request, Identity identity) {
         workspaces.require(workspaceId, identity, Capability.AUTHOR, Capability.WORKSPACE_ADMIN);
-        AgentRow row = requireActive(find(workspaceId, id));
-        requireName(request.name());
-        int revision = requireRevision(request.revision());
-        if (!store.updateDraft(workspaceId, id, revision, request.name(), ContentHash.canonicalJson(request.spec()), identity.user())) {
-            throw staleDraft(row);
-        }
-        return toDto(find(workspaceId, id));
+        return toDto(registry.saveDraft(workspaceId, id, request.revision(), request.name(), request.spec(), identity.user()));
     }
 
     public AgentValidationDto validate(String workspaceId, String id, Identity identity) {
         workspaces.require(workspaceId, identity, Capability.AUTHOR, Capability.WORKSPACE_ADMIN);
-        AgentRow row = find(workspaceId, id);
-        AgentSpec spec = ContentHash.read(row.draftSpecJson(), AgentSpec.class);
-        List<String> errors = AgentSpecValidator.validate(row.draftName(), spec, models.authorizedModels());
+        DefinitionRow row = registry.find(workspaceId, id);
+        AgentSpec spec = registry.spec(row.draftSpecJson());
+        List<String> errors = check(workspaceId, row.draftName(), spec);
         String hash = errors.isEmpty() ? ContentHash.ofAgent(row.draftName(), spec) : null;
         return new AgentValidationDto(errors.isEmpty(), errors, hash, row.draftRevision());
     }
@@ -97,78 +91,52 @@ public class AgentRegistryService {
     @Transactional
     public AgentVersionDto publish(String workspaceId, String id, Integer revision, Identity identity) {
         workspaces.require(workspaceId, identity, Capability.WORKSPACE_ADMIN);
-        AgentRow row = requireActive(find(workspaceId, id));
-        if (row.draftRevision() != requireRevision(revision)) {
-            throw staleDraft(row);
-        }
-        AgentSpec spec = ContentHash.read(row.draftSpecJson(), AgentSpec.class);
-        List<String> errors = AgentSpecValidator.validate(row.draftName(), spec, models.authorizedModels());
-        if (!errors.isEmpty()) {
-            throw new IllegalArgumentException(String.join("; ", errors));
-        }
-        String hash = ContentHash.ofAgent(row.draftName(), spec);
-        List<VersionRow> versions = store.versions(workspaceId, id);
-        VersionRow latest = versions.isEmpty() ? null : versions.get(versions.size() - 1);
-        if (latest != null && latest.contentHash().equals(hash)) {
-            throw new ConflictException("Draft is unchanged since published version " + latest.version());
-        }
-        int next = latest == null ? 1 : latest.version() + 1;
-        VersionRow version = new VersionRow(workspaceId, id, next, row.draftName(),
-                ContentHash.canonicalJson(spec), hash, null, identity.user());
-        if (!store.insertVersion(version)) {
-            throw new ConflictException("Agent " + id + " was published concurrently; reload and retry");
-        }
-        store.setCurrentVersion(workspaceId, id, next, identity.user());
-        return toDto(store.version(workspaceId, id, next).orElseThrow());
+        return toDto(registry.publish(workspaceId, id, revision, identity.user(),
+                (name, spec) -> check(workspaceId, name, spec)));
     }
 
     public List<AgentVersionDto> versions(String workspaceId, String id, Identity identity) {
         workspaces.requireMember(workspaceId, identity);
-        find(workspaceId, id);
+        registry.find(workspaceId, id);
         return store.versions(workspaceId, id).stream().map(AgentRegistryService::toDto).toList();
     }
 
     public AgentVersionDto version(String workspaceId, String id, int version, Identity identity) {
         workspaces.requireMember(workspaceId, identity);
-        return toDto(findVersion(workspaceId, id, version));
+        return toDto(registry.findVersion(workspaceId, id, version));
     }
 
     @Transactional
     public AgentDefinitionDto rollback(String workspaceId, String id, Integer version, Identity identity) {
         workspaces.require(workspaceId, identity, Capability.WORKSPACE_ADMIN);
-        requireActive(find(workspaceId, id));
-        if (version == null) {
-            throw new IllegalArgumentException("version is required");
-        }
-        findVersion(workspaceId, id, version);
-        store.setCurrentVersion(workspaceId, id, version, identity.user());
-        return toDto(find(workspaceId, id));
+        return toDto(registry.rollback(workspaceId, id, version, identity.user()));
     }
 
     @Transactional
     public AgentDefinitionDto retire(String workspaceId, String id, Identity identity) {
         workspaces.require(workspaceId, identity, Capability.WORKSPACE_ADMIN);
-        requireActive(find(workspaceId, id));
-        store.setStatus(workspaceId, id, Status.RETIRED, identity.user());
-        return toDto(find(workspaceId, id));
+        return toDto(registry.retire(workspaceId, id, identity.user()));
     }
 
     /**
      * What a new run pins: the current published version of an active agent - its stored content
      * re-hashed so a tampered row fails loudly instead of running - and the model it will call
      * now. A disabled model or a revoked/expired connection fails here with the reason, unless the
-     * agent declared an available fallback; there is no silent default model.
+     * agent declared an available fallback; there is no silent default model. A pinned tool that
+     * is no longer usable (retired, connection revoked or ungranted) blocks the run up front.
      */
     public ResolvedAgentDto resolveForRun(String workspaceId, String id, Identity identity) {
         workspaces.require(workspaceId, identity, Capability.OPERATOR);
-        AgentRow row = requireActive(find(workspaceId, id));
+        DefinitionRow row = registry.requireActive(registry.find(workspaceId, id));
         if (row.currentVersion() == null) {
             throw new ConflictException("Agent " + id + " has no published version");
         }
-        VersionRow version = findVersion(workspaceId, id, row.currentVersion());
-        AgentSpec spec = ContentHash.read(version.specJson(), AgentSpec.class);
-        if (!ContentHash.ofAgent(version.name(), spec).equals(version.contentHash())) {
-            throw new IllegalStateException("Agent " + id + " v" + version.version() + " content does not match its hash");
+        VersionRow version = registry.verified(registry.findVersion(workspaceId, id, row.currentVersion()));
+        AgentSpec spec = registry.spec(version.specJson());
+        List<String> toolProblems = tools.pinProblems(workspaceId, spec.toolsOrEmpty());
+        if (!toolProblems.isEmpty()) {
+            throw new ConflictException("Agent " + id + " v" + version.version() + " cannot run: "
+                    + String.join("; ", toolProblems));
         }
         ModelCatalog.ResolvedModel model = models.resolve(spec.model());
         return new ResolvedAgentDto(toDto(version), model.model(), model.providerModel(), model.connectionId(), model.fallback());
@@ -188,7 +156,7 @@ public class AgentRegistryService {
         if (!store.insert(workspaceId, id, name, ContentHash.canonicalJson(spec), actor)) {
             throw new ConflictException("Agent " + id + " already exists in " + workspaceId);
         }
-        List<String> errors = AgentSpecValidator.validate(name, spec, models.authorizedModels());
+        List<String> errors = check(workspaceId, name, spec);
         if (!errors.isEmpty()) {
             return new ImportResult(id, null, null, errors);
         }
@@ -198,51 +166,22 @@ public class AgentRegistryService {
         return new ImportResult(id, 1, hash, List.of());
     }
 
-    private AgentRow find(String workspaceId, String id) {
-        return store.find(workspaceId, id).orElseThrow(() -> new NotFoundException("No agent " + id + " in " + workspaceId));
-    }
-
-    private VersionRow findVersion(String workspaceId, String id, int version) {
-        return store.version(workspaceId, id, version)
-                .orElseThrow(() -> new NotFoundException("No version " + version + " of agent " + id + " in " + workspaceId));
-    }
-
-    private static AgentRow requireActive(AgentRow row) {
-        if (row.status() == Status.RETIRED) {
-            throw new ConflictException("Agent " + row.id() + " is retired");
+    private List<String> check(String workspaceId, String name, AgentSpec spec) {
+        List<String> errors = new ArrayList<>(AgentSpecValidator.validate(name, spec, models.authorizedModels()));
+        if (spec != null) {
+            errors.addAll(tools.pinProblems(workspaceId, spec.toolsOrEmpty()));
         }
-        return row;
+        return errors;
     }
 
-    private static int requireRevision(Integer revision) {
-        if (revision == null) {
-            throw new IllegalArgumentException("revision is required");
-        }
-        return revision;
-    }
-
-    private static void requireName(String name) {
-        if (name == null || name.isBlank()) {
-            throw new IllegalArgumentException("name is required");
-        }
-    }
-
-    private ConflictException staleDraft(AgentRow row) {
-        int current = store.find(row.workspaceId(), row.id()).map(AgentRow::draftRevision).orElse(row.draftRevision());
-        return new ConflictException("Draft of agent " + row.id() + " is at revision " + current
-                + "; reload before saving or publishing");
-    }
-
-    private AgentDefinitionDto toDto(AgentRow row) {
-        List<VersionRow> versions = store.versions(row.workspaceId(), row.id());
-        Integer latest = versions.isEmpty() ? null : versions.get(versions.size() - 1).version();
+    private AgentDefinitionDto toDto(DefinitionRow row) {
         return new AgentDefinitionDto(row.workspaceId(), row.id(), row.status().name(), row.draftName(),
-                ContentHash.read(row.draftSpecJson(), AgentSpec.class), row.draftRevision(), row.currentVersion(),
-                latest, row.updatedAt(), row.updatedBy());
+                registry.spec(row.draftSpecJson()), row.draftRevision(), row.currentVersion(),
+                registry.latestVersion(row.workspaceId(), row.id()), row.updatedAt(), row.updatedBy());
     }
 
     private static AgentVersionDto toDto(VersionRow row) {
-        return new AgentVersionDto(row.workspaceId(), row.agentId(), row.version(), row.name(),
+        return new AgentVersionDto(row.workspaceId(), row.definitionId(), row.version(), row.name(),
                 ContentHash.read(row.specJson(), AgentSpec.class), row.contentHash(), row.publishedAt(), row.publishedBy());
     }
 }

@@ -38,8 +38,8 @@ class AgentRegistryServiceTest {
     private final WorkspaceService workspaces = new WorkspaceService(workspaceStore);
     private final InMemoryConnectionStore connections = InMemoryConnectionStore.withModels("gw", "sonnet", "haiku");
     private final ModelCatalog models = new ModelCatalog(connections);
-    private final AgentRegistryService service =
-            new AgentRegistryService(new InMemoryAgentRegistryStore(), workspaces, models);
+    private final TestRegistries.Registries registries = TestRegistries.over(workspaces, connections);
+    private final AgentRegistryService service = registries.agents();
 
     @BeforeEach
     void seed() {
