@@ -44,14 +44,16 @@ public class InMemoryConnectionStore implements ConnectionStore {
     public boolean insertConnection(ConnectionRow r) {
         OffsetDateTime now = OffsetDateTime.now();
         return connections.putIfAbsent(r.id(), new ConnectionRow(r.id(), r.scope(), r.workspaceId(), r.kind(), r.authType(),
-                r.secretRef(), r.baseUrl(), "ACTIVE", r.expiresAt(), now, r.createdBy(), now, r.createdBy(), null, null)) == null;
+                r.secretRef(), r.baseUrl(), "ACTIVE", r.expiresAt(), now, r.createdBy(), now, r.createdBy(), null, null,
+                r.oauthClientId())) == null;
     }
 
     @Override
     public void updateConnection(String id, String secretRef, String baseUrl, OffsetDateTime expiresAt, String updatedBy) {
         ConnectionRow r = connections.get(id);
         connections.put(id, new ConnectionRow(id, r.scope(), r.workspaceId(), r.kind(), r.authType(), secretRef, baseUrl,
-                r.status(), expiresAt, r.createdAt(), r.createdBy(), OffsetDateTime.now(), updatedBy, r.revokedAt(), r.revokedBy()));
+                r.status(), expiresAt, r.createdAt(), r.createdBy(), OffsetDateTime.now(), updatedBy, r.revokedAt(), r.revokedBy(),
+                r.oauthClientId()));
     }
 
     @Override
@@ -59,7 +61,16 @@ public class InMemoryConnectionStore implements ConnectionStore {
         ConnectionRow r = connections.get(id);
         OffsetDateTime now = OffsetDateTime.now();
         connections.put(id, new ConnectionRow(id, r.scope(), r.workspaceId(), r.kind(), r.authType(), r.secretRef(),
-                r.baseUrl(), "REVOKED", r.expiresAt(), r.createdAt(), r.createdBy(), now, revokedBy, now, revokedBy));
+                r.baseUrl(), "REVOKED", r.expiresAt(), r.createdAt(), r.createdBy(), now, revokedBy, now, revokedBy,
+                r.oauthClientId()));
+    }
+
+    @Override
+    public void setOAuthClientId(String id, String oauthClientId) {
+        ConnectionRow r = connections.get(id);
+        connections.put(id, new ConnectionRow(id, r.scope(), r.workspaceId(), r.kind(), r.authType(), r.secretRef(),
+                r.baseUrl(), r.status(), r.expiresAt(), r.createdAt(), r.createdBy(), r.updatedAt(), r.updatedBy(),
+                r.revokedAt(), r.revokedBy(), oauthClientId));
     }
 
     @Override

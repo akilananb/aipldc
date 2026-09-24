@@ -265,7 +265,7 @@ export default function AgentForm({ draft, onChange, models, tools, readOnly }: 
                       disabled={readOnly}
                       onCheckedChange={(c) => pin(t.id, c === true ? t.currentVersion : null)}
                     />
-                    {t.draftName} ({t.id}) · {t.draftSpec?.method} · {t.draftSpec?.effect}
+                    {t.draftName} ({t.id}) · {t.draftSpec?.kind === 'mcp' ? 'MCP' : t.draftSpec?.method} · {t.draftSpec?.effect}
                   </Flex>
                 </Text>
                 {pinned && <span className="meta-tag">pinned v{pinned.version}</span>}

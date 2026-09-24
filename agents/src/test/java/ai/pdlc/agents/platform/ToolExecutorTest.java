@@ -56,8 +56,9 @@ class ToolExecutorTest {
     private final ToolStore store = mock(ToolStore.class);
     private final List<CallRecord> recorded = new CopyOnWriteArrayList<>();
     private final SecretsPort secrets = ref -> "kv://orders-key".equals(ref) ? SECRET : null;
-    private final ToolExecutor executor = new ToolExecutor(store, secrets,
-            new EgressPolicy(Set.of("localhost")), Clock.fixed(NOW, ZoneOffset.UTC));
+    private final EgressPolicy egressPolicy = new EgressPolicy(Set.of("localhost"));
+    private final ToolExecutor executor = new ToolExecutor(store, secrets, egressPolicy,
+            new McpToolCaller(egressPolicy, new McpCredentials(secrets, egressPolicy)), Clock.fixed(NOW, ZoneOffset.UTC));
     private String baseUrl;
 
     @BeforeEach

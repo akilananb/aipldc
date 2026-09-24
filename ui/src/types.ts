@@ -361,6 +361,30 @@ export interface ToolSpec {
   /** WRITE tools (slice 2.2): HEADER = the target honors Idempotency-Key. Omitted = NONE. */
   idempotency?: 'HEADER' | 'NONE' | null;
   approval?: { escalateAfterMinutes: number | null; expireAfterMinutes: number | null } | null;
+  /** kind 'mcp' (slice 2.3): the remote tool and the fingerprint of its reviewed definition. */
+  mcpTool?: string | null;
+  mcpFingerprint?: string | null;
+}
+
+export type McpReviewState = 'NEW' | 'APPROVED' | 'CHANGED' | 'UNSUPPORTED_SCHEMA' | 'REMOVED';
+
+export interface McpDiscoveredTool {
+  name: string;
+  description: string | null;
+  inputSchema: Record<string, unknown> | null;
+  annotations: Record<string, unknown> | null;
+  fingerprint: string | null;
+  state: McpReviewState;
+  problems: string[];
+  toolId: string | null;
+  approvedVersion: number | null;
+  suggestedEffect: 'READ' | 'WRITE' | null;
+}
+
+export interface McpDiscovery {
+  connectionId: string;
+  error: string | null;
+  tools: McpDiscoveredTool[];
 }
 
 /** docs/phase-2-execution-spec.md slice 2.2: a WRITE call waiting for (or past) a human decision. */
@@ -433,7 +457,7 @@ export interface ToolVersion {
 /** A connection granted to the workspace (no secret reference is exposed). */
 export interface WorkspaceConnection {
   id: string;
-  kind: string;
+  kind: 'HTTP_API' | 'MCP_SERVER' | string;
   authType: string;
   baseUrl: string;
   status: string;

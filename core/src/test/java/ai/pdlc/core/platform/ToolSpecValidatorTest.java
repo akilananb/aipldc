@@ -57,16 +57,16 @@ class ToolSpecValidatorTest {
 
     @Test
     void reportsEveryStructuralProblem() {
-        ToolSpec spec = new ToolSpec(" ", "mcp", null, "TRACE", "/x", Map.of("type", "array", "pattern", "x"), "MAYBE", 0, 10);
+        ToolSpec spec = new ToolSpec(" ", "grpc", null, "TRACE", "/x", Map.of("type", "array", "not", "x"), "MAYBE", 0, 10);
 
         assertThat(ToolSpecValidator.validate(null, spec)).containsExactly(
                 "name is required",
                 "description is required (it is what the model is told)",
-                "kind must be \"http\"",
                 "connectionId is required",
+                "kind must be \"http\" or \"mcp\"",
                 "method must be one of " + ToolSpecValidator.METHODS,
                 "effect must be READ or WRITE",
-                "inputSchema uses unsupported keyword \"pattern\" (supported: " + OutputSchema.KEYWORDS + ")",
+                "inputSchema uses unsupported keyword \"not\" (supported: " + OutputSchema.KEYWORDS + ")",
                 "inputSchema.type must be \"object\"",
                 "timeoutSeconds must be between 1 and 120",
                 "maxResponseBytes must be between 256 and 1000000");
@@ -99,5 +99,46 @@ class ToolSpecValidatorTest {
     @Test
     void sliceTwoOneToolsKeepTheirCanonicalForm() {
         assertThat(ContentHash.canonicalJson(valid())).doesNotContain("idempotency", "approval");
+    }
+
+    static ToolSpec mcp(String fingerprint) {
+        return new ToolSpec("Look up an order", "mcp", "orders-mcp", null, null, valid().inputSchema(), "READ", 10, 4096,
+                null, null, "lookup_order", fingerprint);
+    }
+
+    @Test
+    void mcpToolsPinTheRemoteToolAndItsFingerprintInsteadOfAnHttpOperation() {
+        assertThat(ToolSpecValidator.validate("t", mcp("sha256:abc"))).isEmpty();
+        ToolSpec bad = new ToolSpec("d", "mcp", "orders-mcp", "POST", "/x", valid().inputSchema(), "READ", 10, 4096,
+                "HEADER", null, "bad name!", null);
+        assertThat(ToolSpecValidator.validate("t", bad)).containsExactly(
+                "mcpTool must match " + ToolSpecValidator.MCP_TOOL_NAME.pattern(),
+                "mcpFingerprint is required (from discovery)",
+                "mcp tools have no method or path",
+                "mcp tools have no idempotency key support; idempotency must be NONE");
+        ToolSpec v = valid();
+        assertThat(ToolSpecValidator.validate("t", new ToolSpec(v.description(), "http", v.connectionId(), v.method(), v.path(),
+                v.inputSchema(), v.effect(), v.timeoutSeconds(), v.maxResponseBytes(), null, null, "x", null)))
+                .containsExactly("mcpTool and mcpFingerprint apply only to mcp tools");
+    }
+
+    @Test
+    void fingerprintsAreStableAcrossKeyOrderAndChangeWithTheDefinition() {
+        Map<String, Object> a = new java.util.LinkedHashMap<>();
+        a.put("type", "object");
+        a.put("properties", Map.of("orderId", Map.of("type", "string")));
+        Map<String, Object> b = new java.util.LinkedHashMap<>();
+        b.put("properties", Map.of("orderId", Map.of("type", "string")));
+        b.put("type", "object");
+
+        assertThat(McpFingerprint.of("lookup_order", "Look up", a, Map.of("readOnlyHint", true)))
+                .isEqualTo(McpFingerprint.of("lookup_order", "Look up", b, Map.of("readOnlyHint", true)))
+                .isNotEqualTo(McpFingerprint.of("lookup_order", "Look up and cancel", a, Map.of("readOnlyHint", true)))
+                .isNotEqualTo(McpFingerprint.of("lookup_order", "Look up", a, Map.of("readOnlyHint", false)));
+    }
+
+    @Test
+    void earlierToolShapesKeepTheirHashes() {
+        assertThat(ContentHash.canonicalJson(valid())).doesNotContain("mcpTool", "mcpFingerprint");
     }
 }

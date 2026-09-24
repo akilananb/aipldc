@@ -2,9 +2,11 @@ package ai.pdlc.agents.config;
 
 import ai.pdlc.agents.activities.AgentActivitiesImpl;
 import ai.pdlc.agents.platform.AgentRunActivitiesImpl;
+import ai.pdlc.agents.platform.McpDiscoveryActivitiesImpl;
 import ai.pdlc.core.workflow.AgentMentionWorkflowImpl;
 import ai.pdlc.core.workflow.AgentRunWorkflowImpl;
 import ai.pdlc.core.workflow.FeatureWorkflowImpl;
+import ai.pdlc.core.workflow.McpDiscoveryWorkflowImpl;
 import ai.pdlc.core.workflow.TaskQueues;
 import io.temporal.client.WorkflowClient;
 import io.temporal.worker.Worker;
@@ -28,12 +30,13 @@ public class WorkerConfig {
 
     @Bean
     public WorkerFactory workerFactory(WorkflowClient client, AgentActivitiesImpl agentActivities,
-                                       AgentRunActivitiesImpl agentRunActivities) {
+                                       AgentRunActivitiesImpl agentRunActivities,
+                                       McpDiscoveryActivitiesImpl mcpDiscoveryActivities) {
         factory = WorkerFactory.newInstance(client);
         Worker worker = factory.newWorker(TaskQueues.REASONING);
         worker.registerWorkflowImplementationTypes(FeatureWorkflowImpl.class, AgentMentionWorkflowImpl.class,
-                AgentRunWorkflowImpl.class);
-        worker.registerActivitiesImplementations(agentActivities, agentRunActivities);
+                AgentRunWorkflowImpl.class, McpDiscoveryWorkflowImpl.class);
+        worker.registerActivitiesImplementations(agentActivities, agentRunActivities, mcpDiscoveryActivities);
         factory.start();
         return factory;
     }

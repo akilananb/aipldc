@@ -130,7 +130,7 @@ public class ToolRegistryService {
                 continue;
             }
             ToolSpec spec = registry.spec(registry.verified(version).specJson());
-            connections.toolConnectionProblems(spec.connectionId(), workspaceId).stream()
+            connections.toolConnectionProblems(spec.connectionId(), workspaceId, connectionKind(spec)).stream()
                     .map(p -> "tool " + ref.tool() + " v" + ref.version() + ": " + p)
                     .forEach(problems::add);
         }
@@ -140,9 +140,35 @@ public class ToolRegistryService {
     private List<String> check(String workspaceId, String name, ToolSpec spec) {
         List<String> errors = new ArrayList<>(ToolSpecValidator.validate(name, spec));
         if (spec != null && spec.connectionId() != null && !spec.connectionId().isBlank()) {
-            errors.addAll(connections.toolConnectionProblems(spec.connectionId(), workspaceId));
+            errors.addAll(connections.toolConnectionProblems(spec.connectionId(), workspaceId, connectionKind(spec)));
         }
         return errors;
+    }
+
+    /** A workspace tool bound to an MCP server's tool, with what was last published for it. */
+    public record McpBinding(String toolId, String status, String mcpTool, String draftFingerprint, Integer latestVersion,
+                             String latestFingerprint) {
+    }
+
+    /** Every {@code kind: mcp} tool of the workspace on {@code connectionId} (no authorization: callers check it). */
+    public List<McpBinding> mcpBindings(String workspaceId, String connectionId) {
+        List<McpBinding> bindings = new ArrayList<>();
+        for (DefinitionRow row : registry.store().list(workspaceId)) {
+            ToolSpec draft = registry.spec(row.draftSpecJson());
+            Integer latest = registry.latestVersion(workspaceId, row.id());
+            ToolSpec published = latest == null ? null : registry.spec(registry.findVersion(workspaceId, row.id(), latest).specJson());
+            ToolSpec reference = published != null ? published : draft;
+            if (reference == null || !reference.isMcp() || !connectionId.equals(reference.connectionId())) {
+                continue;
+            }
+            bindings.add(new McpBinding(row.id(), row.status().name(), reference.mcpTool(),
+                    draft == null ? null : draft.mcpFingerprint(), latest, published == null ? null : published.mcpFingerprint()));
+        }
+        return bindings;
+    }
+
+    static String connectionKind(ToolSpec spec) {
+        return spec.isMcp() ? ConnectionService.MCP_SERVER : ConnectionService.HTTP_API;
     }
 
     private ToolDefinitionDto toDto(DefinitionRow row) {

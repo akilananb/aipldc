@@ -10,7 +10,16 @@ public interface ConnectionStore {
     record ConnectionRow(String id, String scope, String workspaceId, String kind, String authType, String secretRef,
                          String baseUrl, String status, OffsetDateTime expiresAt, OffsetDateTime createdAt,
                          String createdBy, OffsetDateTime updatedAt, String updatedBy, OffsetDateTime revokedAt,
-                         String revokedBy) {
+                         String revokedBy, String oauthClientId) {
+
+        /** Without an OAuth client id (every kind but OAUTH_CLIENT_CREDENTIALS MCP servers). */
+        public ConnectionRow(String id, String scope, String workspaceId, String kind, String authType, String secretRef,
+                             String baseUrl, String status, OffsetDateTime expiresAt, OffsetDateTime createdAt,
+                             String createdBy, OffsetDateTime updatedAt, String updatedBy, OffsetDateTime revokedAt,
+                             String revokedBy) {
+            this(id, scope, workspaceId, kind, authType, secretRef, baseUrl, status, expiresAt, createdAt, createdBy,
+                    updatedAt, updatedBy, revokedAt, revokedBy, null);
+        }
     }
 
     record ModelRow(String id, String connectionId, String providerModel, String displayName, boolean enabled,
@@ -27,6 +36,8 @@ public interface ConnectionStore {
     void updateConnection(String id, String secretRef, String baseUrl, OffsetDateTime expiresAt, String updatedBy);
 
     void revokeConnection(String id, String revokedBy);
+
+    void setOAuthClientId(String id, String oauthClientId);
 
     Optional<ModelRow> model(String id);
 

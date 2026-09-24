@@ -129,6 +129,10 @@ export default function AgentEditorPage() {
   if (agentQuery.isLoading || workspacesQuery.isLoading) {
     return <Skeleton height="420px" />;
   }
+  if (agent && !draft && !agentQuery.isError) {
+    // Loaded, but the form is filled from it by an effect on the next render.
+    return <Skeleton height="420px" />;
+  }
   if (agentQuery.isError || !agent || !draft) {
     return <ErrorCallout title="Failed to load agent" error={agentQuery.error ?? 'not found'} />;
   }
