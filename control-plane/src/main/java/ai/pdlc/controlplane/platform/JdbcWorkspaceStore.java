@@ -85,4 +85,18 @@ public class JdbcWorkspaceStore implements WorkspaceStore {
                     workspaceId, userId, c.name(), grantedBy);
         }
     }
+
+    @Override
+    public void linkProject(String workspaceId, String projectId, String linkedBy) {
+        jdbc.update("INSERT INTO workspace_projects (workspace_id, project_id, linked_by) VALUES (?, ?, ?) ON CONFLICT DO NOTHING",
+                workspaceId, projectId, linkedBy);
+    }
+
+    @Override
+    public List<LinkedProject> projects(String workspaceId) {
+        return jdbc.query("""
+                SELECT p.id, p.name FROM workspace_projects wp JOIN projects p ON p.id = wp.project_id
+                WHERE wp.workspace_id = ? ORDER BY p.id""",
+                (rs, n) -> new LinkedProject(rs.getString("id"), rs.getString("name")), workspaceId);
+    }
 }

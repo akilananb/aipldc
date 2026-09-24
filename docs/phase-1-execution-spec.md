@@ -2,8 +2,7 @@
 
 This spec turns Phase 1 of [configurable-agent-platform.md](configurable-agent-platform.md) into
 slices that can be built one at a time. Each slice ships something usable end to end and has its
-own exit evidence. **Slices 1–4 are implemented**; slices 5–6 are specified here and are not
-yet built.
+own exit evidence. **All six slices are implemented - Phase 1 is complete.**
 
 **Phase 1 exit evidence** (from the roadmap):
 
@@ -282,20 +281,106 @@ rules in [Scalability and service boundaries](configurable-agent-platform.md#sca
 - Structured output was parsed, and a schema violation failed with the output kept.
 - Revoking the connection refused new starts and failed an already-queued run at invocation.
 
-## Slice 5 — Agent Studio UI
+## Slice 5 — Agent Studio UI (implemented)
 
-- **Navigation:** a workspace selector in AppShell. Workspace id goes into every react-query key.
-- **Screens:** an Agents list, and an editor with prompt (CodeMirror), variables, model picker from the catalog, limits and output schema.
-- **Publishing and history:** a validate panel with the findings, draft revision conflict handling (reload and compare), publish, version history with a side-by-side diff, rollback and retire.
-- **Runs:** a test-invocation drawer that creates a real run in slice 4's run API and shows the pinned version and hash.
-- **Verification:** `npm run build`, plus manual browser checks of keyboard-only editing, narrow widths, and the empty, loading, conflict and 403/404 states.
+The Studio lives in `ui/src/studio/`. It is reached from **Agent Studio** in the AppShell navigation and uses the existing Radix Themes, `Surface`, `PageHeader`, toast and react-query patterns.
 
-## Slice 6 — PDLC seed import
+**Workspace selector.**
 
-- Create a `pdlc` workspace once at startup, recorded in a `platform_imports` row so it never re-runs.
-- Import each bundled/overridden prompt and each `agents.roles` entry as a published AgentDefinition, v1. Existing `projects` rows become that workspace's project config references.
-- Existing `FeatureWorkflow` executions and agents keep their current code paths. This slice only makes the assets visible and editable for the Phase 5 cutover.
-- **Exit:** a fresh database shows the PDLC agents as v1 with hashes. A second boot imports nothing. Editing a PDLC agent in the Studio doesn't change the running legacy pipeline.
+- It sits in the Studio header rather than globally in AppShell. The PDLC pages aren't workspace-scoped yet, so a global selector would imply scoping that doesn't exist.
+- The choice is remembered per browser.
+- Every Studio query key includes the workspace id: `['studio', ws, …]`.
+- Workspaces the caller doesn't belong to are listed as disabled. This only happens for the enterprise Admin, who sees every workspace's name.
+
+**`/studio` (`StudioPage`).**
+
+- Shows the caller's own capabilities in the workspace and lists its agents: status, the version runs use, latest version, draft revision, and who last updated it.
+- **New agent** (AUTHOR or WORKSPACE_ADMIN) creates a draft and opens it in the editor.
+- **New workspace** (enterprise Admin only) names its administrators.
+
+**`/studio/:ws/agents/:agentId` (`AgentEditorPage`).** Three tabs plus an inspector.
+
+- **Editor tab (`AgentForm`):**
+  - The prompt is edited in CodeMirror. Tab moves focus rather than indenting, so the editor is not a keyboard trap.
+  - **Declare …** adds any variables the prompt uses but hasn't declared, using the same rule as the server.
+  - Variables table, and a model picker from the catalog. Unavailable models are shown disabled, with the reason.
+  - Allowed fallbacks, limits, and the output schema as JSON (checked locally before save).
+- **Inspector:**
+  - status, the version runs use, the draft revision and an unsaved-changes marker;
+  - **Validate** shows the findings, or the hash that publishing would pin;
+  - **Publish vN** needs WORKSPACE_ADMIN and a saved draft;
+  - **Retire** asks for confirmation first.
+- **Conflicts:** every save sends the revision it was based on.
+  - A 409 shows a conflict callout. The author's edits stay in the form until they choose **Load latest (discard my edits)**.
+  - Background refetches never overwrite local edits.
+- **Versions tab (`VersionsPanel`):**
+  - Immutable versions with their content hash; "runs use this" marks the current one.
+  - A side-by-side diff between any two versions, or a version and the unsaved working draft.
+  - **Use vN for new runs** rolls back.
+- **Test runs tab (`RunsPanel`):**
+  - Input fields come from the variables of the version runs currently use. **Start run** needs OPERATOR.
+  - The run is followed live with 2s polling until it finishes. It shows the pinned version and hash, the model, provider model and connection (and whether a fallback was used), attempts, tokens (shown as "unknown" when not reported), output or error, and Cancel while it is active.
+  - A list of recent runs.
+
+**Capability gating.** Controls are shown disabled with the reason, or hidden, based on the caller's capabilities in the workspace. The server enforces the same rules regardless.
+
+**Verification** (`npm run build` passes, plus a live browser check). Stack: local Postgres, Temporal dev server, a key-checking model stub, control-plane, the agents worker and the Vite UI, driven by Playwright and Chromium with the dev identities.
+
+- **Lead** created an agent, typed the prompt, declared its variable with one click, picked the model, saved (revision 2), validated and published v1.
+  - A test run succeeded, showing pinned v1, its hash, tokens 7/5 and the ALPHA output.
+  - Lead then published v2, diffed v1 against v2 (ALPHA/BETA), and rolled back so new runs use v1.
+- **Author (fsdev)** saved a stale draft after lead's save: the conflict callout appeared, and **Load latest** restored the server draft. Publish was disabled for the author.
+- **Operator (qa):** the editor was read-only, the run form targeted v1 after the rollback, and runs were allowed.
+- **Non-member (po):** saw "No workspace yet"; the direct URL showed "No workspace eng" (404).
+- **Keyboard-only:** focus reached every form control. A timeout edit plus Enter on Save saved the draft. This check found the CodeMirror Tab trap, which is now fixed.
+- **390px width:** no horizontal page overflow; the form stacks into one column.
+
+## Slice 6 — PDLC seed import (implemented)
+
+**Shared prompts.**
+
+- The 15 bundled PDLC prompts moved from `agents/src/main/resources/prompts/` to `core/src/main/resources/prompts/`. The classpath path `/prompts/<name>.mustache` is unchanged, so the agents' `PromptTemplates` renders exactly what it did before (the golden `PromptTemplatesTest` passes unchanged).
+- control-plane can now read the same files through `core/.../platform/BundledPrompts`. It checks a readable `prompts_dir` override first, then the bundled prompt, the same order as `PromptTemplates`.
+
+**Import (`control-plane/.../platform/PdlcImportSeeder`, runs after `ProjectSeeder` and `ModelCatalogSeeder`).**
+
+It runs in one transaction, exactly once, guarded by `platform_imports` id `pdlc-package-v1`:
+
+1. Creates workspace `pdlc`.
+2. Imports each bundled prompt as agent `<prompt name>`:
+   - **Prompt:** the prompt text verbatim.
+   - **Variables:** the top-level names it references (`AgentSpecValidator.referencedVariables`), all optional, because the legacy callers pass optional fields.
+   - **Model:** the role's model from `pdlc.yaml`; the role is the name prefix.
+   - **Limits:** `timeoutSeconds` 600 (the legacy activity timeout); `maxOutputTokens` = the role's `budget_tokens`, when set.
+3. Publishes each agent as v1 through `AgentRegistryService.importPublished`, which applies the normal publication rules and hash. Anything that fails publication stays a draft, with the reason recorded.
+4. Links every existing project to `pdlc` in `workspace_projects` (V18; rows cascade away when a project is deleted). `GET /api/workspaces/{ws}/projects` lists them, and the Studio shows them as "Serves projects".
+5. Records what was published, what stayed a draft, where each prompt came from, and the linked projects.
+
+**Workspace admins.**
+
+- On every startup, each user in `PDLC_WORKSPACE_ADMINS` (`pdlc.platform.pdlc-workspace-admins`) gets `WORKSPACE_ADMIN` in `pdlc`. The grant is additive; it never removes anyone.
+- This is needed because a system-created workspace has no creator to administer it.
+- The local k8s manifest sets `admin@acme,lead@acme`. If nothing is configured and the workspace has no members, a WARN says what to set.
+
+**The legacy pipeline is unchanged by construction.** The PDLC agents keep rendering the prompt files through `PromptTemplates` and never read the registry, so publishing a new version in the Studio changes platform runs only. The Phase 5 cutover will route new PDLC work through published versions.
+
+**Known limitation.** The legacy prompts render structured views: lists and booleans driving `{{#docs}}`, `{{#hasBrief}}`, `{{#results}}` and similar. Platform runs pass string inputs, so a Studio test run of an imported agent treats a non-empty string as "true" for a section. The imported agents are faithful, versioned copies for review and editing; structured inputs arrive with typed artifacts in Phase 4.
+
+**Exit evidence:**
+
+| Test | What it proves |
+|---|---|
+| `BundledPromptsTest` (core) | Names match the files; every bundled prompt passes publication once its variables are declared; the override wins; roles come from the name prefix. |
+| `PdlcImportSeederTest` | Every prompt is imported, and publishes v1 unless it fails publication (a role with no model stays a draft, with the reason). Text is verbatim, the hash is correct, `budget_tokens` becomes the token limit, variables are optional. Projects are linked. A second boot is a no-op even after a Studio edit to v2. Admin grants are additive and repeated. An override dir wins. |
+| `PlatformRegistryIntegrationTest` | `workspace_projects` against real Postgres: idempotent linking, cascade on project deletion, member-only reads. |
+| `PromptTemplatesTest` (agents) | The legacy renders are unchanged after the move. |
+
+**Live check** (fresh Postgres, control-plane in dev-headers mode):
+
+- The import published 15 agents at v1 and linked `ado-pilot` and `local`.
+- A Studio-style edit published `grill-questions` v2. The bundled prompt the legacy pipeline renders had the same sha256 before and after, both on disk and inside the agents jar.
+- After a restart, nothing was re-imported (`platform_imports` still had 2 rows) and v2 was kept.
+- The Studio listed the 15 agents with "Serves projects: Payments, Restaurant runtime".
 
 ## Verification commands
 

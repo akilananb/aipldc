@@ -1,4 +1,5 @@
 import { getIdentity, sendsDevHeaders, type AuthState } from './identity';
+import type { AgentDefinition, AgentSpec, AgentValidation, AgentVersion, CatalogModel, PlatformRun, Workspace } from './types';
 import type { AgentRun, AgentsStatus, ArtifactVersion, BoardComment, Comment, CommentIntent, DemoStatus, GrillQuestions, ItemDetail, ItemSummary, Project, ProjectRequest, QualityReport, ReleaseDocument, ScenarioReview, SpecDocs } from './types';
 
 export const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8081';
@@ -81,6 +82,38 @@ export interface AddCommentBody {
   intent: CommentIntent;
   blocking: boolean;
 }
+
+const ws = (id: string) => `/api/workspaces/${encodeURIComponent(id)}`;
+const agent = (wsId: string, agentId: string) => `${ws(wsId)}/agents/${encodeURIComponent(agentId)}`;
+
+/** Agent Studio: workspace-scoped registry, catalog and runs (docs/phase-1-execution-spec.md slices 1–5). */
+export const studio = {
+  workspaces: () => request<Workspace[]>('/api/workspaces'),
+  createWorkspace: (body: { id: string; name: string; admins: string[] }) =>
+    request<Workspace>('/api/workspaces', { method: 'POST', body: JSON.stringify(body) }),
+  models: () => request<CatalogModel[]>('/api/platform/models'),
+  projects: (wsId: string) => request<{ id: string; name: string }[]>(`${ws(wsId)}/projects`),
+  agents: (wsId: string) => request<AgentDefinition[]>(`${ws(wsId)}/agents`),
+  agent: (wsId: string, agentId: string) => request<AgentDefinition>(agent(wsId, agentId)),
+  createAgent: (wsId: string, body: { id: string; name: string; spec: AgentSpec }) =>
+    request<AgentDefinition>(`${ws(wsId)}/agents`, { method: 'POST', body: JSON.stringify(body) }),
+  saveDraft: (wsId: string, agentId: string, body: { name: string; spec: AgentSpec; revision: number }) =>
+    request<AgentDefinition>(`${agent(wsId, agentId)}/draft`, { method: 'PUT', body: JSON.stringify(body) }),
+  validate: (wsId: string, agentId: string) =>
+    request<AgentValidation>(`${agent(wsId, agentId)}/validate`, { method: 'POST' }),
+  publish: (wsId: string, agentId: string, revision: number) =>
+    request<AgentVersion>(`${agent(wsId, agentId)}/publish`, { method: 'POST', body: JSON.stringify({ revision }) }),
+  rollback: (wsId: string, agentId: string, version: number) =>
+    request<AgentDefinition>(`${agent(wsId, agentId)}/rollback`, { method: 'POST', body: JSON.stringify({ version }) }),
+  retire: (wsId: string, agentId: string) => request<AgentDefinition>(`${agent(wsId, agentId)}/retire`, { method: 'POST' }),
+  versions: (wsId: string, agentId: string) => request<AgentVersion[]>(`${agent(wsId, agentId)}/versions`),
+  runs: (wsId: string, agentId: string) => request<PlatformRun[]>(`${agent(wsId, agentId)}/runs`),
+  run: (wsId: string, runId: string) => request<PlatformRun>(`${ws(wsId)}/runs/${encodeURIComponent(runId)}`),
+  startRun: (wsId: string, agentId: string, inputs: Record<string, string>) =>
+    request<PlatformRun>(`${agent(wsId, agentId)}/runs`, { method: 'POST', body: JSON.stringify({ inputs }) }),
+  cancelRun: (wsId: string, runId: string) =>
+    request<PlatformRun>(`${ws(wsId)}/runs/${encodeURIComponent(runId)}/cancel`, { method: 'POST' }),
+};
 
 export const api = {
   me(): Promise<AuthState> {

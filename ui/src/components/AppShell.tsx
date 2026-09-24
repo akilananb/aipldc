@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { Link, useMatch, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { Bot, FileText, FolderKanban, Moon, Radio, Repeat2, Search, ShieldCheck, Sun } from 'lucide-react';
+import { Bot, FileText, FolderKanban, Moon, Radio, Repeat2, Search, ShieldCheck, Sparkles, Sun } from 'lucide-react';
 import { api } from '../api';
 import { getAppearance, setAppearance, useAppearance } from '../theme';
 import { itemNeedsAttention } from '../ui-utils';
@@ -27,6 +27,7 @@ export default function AppShell({ children }: Props) {
   const onItemsRoute = useMatch('/');
   const onAgentsRoute = useMatch('/agents');
   const onProjectsRoute = useMatch('/projects');
+  const onStudioRoute = useMatch('/studio/*');
   const itemMatch = useMatch('/items/:id');
   const [paletteOpen, setPaletteOpen] = useState(false);
 
@@ -118,6 +119,10 @@ export default function AppShell({ children }: Props) {
             <FolderKanban size={16} />
             <span>Projects</span>
           </Link>
+          <Link to="/studio" className={onStudioRoute ? 'active' : ''}>
+            <Sparkles size={16} />
+            <span>Agent Studio</span>
+          </Link>
         </nav>
 
         <div className="side-foot">
@@ -151,6 +156,8 @@ export default function AppShell({ children }: Props) {
             <span className="crumb">Agents</span>
           ) : onProjectsRoute ? (
             <span className="crumb">Projects</span>
+          ) : onStudioRoute ? (
+            <span className="crumb">Agent Studio</span>
           ) : (
             <span className="crumb">Items</span>
           )}

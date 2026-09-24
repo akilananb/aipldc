@@ -97,6 +97,40 @@ public final class AgentSpecValidator {
         return errors;
     }
 
+    /**
+     * The top-level variable names a prompt references outside sections - exactly the names
+     * publication requires to be declared (names inside a section resolve against its item).
+     */
+    public static List<String> referencedVariables(String prompt) {
+        Set<String> names = new LinkedHashSet<>();
+        List<String> open = new ArrayList<>();
+        Matcher m = TAG.matcher(prompt == null ? "" : prompt);
+        while (m.find()) {
+            String sigil = m.group(2);
+            String key = m.group(3);
+            switch (sigil) {
+                case ">", "=", "!" -> { }
+                case "#", "^" -> {
+                    if (open.isEmpty()) {
+                        requireDeclared(key, Set.of(), names);
+                    }
+                    open.add(key);
+                }
+                case "/" -> {
+                    if (!open.isEmpty()) {
+                        open.remove(open.size() - 1);
+                    }
+                }
+                default -> {
+                    if (open.isEmpty()) {
+                        requireDeclared(key, Set.of(), names);
+                    }
+                }
+            }
+        }
+        return List.copyOf(names);
+    }
+
     private static void checkTemplate(String prompt, Set<String> declared, List<String> errors) {
         Matcher m = TAG.matcher(prompt);
         List<String> open = new ArrayList<>();

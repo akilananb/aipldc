@@ -6,7 +6,6 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.TreeMap;
-import java.util.TreeSet;
 
 /**
  * In-process {@link ConnectionStore} for service tests (public so the platform registry tests can
@@ -17,7 +16,7 @@ public class InMemoryConnectionStore implements ConnectionStore {
 
     private final Map<String, ConnectionRow> connections = new TreeMap<>();
     private final Map<String, ModelRow> models = new TreeMap<>();
-    private final Set<String> imports = new TreeSet<>();
+    private final Map<String, String> imports = new TreeMap<>();
 
     /** An active API-key connection {@code connectionId} serving the given enabled models. */
     public static InMemoryConnectionStore withModels(String connectionId, String... modelIds) {
@@ -86,6 +85,15 @@ public class InMemoryConnectionStore implements ConnectionStore {
 
     @Override
     public boolean recordImport(String id, String details) {
-        return imports.add(id);
+        return imports.putIfAbsent(id, details) == null;
+    }
+
+    @Override
+    public void updateImport(String id, String details) {
+        imports.put(id, details);
+    }
+
+    public Map<String, String> imports() {
+        return imports;
     }
 }
