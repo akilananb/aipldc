@@ -6,6 +6,7 @@ import ai.pdlc.core.platform.AgentSpec;
 import ai.pdlc.core.platform.ContentHash;
 import ai.pdlc.core.platform.OutputSchema;
 import ai.pdlc.core.platform.ToolSpec;
+import ai.pdlc.core.port.NotifyPort;
 import ai.pdlc.core.port.SecretsPort;
 import ai.pdlc.core.workflow.AgentRunActivities;
 import ai.pdlc.core.workflow.AgentRunWorkflow.AgentRunOutcome;
@@ -21,9 +22,11 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -61,21 +64,23 @@ public class AgentRunActivitiesImpl implements AgentRunActivities {
     private final ModelInvoker models;
     private final ToolStore tools;
     private final ToolExecutor executor;
+    private final NotifyPort notify;
     private final Clock clock;
 
     @Autowired
     public AgentRunActivitiesImpl(RunStore runs, SecretsPort secrets, ModelInvoker models, ToolStore tools,
-                                  ToolExecutor executor) {
-        this(runs, secrets, models, tools, executor, Clock.systemUTC());
+                                  ToolExecutor executor, NotifyPort notify) {
+        this(runs, secrets, models, tools, executor, notify, Clock.systemUTC());
     }
 
     AgentRunActivitiesImpl(RunStore runs, SecretsPort secrets, ModelInvoker models, ToolStore tools,
-                           ToolExecutor executor, Clock clock) {
+                           ToolExecutor executor, NotifyPort notify, Clock clock) {
         this.runs = runs;
         this.secrets = secrets;
         this.models = models;
         this.tools = tools;
         this.executor = executor;
+        this.notify = notify;
         this.clock = clock;
     }
 
@@ -113,10 +118,17 @@ public class AgentRunActivitiesImpl implements AgentRunActivities {
 
         String prompt = PromptRenderer.render(run.contentHash(), spec.prompt(), run.inputs());
         ModelInvoker.Endpoint endpoint = new ModelInvoker.Endpoint(run.baseUrl(), apiKey, run.providerModel());
-        ModelInvoker.Reply reply = spec.toolsOrEmpty().isEmpty()
-                ? callModel(runId, run, () -> models.call(endpoint, prompt, spec.limits().maxOutputTokens(),
-                        Duration.ofSeconds(spec.limits().timeoutSeconds())))
-                : toolLoop(run, spec, endpoint, prompt);
+        ModelInvoker.Reply reply;
+        if (spec.toolsOrEmpty().isEmpty()) {
+            reply = callModel(runId, run, () -> models.call(endpoint, prompt, spec.limits().maxOutputTokens(),
+                    Duration.ofSeconds(spec.limits().timeoutSeconds())));
+        } else {
+            Segment segment = toolLoop(run, spec, endpoint, prompt);
+            if (segment.pause() != null) {
+                return segment.pause();
+            }
+            reply = segment.reply();
+        }
         String text = reply.text() == null ? "" : reply.text();
 
         String outputJson = null;
@@ -143,11 +155,23 @@ public class AgentRunActivitiesImpl implements AgentRunActivities {
         return new AgentRunOutcome(runId, "SUCCEEDED", null);
     }
 
+    /** How a tool-loop segment ended: a final reply, or a pause the workflow must wait out. */
+    private record Segment(ModelInvoker.Reply reply, AgentRunOutcome pause) {
+    }
+
+    /** Stored ASSISTANT entry: the model's turn, with its token usage (null = unreported). */
+    record StoredAssistant(String text, List<ModelInvoker.ToolCall> toolCalls, Integer promptTokens, Integer completionTokens) {
+    }
+
     /**
-     * The bounded tool-use loop. Returns the model's final text reply with token usage summed over
-     * all turns ({@code null} if any turn's usage was unreported).
+     * The bounded, resumable tool-use loop (slices 2.1/2.2). The conversation is stored as it
+     * grows - the model's turn before any of its calls run, each call's result as it completes - so
+     * a retry or a resume after a pause continues exactly where the last segment stopped: answered
+     * calls are not re-run and the model is not asked again. Turn and call counts, and token usage,
+     * are rebuilt from the stored conversation, so the limits hold across pauses. Only active time
+     * counts against the agent's timeout.
      */
-    private ModelInvoker.Reply toolLoop(Invocation run, AgentSpec spec, ModelInvoker.Endpoint endpoint, String prompt) {
+    private Segment toolLoop(Invocation run, AgentSpec spec, ModelInvoker.Endpoint endpoint, String prompt) {
         String runId = run.runId().toString();
         Map<String, Integer> pinned = new LinkedHashMap<>();
         List<ModelInvoker.ToolDef> definitions = new ArrayList<>();
@@ -163,40 +187,164 @@ public class AgentRunActivitiesImpl implements AgentRunActivities {
         }
 
         AgentSpec.Limits limits = spec.limits();
-        Instant deadline = clock.instant().plusSeconds(limits.timeoutSeconds());
+        Instant started = clock.instant();
+        Instant deadline = started.plusMillis(limits.timeoutSeconds() * 1000L - run.activeMs());
         int attempt = run.attempts() + 1;
-        List<ModelInvoker.Message> history = new ArrayList<>(List.of(new ModelInvoker.UserMessage(prompt)));
+        try {
+            Conversation c = Conversation.load(runs, run.runId(), prompt);
+            while (true) {
+                if (c.lastAssistant != null && !c.lastAssistant.toolCalls().isEmpty()) {
+                    for (ModelInvoker.ToolCall call : c.unansweredCalls()) {
+                        ToolExecutor.Outcome outcome = executor.execute(
+                                new ToolExecutor.Context(run.runId(), run.workspaceId(), attempt, c.turn, deadline), pinned, call);
+                        if (outcome.pause() != null) {
+                            return new Segment(null, pause(run, outcome.pause()));
+                        }
+                        c.answer(call, outcome.content());
+                    }
+                    c.closeTurn();
+                } else if (c.lastAssistant != null) {
+                    return new Segment(new ModelInvoker.Reply(c.lastAssistant.text(), c.promptTokens, c.completionTokens), null);
+                }
+                if (c.turn >= limits.modelTurns()) {
+                    throw loopLimit(run, "maxModelTurns=" + limits.modelTurns() + " reached without a final answer");
+                }
+                Duration remaining = Duration.between(clock.instant(), deadline);
+                if (remaining.isNegative() || remaining.isZero()) {
+                    throw loopLimit(run, "the run deadline of " + limits.timeoutSeconds() + "s passed");
+                }
+                ModelInvoker.Reply reply = callModel(runId, run,
+                        () -> models.chat(endpoint, c.history, definitions, limits.maxOutputTokens(), remaining));
+                c.addAssistant(reply);
+                if (c.toolCalls > limits.toolCalls()) {
+                    throw loopLimit(run, "maxToolCalls=" + limits.toolCalls() + " would be exceeded ("
+                            + (c.toolCalls - reply.toolCalls().size()) + " made, " + reply.toolCalls().size() + " more requested)");
+                }
+            }
+        } finally {
+            runs.addActiveMs(run.runId(), Duration.between(started, clock.instant()).toMillis());
+        }
+    }
+
+    private AgentRunOutcome pause(Invocation run, ToolExecutor.Pause pause) {
+        String runId = run.runId().toString();
+        if (!runs.pause(run.runId(), pause.kind())) {
+            return new AgentRunOutcome(runId, runs.load(run.runId()).map(Invocation::status).orElse("UNKNOWN"), null);
+        }
+        log.info("Run {} paused: {} {}", runId, pause.kind(), pause.id());
+        return ToolExecutor.AWAITING_APPROVAL.equals(pause.kind())
+                ? AgentRunOutcome.awaitingApproval(runId, pause.id().toString(), pause.escalateAfterMinutes(),
+                        pause.expireAfterMinutes())
+                : AgentRunOutcome.needsOperator(runId, pause.id().toString());
+    }
+
+    /**
+     * The stored conversation rebuilt into model history, plus the loop's counters. Appends go to
+     * the store first; a position already taken means another attempt wrote it, which is a bug
+     * (attempts of one run never overlap), so it fails loudly.
+     */
+    static final class Conversation {
+        private final RunStore runs;
+        private final UUID runId;
+        final List<ModelInvoker.Message> history = new ArrayList<>();
+        private final List<ModelInvoker.ToolResult> openResults = new ArrayList<>();
+        StoredAssistant lastAssistant;
+        int turn;
+        int toolCalls;
         Integer promptTokens = 0;
         Integer completionTokens = 0;
-        int toolCalls = 0;
-        for (int turn = 1; ; turn++) {
-            if (turn > limits.modelTurns()) {
-                throw loopLimit(run, "maxModelTurns=" + limits.modelTurns() + " reached without a final answer");
+        private int seq;
+
+        private Conversation(RunStore runs, UUID runId) {
+            this.runs = runs;
+            this.runId = runId;
+        }
+
+        static Conversation load(RunStore runs, UUID runId, String prompt) {
+            Conversation c = new Conversation(runs, runId);
+            List<RunStore.StoredMessage> stored = runs.messages(runId);
+            if (stored.isEmpty()) {
+                c.append("USER", Map.of("text", prompt));
+                c.history.add(new ModelInvoker.UserMessage(prompt));
+                return c;
             }
-            Duration remaining = Duration.between(clock.instant(), deadline);
-            if (remaining.isNegative() || remaining.isZero()) {
-                throw loopLimit(run, "the run deadline of " + limits.timeoutSeconds() + "s passed");
+            for (RunStore.StoredMessage m : stored) {
+                c.seq = m.seq() + 1;
+                switch (m.kind()) {
+                    case "USER" -> c.history.add(new ModelInvoker.UserMessage(read(m.contentJson(), Map.class).get("text").toString()));
+                    case "ASSISTANT" -> {
+                        c.closeTurn();
+                        c.addAssistantToHistory(read(m.contentJson(), StoredAssistant.class));
+                    }
+                    case "TOOL_RESULT" -> c.openResults.add(read(m.contentJson(), ModelInvoker.ToolResult.class));
+                    default -> throw new IllegalStateException("Unknown stored message kind " + m.kind());
+                }
             }
-            ModelInvoker.Reply reply = callModel(runId, run,
-                    () -> models.chat(endpoint, history, definitions, limits.maxOutputTokens(), remaining));
-            promptTokens = sum(promptTokens, reply.promptTokens());
-            completionTokens = sum(completionTokens, reply.completionTokens());
-            if (reply.toolCalls().isEmpty()) {
-                return new ModelInvoker.Reply(reply.text(), promptTokens, completionTokens);
+            if (c.lastAssistant != null && c.unansweredCalls().isEmpty()) {
+                c.closeTurn();
             }
-            if (toolCalls + reply.toolCalls().size() > limits.toolCalls()) {
-                throw loopLimit(run, "maxToolCalls=" + limits.toolCalls() + " would be exceeded (" + toolCalls
-                        + " made, " + reply.toolCalls().size() + " more requested)");
+            return c;
+        }
+
+        void addAssistant(ModelInvoker.Reply reply) {
+            StoredAssistant a = new StoredAssistant(reply.text(), reply.toolCalls(), reply.promptTokens(), reply.completionTokens());
+            append("ASSISTANT", a);
+            addAssistantToHistory(a);
+        }
+
+        private void addAssistantToHistory(StoredAssistant a) {
+            turn++;
+            toolCalls += a.toolCalls().size();
+            promptTokens = sum(promptTokens, a.promptTokens());
+            completionTokens = sum(completionTokens, a.completionTokens());
+            lastAssistant = a;
+            if (!a.toolCalls().isEmpty()) {
+                history.add(new ModelInvoker.AssistantMessage(a.text(), a.toolCalls()));
             }
-            history.add(new ModelInvoker.AssistantMessage(reply.text(), reply.toolCalls()));
-            List<ModelInvoker.ToolResult> results = new ArrayList<>();
-            for (ModelInvoker.ToolCall call : reply.toolCalls()) {
-                toolCalls++;
-                ToolExecutor.Outcome outcome = executor.execute(
-                        new ToolExecutor.Context(run.runId(), run.workspaceId(), attempt, turn, deadline), pinned, call);
-                results.add(new ModelInvoker.ToolResult(call.id(), call.name(), outcome.content()));
+        }
+
+        List<ModelInvoker.ToolCall> unansweredCalls() {
+            Set<String> answered = new HashSet<>();
+            openResults.forEach(r -> answered.add(r.callId()));
+            return lastAssistant.toolCalls().stream().filter(call -> !answered.contains(call.id())).toList();
+        }
+
+        void answer(ModelInvoker.ToolCall call, String content) {
+            ModelInvoker.ToolResult result = new ModelInvoker.ToolResult(call.id(), call.name(), content);
+            append("TOOL_RESULT", result);
+            openResults.add(result);
+        }
+
+        /** The last assistant turn's results, once complete, become one tool-results message. */
+        void closeTurn() {
+            if (!openResults.isEmpty()) {
+                history.add(new ModelInvoker.ToolResults(List.copyOf(openResults)));
+                openResults.clear();
             }
-            history.add(new ModelInvoker.ToolResults(results));
+            if (lastAssistant != null && !lastAssistant.toolCalls().isEmpty()) {
+                lastAssistant = null;
+            }
+        }
+
+        private void append(String kind, Object content) {
+            String json;
+            try {
+                json = JSON.writeValueAsString(content);
+            } catch (Exception e) {
+                throw new IllegalStateException("Conversation entry is not serializable", e);
+            }
+            if (!runs.appendMessage(runId, seq, kind, json)) {
+                throw new IllegalStateException("Conversation position " + seq + " of run " + runId + " was already written");
+            }
+            seq++;
+        }
+
+        private static <T> T read(String json, Class<T> type) {
+            try {
+                return JSON.readValue(json, type);
+            } catch (Exception e) {
+                throw new IllegalStateException("Stored conversation entry is not valid " + type.getSimpleName(), e);
+            }
         }
     }
 
@@ -228,6 +376,24 @@ public class AgentRunActivitiesImpl implements AgentRunActivities {
     @Override
     public void markCancelled(String runId) {
         runs.cancel(UUID.fromString(runId));
+    }
+
+    @Override
+    public String escalateApproval(String approvalId) {
+        String status = runs.escalateApproval(UUID.fromString(approvalId));
+        if ("PENDING".equals(status)) {
+            try {
+                notify.post("platform-approvals", "Approval " + approvalId + " has waited past its escalation time");
+            } catch (RuntimeException e) {
+                log.warn("Escalation notice for approval {} failed: {}", approvalId, e.toString());
+            }
+        }
+        return status;
+    }
+
+    @Override
+    public String expireApproval(String approvalId) {
+        return runs.expireApproval(UUID.fromString(approvalId));
     }
 
     private String unavailable(Invocation run) {

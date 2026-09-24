@@ -47,7 +47,9 @@ class ToolLoopTest {
         offered.add(defs);
         return script.removeFirst();
     };
-    private final AgentRunActivitiesImpl runner = new AgentRunActivitiesImpl(runs, ref -> "sk-test", model, tools, executor);
+    private final StoredConversation stored = StoredConversation.attach(runs);
+    private final AgentRunActivitiesImpl runner = new AgentRunActivitiesImpl(runs, ref -> "sk-test", model, tools, executor,
+            mock(ai.pdlc.core.port.NotifyPort.class));
 
     private static AgentSpec agent(Integer maxTurns, Integer maxCalls) {
         return new AgentSpec("orders", "native", "Where is order {{input}}?",
@@ -59,8 +61,9 @@ class ToolLoopTest {
         when(runs.load(RUN)).thenReturn(Optional.of(new Invocation(RUN, "engineering", "QUEUED", "order-bot", 1,
                 ContentHash.ofAgent("Order bot", spec), "Order bot", ContentHash.canonicalJson(spec), Map.of("input", "42"),
                 "sonnet", "anthropic/claude-sonnet-4", true, "gw", "ACTIVE", null, "API_KEY", "kv://llm-key",
-                "https://gateway.example/v1", 2)));
+                "https://gateway.example/v1", 2, 0)));
         when(runs.markRunning(RUN)).thenReturn(true);
+        when(runs.pause(eq(RUN), any())).thenReturn(true);
         when(runs.complete(eq(RUN), any(), any(), any(), any())).thenReturn(true);
         when(tools.load("engineering", "get-order", 1)).thenReturn(Optional.of(new ToolStore.PinnedTool("engineering",
                 "get-order", 1, "Get order", ContentHash.canonicalJson(GET_ORDER), ContentHash.ofTool("Get order", GET_ORDER),
@@ -147,5 +150,81 @@ class ToolLoopTest {
 
         assertThatThrownBy(() -> runner.invoke(RUN.toString())).hasMessageContaining("Pinned tool get-order v1 does not exist");
         assertThat(histories).isEmpty();
+    }
+
+    private static final UUID APPROVAL = UUID.fromString("00000000-0000-0000-0000-0000000000a1");
+
+    @Test
+    void aWriteAwaitingApprovalPausesTheRunAndTheResumeContinuesWithoutAskingTheModelAgain() {
+        given(agent(null, null));
+        script.add(new ModelInvoker.Reply(null, 10, 1, List.of(
+                new ModelInvoker.ToolCall("r1", "get-order", "{\"orderId\":\"42\"}"),
+                new ModelInvoker.ToolCall("w1", "get-order", "{\"orderId\":\"43\"}"))));
+        when(executor.execute(any(), any(), any()))
+                .thenReturn(new ToolExecutor.Outcome(true, "{\"status\":200}"))
+                .thenReturn(new ToolExecutor.Outcome(false, null, new ToolExecutor.Pause("AWAITING_APPROVAL", APPROVAL, 60, 1440)));
+
+        var paused = runner.invoke(RUN.toString());
+
+        assertThat(paused.status()).isEqualTo("AWAITING_APPROVAL");
+        assertThat(paused.approvalId()).isEqualTo(APPROVAL.toString());
+        assertThat(paused.escalateAfterMinutes()).isEqualTo(60);
+        verify(runs).pause(RUN, "AWAITING_APPROVAL");
+        verify(runs, never()).complete(any(), any(), any(), any(), any());
+        assertThat(stored.kinds()).containsExactly("USER", "ASSISTANT", "TOOL_RESULT");
+
+        // Approved: the next segment runs only the unanswered call, then asks the model once more.
+        org.mockito.Mockito.reset(executor);
+        when(executor.execute(any(), any(), any())).thenReturn(new ToolExecutor.Outcome(true, "{\"status\":201}"));
+        script.add(new ModelInvoker.Reply("Done.", 20, 2));
+
+        var outcome = runner.invoke(RUN.toString());
+
+        assertThat(outcome.status()).isEqualTo("SUCCEEDED");
+        ArgumentCaptor<ModelInvoker.ToolCall> resumed = ArgumentCaptor.forClass(ModelInvoker.ToolCall.class);
+        verify(executor).execute(any(), any(), resumed.capture());
+        assertThat(resumed.getValue().id()).isEqualTo("w1");
+        assertThat(histories).hasSize(2);
+        assertThat(histories.get(1).get(2)).isEqualTo(new ModelInvoker.ToolResults(List.of(
+                new ModelInvoker.ToolResult("r1", "get-order", "{\"status\":200}"),
+                new ModelInvoker.ToolResult("w1", "get-order", "{\"status\":201}"))));
+        verify(runs).complete(RUN, "Done.", null, 30, 3);
+        assertThat(stored.kinds()).containsExactly("USER", "ASSISTANT", "TOOL_RESULT", "TOOL_RESULT", "ASSISTANT");
+    }
+
+    @Test
+    void anUnknownWriteOutcomePausesForTheOperator() {
+        given(agent(null, null));
+        script.add(callsTool("w1", 1));
+        UUID effect = UUID.fromString("00000000-0000-0000-0000-0000000000e1");
+        when(executor.execute(any(), any(), any()))
+                .thenReturn(new ToolExecutor.Outcome(false, null, new ToolExecutor.Pause("NEEDS_OPERATOR", effect, 0, 0)));
+
+        var paused = runner.invoke(RUN.toString());
+
+        assertThat(paused.status()).isEqualTo("NEEDS_OPERATOR");
+        assertThat(paused.effectId()).isEqualTo(effect.toString());
+        verify(runs).pause(RUN, "NEEDS_OPERATOR");
+    }
+
+    @Test
+    void aSegmentThatCrashedAfterTheFinalAnswerFinishesFromTheStoredReply() {
+        given(agent(null, null));
+        script.add(new ModelInvoker.Reply("Stored answer.", 4, 2));
+        when(runs.complete(eq(RUN), any(), any(), any(), any())).thenThrow(new RuntimeException("db down")).thenReturn(true);
+
+        assertThatThrownBy(() -> runner.invoke(RUN.toString())).hasMessageContaining("db down");
+        assertThat(runner.invoke(RUN.toString()).status()).isEqualTo("SUCCEEDED");
+        assertThat(histories).hasSize(1);
+    }
+
+    @Test
+    void activeTimeIsRecordedPerSegment() {
+        given(agent(null, null));
+        script.add(new ModelInvoker.Reply("ok", 1, 1));
+
+        runner.invoke(RUN.toString());
+
+        verify(runs).addActiveMs(eq(RUN), org.mockito.ArgumentMatchers.anyLong());
     }
 }

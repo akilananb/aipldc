@@ -29,6 +29,16 @@ public class ToolStore {
                              Long durationMs, Long responseBytes, boolean truncated, String error) {
     }
 
+    /** A requested WRITE call's approval (slice 2.2), bound to the tool version and args hash. */
+    public record Approval(UUID id, String toolId, int toolVersion, String argsHash, String status, String decidedBy,
+                           String reason) {
+    }
+
+    /** The recorded intent and outcome of one write, keyed by {@code run:turn:callId}. */
+    public record Effect(UUID id, String idempotencyKey, String state, int sendCount, Integer httpStatus,
+                         String resultContent, String resolution, String resolvedBy, String note) {
+    }
+
     private final JdbcTemplate jdbc;
 
     public ToolStore(JdbcTemplate jdbc) {
@@ -60,5 +70,56 @@ public class ToolStore {
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 r.runId(), r.attempt(), r.turn(), r.callId(), r.toolId(), r.toolVersion(), r.argsJson(), r.argsHash(),
                 r.decision(), r.reason(), r.httpStatus(), r.durationMs(), r.responseBytes(), r.truncated(), r.error());
+    }
+
+    public Optional<Approval> approval(UUID runId, int turn, String callId) {
+        return jdbc.query("""
+                SELECT id, tool_id, tool_version, args_hash, status, decided_by, reason FROM platform_approvals
+                WHERE run_id = ? AND turn = ? AND call_id = ?""", (rs, n) -> new Approval(rs.getObject("id", UUID.class),
+                rs.getString("tool_id"), rs.getInt("tool_version"), rs.getString("args_hash"), rs.getString("status"),
+                rs.getString("decided_by"), rs.getString("reason")), runId, turn, callId).stream().findFirst();
+    }
+
+    /** Creates the PENDING approval for a call (idempotent per run/turn/call) and returns it. */
+    public Approval requestApproval(UUID runId, String workspaceId, int turn, String callId, String toolId, int toolVersion,
+                                    String argsJson, String argsHash) {
+        jdbc.update("""
+                INSERT INTO platform_approvals (id, run_id, workspace_id, turn, call_id, tool_id, tool_version, args_json, args_hash)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (run_id, turn, call_id) DO NOTHING""",
+                UUID.randomUUID(), runId, workspaceId, turn, callId, toolId, toolVersion, argsJson, argsHash);
+        return approval(runId, turn, callId).orElseThrow();
+    }
+
+    public Optional<Effect> effect(String idempotencyKey) {
+        return jdbc.query("SELECT * FROM platform_effects WHERE idempotency_key = ?", (rs, n) -> new Effect(
+                rs.getObject("id", UUID.class), rs.getString("idempotency_key"), rs.getString("state"), rs.getInt("send_count"),
+                (Integer) rs.getObject("http_status"), rs.getString("result_content"), rs.getString("resolution"),
+                rs.getString("resolved_by"), rs.getString("note")), idempotencyKey).stream().findFirst();
+    }
+
+    /** Records the intent to write before anything is sent (idempotent per key) and returns the row. */
+    public Effect intend(UUID runId, UUID approvalId, String toolId, int toolVersion, String argsHash, String idempotencyKey) {
+        jdbc.update("""
+                INSERT INTO platform_effects (id, run_id, approval_id, tool_id, tool_version, args_hash, idempotency_key, state)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'INTENDED') ON CONFLICT (idempotency_key) DO NOTHING""",
+                UUID.randomUUID(), runId, approvalId, toolId, toolVersion, argsHash, idempotencyKey);
+        return effect(idempotencyKey).orElseThrow();
+    }
+
+    /** Marked before the request leaves: from here on a crash means the outcome is unknown. */
+    public void markSent(UUID effectId) {
+        jdbc.update("UPDATE platform_effects SET state = 'SENT', send_count = send_count + 1, updated_at = now() WHERE id = ?",
+                effectId);
+    }
+
+    public void finish(UUID effectId, String state, Integer httpStatus, String resultContent) {
+        jdbc.update("""
+                UPDATE platform_effects SET state = ?, http_status = ?, result_content = ?, updated_at = now()
+                WHERE id = ?""", state, httpStatus, resultContent, effectId);
+    }
+
+    public void markUnknown(UUID effectId) {
+        jdbc.update("UPDATE platform_effects SET state = 'UNKNOWN', updated_at = now() WHERE id = ? AND state = 'SENT'",
+                effectId);
     }
 }

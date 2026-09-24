@@ -81,6 +81,11 @@ class AgentSpringWiringTest {
         }
 
         @Bean
+        ai.pdlc.core.port.NotifyPort notifyPort() {
+            return mock(ai.pdlc.core.port.NotifyPort.class);
+        }
+
+        @Bean
         SecretsPort secretsPort() {
             return mock(SecretsPort.class);
         }
