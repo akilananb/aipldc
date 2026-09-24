@@ -2,8 +2,8 @@
 
 This spec turns Phase 1 of [configurable-agent-platform.md](configurable-agent-platform.md) into
 slices that can be built one at a time. Each slice ships something usable end to end and has its
-own exit evidence. **Slice 1 is implemented on this branch**; slices 2–6 are specified here and are
-not yet built.
+own exit evidence. **Slices 1 and 2 are implemented**; slices 3–6 are specified here and are not
+yet built.
 
 **Phase 1 exit evidence** (from the roadmap):
 
@@ -21,6 +21,7 @@ not yet built.
 | Discovery | A non-member gets **404** for a workspace and for everything in it, the same response as for a missing workspace. A member without the needed capability gets **403**. |
 | Storage | Spring JDBC (`JdbcTemplate`) stores behind small interfaces, following `ProjectService`. Composite keys make Spring Data JDBC entities awkward here. JSON is stored as `TEXT`, as elsewhere in the schema. |
 | Content identity | `sha256:` over canonical JSON (properties and map keys sorted), computed in `core` so the agents runtime can re-verify it. |
+| Module boundaries | The slices follow the modular-monolith rules in [Scalability and service boundaries](configurable-agent-platform.md#scalability-and-service-boundaries). Slice 1 lives under `platform/`; slice 2's login and service identities stay in the `identity/` module. Other modules depend only on `IdentityResolver` and `WorkspaceService`, never on security internals. |
 | JSON libraries | HTTP DTOs bind with Spring Boot 4's Jackson 3. Stored/hashed content uses Jackson 2 in `core` (same split as `PdlcConfigBeans`). DTOs therefore use typed records and `Map<String,Object>`, never Jackson 2 `JsonNode`. |
 
 ## Slice 1 — Workspaces and a versioned agent registry (implemented)
@@ -87,15 +88,63 @@ not yet built.
 
 **Deliberately not in slice 1:** OIDC, connections, a DB-backed model catalog, runs, UI, and skills. Draft `spec` accepts only the fields above, so tools and knowledge can't be smuggled in before their governance exists.
 
-## Slice 2 — Enterprise sessions and service identities
+## Slice 2 — Enterprise sessions and service identities (implemented)
 
-- **Browser login:** add `spring-boot-starter-security` + `oauth2-client`, with an OIDC login using a backend-managed session, HttpOnly/SameSite cookies and CSRF tokens for mutating requests. Identity = issuer + subject; display name and email come from claims.
-- **One resolution point:** `IdentityResolver` stays the only place identity is resolved, so controllers don't change. It reads the Spring Security principal.
-- **Header shim:** honoured only when `pdlc.identity.dev-headers=true`, which is off by default. Setting it outside the `local` profile logs a startup warning.
-- **Service identities:** build-worker and agents authenticate with client-credentials JWTs (or the existing `BUILD_AGENT_TOKEN`, as a dev fallback only). Service identities can never create a browser session.
-- **UI:** the existing `setIdentity` dev switch is shown only when the backend reports dev-headers mode. Otherwise the user logs in and out through the backend.
-- **e2e scripts:** migrate them to a token-based test identity. Never keep a header bypass in production.
-- **Exit:** with dev headers off, a request carrying only `X-User` is 401. An OIDC-authenticated user sees only their workspaces. A service token can't reach workspace admin endpoints.
+**Modes.** Each is switched on by configuration only; they can be combined.
+
+| Mode | Enabled by | Who uses it |
+|---|---|---|
+| Enterprise OIDC login | Spring's `spring.security.oauth2.client.registration.pdlc.*` / `provider.pdlc.issuer-uri` | People, through the UI. Server-side session, HttpOnly SameSite=Lax cookie, SPA CSRF (`XSRF-TOKEN` cookie echoed as `X-XSRF-TOKEN`). |
+| Service JWTs | `spring.security.oauth2.resourceserver.jwt.issuer-uri` (or `jwk-set-uri`) | build-worker and agents, via client-credentials tokens with scope `pdlc.build`, `pdlc.board.read` or `pdlc.webhook`. |
+| Shared tokens | `BUILD_AGENT_TOKEN` (`X-Agent-Token`), `PDLC_SERVICE_TOKEN` (`X-Service-Token`), `PDLC_WEBHOOK_TOKEN` (`X-Webhook-Token`) | Fallbacks and board webhooks. Compared in constant time; each grants exactly one scope. |
+| Dev headers | `PDLC_IDENTITY_DEV_HEADERS=true` (**off by default**; set in `infra/k8s/control-plane.yaml` for the local stack) | Local stack, e2e scripts, demo. A WARN is logged if enabled on any profile other than `local`. |
+
+**Authorization in the security chain (`identity/SecurityConfig`).**
+
+- **`/api/**` requires a human user** (`ROLE_USER`). Only an OIDC login whose groups map to a PDLC role, or a dev-header user, has that authority.
+  - A service credential on a user endpoint gets 403.
+  - A user whose groups don't map gets 403, and `/api/me` explains why.
+- **Service paths:**
+  - `/api/build-tasks/**` requires `pdlc.build`.
+  - `/api/board/**` requires `pdlc.board.read`, or a user.
+  - `/webhooks/**` requires `pdlc.webhook` once `PDLC_WEBHOOK_TOKEN` is set. Startup warns when it isn't set outside dev mode.
+- **Unauthenticated API calls get a JSON 401**, never a redirect. `GET /api/me` is always reachable and reports `mode`, the caller and `loginUrl`.
+- **Dev-headers mode keeps the pre-slice-2 behaviour exactly:**
+  - reads are open;
+  - mutations still need `X-User`/`X-Role` through `IdentityResolver`;
+  - build-tasks, board and webhooks stay open until their tokens are set;
+  - there is no CSRF, because no cookie login exists unless OIDC is also configured.
+
+**Identity mapping (`pdlc.identity.*`).**
+
+- `user-claim` (default `email`; falls back to `sub`) becomes `Identity.user`. Workspace memberships are keyed on this value, so choose a claim that is stable and never reassigned in your IdP.
+- `role-claim` (default `groups`) is read together with `role-mapping.<group>: <PO|SquadLead|FSDeveloper|QA|Admin>`. When several groups map, the highest wins: Admin > SquadLead > PO > QA > FSDeveloper.
+
+**Callers.**
+
+- **build-worker:** `PDLC_OAUTH_TOKEN_URL`/`_CLIENT_ID`/`_CLIENT_SECRET`/`_SCOPE` fetch and cache a bearer token (`src/serviceToken.ts`). `BUILD_AGENT_TOKEN` stays the fallback.
+- **agents:** `PDLC_SERVICE_OAUTH_TOKEN_URL`/`_CLIENT_ID`/`_CLIENT_SECRET`, or `PDLC_SERVICE_TOKEN`. Both feed `RemoteBoardPort` through `adapters/serviceauth`.
+- **UI:** reads `/api/me` and shows one of three things:
+  - the demo identity switcher, only in dev-headers mode;
+  - the signed-in user with Log out;
+  - a Sign in with SSO page.
+
+  All requests use `credentials: 'include'`, and unsafe ones send the CSRF header.
+
+**Exit evidence:**
+
+| Test | What it proves |
+|---|---|
+| `SecurityConfigOidcTest` (MockMvc with real OIDC client registration and a real RSA-signed JWT decoder) | With dev headers off, `X-User` alone gets 401. A mapped OIDC user reads and, with CSRF, mutates. An unmapped user gets 403. A `pdlc.build` JWT claims build tasks but gets 403 on `/api/items`, `/api/workspaces` and the board. A forged JWT gets 401. Agent and webhook tokens are enforced. CORS allows credentials only for allowed origins. Login redirects to the IdP. Logout returns 204. |
+| `SecurityConfigDevHeadersTest` | Local-stack behaviour is unchanged. |
+| `IdentityResolverTest` | Claim mapping, role precedence, and that a service can never act as a user. |
+| `ClientCredentialsTokenSourceTest`, `RemoteBoardPortTest`, `build-worker/src/serviceToken.test.ts` | Token requests, caching, failure handling, and headers on the wire. |
+
+**Follow-ups:**
+
+- The e2e scripts still use dev headers on the local stack. Move them to a test IdP identity once one is part of the Tilt stack.
+- Replicated control-plane needs Spring Session JDBC (see [Scalability and service boundaries](configurable-agent-platform.md#scalability-and-service-boundaries)).
+- IdP-initiated (RP) logout.
 
 ## Slice 3 — Model catalog and connection references
 

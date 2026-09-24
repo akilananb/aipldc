@@ -64,6 +64,21 @@ class RemoteBoardPortTest {
     }
 
     @Test
+    void sendsTheConfiguredServiceCredentials() throws IOException {
+        List<String> seen = new java.util.concurrent.CopyOnWriteArrayList<>();
+        server.createContext("/api/board/local/auth", exchange -> {
+            seen.add(exchange.getRequestHeaders().getFirst("Authorization"));
+            respond(exchange, 200, "{\"id\":\"auth\",\"state\":\"new\"}");
+        });
+        RemoteBoardPort authed = new RemoteBoardPort("http://localhost:" + server.getAddress().getPort(),
+                () -> java.util.Map.of("Authorization", "Bearer svc-token"));
+
+        authed.getItem(new WorkItemRef("local", "auth"));
+
+        assertThat(seen).containsExactly("Bearer svc-token");
+    }
+
+    @Test
     void getItemReturnsRealTitleAndDescriptionAcrossTheProcessBoundary() {
         WorkItem item = port.getItem(new WorkItemRef("local", "5100"));
 

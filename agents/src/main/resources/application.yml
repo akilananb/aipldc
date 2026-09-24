@@ -12,6 +12,15 @@ spring:
 pdlc:
   config-path: ${PDLC_CONFIG_PATH:infra/pdlc.yaml}
   active-profile: ${PDLC_ACTIVE_PROFILE:local}
+  # How this process authenticates to control-plane's /api/board/** (docs/phase-1-execution-spec.md
+  # slice 2): a client-credentials JWT when token-url is set, else a static X-Service-Token, else
+  # nothing (control-plane in dev-headers mode with no service token).
+  service-auth:
+    token-url: ${PDLC_SERVICE_OAUTH_TOKEN_URL:}
+    client-id: ${PDLC_SERVICE_OAUTH_CLIENT_ID:}
+    client-secret: ${PDLC_SERVICE_OAUTH_CLIENT_SECRET:}
+    scope: ${PDLC_SERVICE_OAUTH_SCOPE:pdlc.board.read}
+    static-token: ${PDLC_SERVICE_TOKEN:}
 
 temporal:
   target: ${TEMPORAL_TARGET:127.0.0.1:7233}

@@ -1,4 +1,4 @@
-import { getIdentity } from './identity';
+import { getIdentity, sendsDevHeaders, type AuthState } from './identity';
 import type { AgentRun, AgentsStatus, ArtifactVersion, BoardComment, Comment, CommentIntent, DemoStatus, GrillQuestions, ItemDetail, ItemSummary, Project, ProjectRequest, QualityReport, ReleaseDocument, ScenarioReview, SpecDocs } from './types';
 
 export const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8081';
@@ -27,13 +27,31 @@ export function errorMessage(e: unknown): string {
   return e instanceof ApiError ? e.friendly : String(e);
 }
 
-function authHeaders(): Record<string, string> {
-  const id = getIdentity();
-  return { 'X-User': id.user, 'X-Role': id.role };
+const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+
+function readCookie(name: string): string | undefined {
+  const match = document.cookie.split('; ').find((c) => c.startsWith(`${name}=`));
+  return match ? decodeURIComponent(match.slice(name.length + 1)) : undefined;
+}
+
+/** Dev headers in dev-headers mode; the CSRF token (issued by GET /api/me as the XSRF-TOKEN cookie)
+ * on every unsafe request, which the backend requires for cookie-session callers. */
+function authHeaders(method = 'GET'): Record<string, string> {
+  const headers: Record<string, string> = {};
+  if (sendsDevHeaders()) {
+    const id = getIdentity();
+    headers['X-User'] = id.user;
+    headers['X-Role'] = id.role;
+  }
+  const csrf = readCookie('XSRF-TOKEN');
+  if (csrf && !SAFE_METHODS.has(method.toUpperCase())) {
+    headers['X-XSRF-TOKEN'] = csrf;
+  }
+  return headers;
 }
 
 async function requestText(path: string): Promise<string> {
-  const res = await fetch(`${BASE_URL}${path}`, { headers: authHeaders() });
+  const res = await fetch(`${BASE_URL}${path}`, { headers: authHeaders(), credentials: 'include' });
   if (!res.ok) {
     throw new ApiError(res.status, await res.text().catch(() => ''));
   }
@@ -43,8 +61,9 @@ async function requestText(path: string): Promise<string> {
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE_URL}${path}`, {
     ...init,
+    credentials: 'include',
     headers: {
-      ...authHeaders(),
+      ...authHeaders(init?.method),
       ...(init?.body != null ? { 'Content-Type': 'application/json' } : {}),
       ...(init?.headers ?? {}),
     },
@@ -64,6 +83,12 @@ export interface AddCommentBody {
 }
 
 export const api = {
+  me(): Promise<AuthState> {
+    return request<AuthState>('/api/me');
+  },
+  logout(): Promise<void> {
+    return request<void>('/logout', { method: 'POST' });
+  },
   listItems(): Promise<ItemSummary[]> {
     return request<ItemSummary[]>('/api/items');
   },
