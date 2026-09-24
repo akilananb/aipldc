@@ -27,6 +27,17 @@ pdlc:
   egress:
     allowed-private-hosts: ${PDLC_EGRESS_ALLOWED_PRIVATE_HOSTS:}
 
+  # Phase 2 slice 2.4: sandbox tools (see ai.pdlc.agents.config.SandboxConfig). provider none =
+  # every sandbox tool call is refused; docker = local dev under runtime runsc (gVisor);
+  # kubernetes = a Job per call under runtimeClassName <runtime> (infra/k8s/sandbox.yaml).
+  sandbox:
+    provider: ${PDLC_SANDBOX_PROVIDER:none}
+    runtime: ${PDLC_SANDBOX_RUNTIME:}
+    proxy:
+      bind-host: ${PDLC_SANDBOX_PROXY_BIND_HOST:0.0.0.0}
+      port: ${PDLC_SANDBOX_PROXY_PORT:3128}
+      advertised-host: ${PDLC_SANDBOX_PROXY_ADVERTISED_HOST:}
+
 temporal:
   target: ${TEMPORAL_TARGET:127.0.0.1:7233}
   namespace: ${TEMPORAL_NAMESPACE:default}

@@ -2,12 +2,12 @@ import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Plug, Plus } from 'lucide-react';
-import { Box, Button, Callout, Dialog, Flex, Skeleton, Table, Text, TextField } from '@radix-ui/themes';
+import { Box, Button, Callout, Dialog, Flex, SegmentedControl, Select, Skeleton, Table, Text, TextField } from '@radix-ui/themes';
 import { errorMessage, studio } from '../api';
 import EmptyState from '../components/EmptyState';
 import ErrorCallout from '../components/ErrorCallout';
 import RelativeTime from '../components/RelativeTime';
-import type { ToolSpec, Workspace } from '../types';
+import type { SandboxImage, ToolSpec, Workspace } from '../types';
 import { can, statusVariant } from './workspace';
 import McpDiscoveryPanel from './McpDiscoveryPanel';
 
@@ -22,6 +22,30 @@ const STARTER_TOOL: ToolSpec = {
   timeoutSeconds: 10,
   maxResponseBytes: 65536,
 };
+
+/** A sandbox tool starts as exactly what the enterprise approved: the image's digest, schema and time limit. */
+function sandboxStarter(image: SandboxImage): ToolSpec {
+  return {
+    description: image.description,
+    kind: 'sandbox',
+    connectionId: null,
+    method: null,
+    path: null,
+    inputSchema: image.inputSchema,
+    effect: 'READ',
+    timeoutSeconds: image.timeoutSeconds,
+    maxResponseBytes: 65536,
+    sandboxImage: image.id,
+    sandboxImageRef: image.imageRef,
+  };
+}
+
+/** What the tools table shows as a tool's operation. */
+export function operationLabel(spec: ToolSpec | null): string {
+  if (spec?.kind === 'mcp') return `MCP ${spec.connectionId} · ${spec.mcpTool}`;
+  if (spec?.kind === 'sandbox') return `SANDBOX ${spec.sandboxImage}`;
+  return `${spec?.method} ${spec?.connectionId}${spec?.path}`;
+}
 
 /**
  * A workspace's governed API tools (docs/phase-2-execution-spec.md slice 2.1) and the HTTP_API
@@ -91,11 +115,7 @@ export default function ToolsSection({ workspace }: { workspace: Workspace }) {
                     </Text>
                   </Table.RowHeaderCell>
                   <Table.Cell>
-                    <code style={{ fontSize: 12 }}>
-                      {t.draftSpec?.kind === 'mcp'
-                        ? `MCP ${t.draftSpec.connectionId} · ${t.draftSpec.mcpTool}`
-                        : `${t.draftSpec?.method} ${t.draftSpec?.connectionId}${t.draftSpec?.path}`}
-                    </code>
+                    <code style={{ fontSize: 12 }}>{operationLabel(t.draftSpec)}</code>
                   </Table.Cell>
                   <Table.Cell>
                     <span className={`pill ${t.draftSpec?.effect === 'WRITE' ? 'review' : 'info'}`}>{t.draftSpec?.effect ?? '—'}</span>
@@ -121,10 +141,16 @@ function NewToolDialog({ workspaceId }: { workspaceId: string }) {
   const [open, setOpen] = useState(false);
   const [id, setId] = useState('');
   const [name, setName] = useState('');
+  const [kind, setKind] = useState<'http' | 'sandbox'>('http');
+  const [imageId, setImageId] = useState('');
   const queryClient = useQueryClient();
   const navigate = useNavigate();
+  const imagesQuery = useQuery({ queryKey: ['platform', 'sandbox-images'], queryFn: studio.sandboxImages, enabled: open });
+  const images = (imagesQuery.data ?? []).filter((i) => i.status === 'ACTIVE');
+  const image = images.find((i) => i.id === imageId);
   const create = useMutation({
-    mutationFn: () => studio.createTool(workspaceId, { id, name, spec: STARTER_TOOL }),
+    mutationFn: () =>
+      studio.createTool(workspaceId, { id, name, spec: kind === 'sandbox' && image ? sandboxStarter(image) : STARTER_TOOL }),
     onSuccess: (t) => {
       void queryClient.invalidateQueries({ queryKey: ['studio', workspaceId, 'tools'] });
       setOpen(false);
@@ -150,13 +176,49 @@ function NewToolDialog({ workspaceId }: { workspaceId: string }) {
           }}
         >
           <Flex direction="column" gap="3">
+            <Box>
+              <Text size="1" color="gray" as="div" mb="1">
+                Runs as
+              </Text>
+              <SegmentedControl.Root value={kind} onValueChange={(v) => setKind(v as 'http' | 'sandbox')} style={{ width: '100%' }}>
+                <SegmentedControl.Item value="http">HTTP API call</SegmentedControl.Item>
+                <SegmentedControl.Item value="sandbox">Sandbox image</SegmentedControl.Item>
+              </SegmentedControl.Root>
+            </Box>
+            {kind === 'sandbox' && (
+              <Box>
+                <Text size="1" color="gray" as="div" mb="1">
+                  Enterprise-approved image (isolated container; network only to its approved hosts)
+                </Text>
+                {imagesQuery.isError ? (
+                  <Text size="1" color="red">
+                    {errorMessage(imagesQuery.error)}
+                  </Text>
+                ) : images.length === 0 && !imagesQuery.isLoading ? (
+                  <Text size="1" color="gray">
+                    No approved images yet - an enterprise Admin adds them to the sandbox catalog.
+                  </Text>
+                ) : (
+                  <Select.Root value={imageId || undefined} onValueChange={setImageId}>
+                    <Select.Trigger aria-label="Sandbox image" placeholder="Choose an image" style={{ width: '100%' }} />
+                    <Select.Content>
+                      {images.map((i) => (
+                        <Select.Item key={i.id} value={i.id}>
+                          {i.id} — {i.description}
+                        </Select.Item>
+                      ))}
+                    </Select.Content>
+                  </Select.Root>
+                )}
+              </Box>
+            )}
             <label>
               <Text size="1" color="gray">Id (the name the model calls it by: lowercase letters, digits, dashes)</Text>
-              <TextField.Root value={id} onChange={(e) => setId(e.target.value)} placeholder="get-order" required />
+              <TextField.Root value={id} onChange={(e) => setId(e.target.value)} placeholder={kind === 'sandbox' ? 'order-report' : 'get-order'} required />
             </label>
             <label>
               <Text size="1" color="gray">Name</Text>
-              <TextField.Root value={name} onChange={(e) => setName(e.target.value)} placeholder="Get order" required />
+              <TextField.Root value={name} onChange={(e) => setName(e.target.value)} placeholder={kind === 'sandbox' ? 'Order report' : 'Get order'} required />
             </label>
             {create.isError && (
               <Callout.Root color="red">
@@ -169,7 +231,7 @@ function NewToolDialog({ workspaceId }: { workspaceId: string }) {
                   Cancel
                 </Button>
               </Dialog.Close>
-              <Button type="submit" loading={create.isPending}>
+              <Button type="submit" loading={create.isPending} disabled={kind === 'sandbox' && !image}>
                 Create draft
               </Button>
             </Flex>

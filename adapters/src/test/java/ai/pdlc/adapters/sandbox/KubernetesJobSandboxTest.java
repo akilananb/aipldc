@@ -33,6 +33,7 @@ class KubernetesJobSandboxTest {
     private final Map<String, JsonNode> bodies = new ConcurrentHashMap<>();
     private volatile String jobStatus = "{\"succeeded\":1}";
     private volatile String log = "{\"ok\":true}";
+    private volatile String podStatus = null;
     private HttpServer server;
     private KubernetesApi api;
 
@@ -52,8 +53,9 @@ class KubernetesJobSandboxTest {
             if (method.equals("GET") && path.contains("/jobs/")) {
                 body = "{\"status\":" + jobStatus + "}";
             } else if (method.equals("GET") && path.contains("/pods?")) {
-                body = "{\"items\":[{\"metadata\":{\"name\":\"pod-1\"},\"status\":{\"containerStatuses\":[{\"state\":{\"terminated\":{\"exitCode\":"
-                        + (jobStatus.contains("succeeded") ? 0 : 3) + "}}}]}}]}";
+                body = "{\"items\":[{\"metadata\":{\"name\":\"pod-1\"},\"status\":" + (podStatus != null ? podStatus
+                        : "{\"containerStatuses\":[{\"state\":{\"terminated\":{\"exitCode\":" + (jobStatus.contains("succeeded") ? 0 : 3) + "}}}]}")
+                        + "}]}";
             } else if (method.equals("GET") && path.contains("/log?")) {
                 body = log;
             } else if (method.equals("GET") && path.contains("networkpolicies/")) {
@@ -157,6 +159,26 @@ class KubernetesJobSandboxTest {
         assertThat(result.timedOut()).isTrue();
         assertThat(requests).anyMatch(r -> r.startsWith("DELETE /apis/batch/v1/namespaces/pdlc-sandbox/jobs/pdlc-sbx-")
                 && r.contains("propagationPolicy=Foreground"));
+    }
+
+    @Test
+    void theJobsOwnDeadlineIsATimeoutNotAPackageFailure() {
+        jobStatus = "{\"failed\":1,\"conditions\":[{\"type\":\"Failed\",\"status\":\"True\",\"reason\":\"DeadlineExceeded\"}]}";
+
+        SandboxPort.Result result = sandbox("gvisor").run(request(Duration.ofSeconds(5)));
+
+        assertThat(result.timedOut()).isTrue();
+        assertThat(requests).noneMatch(r -> r.contains("/log?"));
+    }
+
+    @Test
+    void aPodThatNeverRanTheImageIsAnInfrastructureError() {
+        jobStatus = "{\"failed\":1}";
+        podStatus = "{}";
+
+        SandboxPort.Result result = sandbox("gvisor").run(request(Duration.ofSeconds(5)));
+
+        assertThat(result.error()).isEqualTo("the sandbox pod never ran the package");
     }
 
     @Test

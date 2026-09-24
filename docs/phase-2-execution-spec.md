@@ -1,6 +1,6 @@
 # Phase 2 execution spec: governed execution and federation
 
-This spec turns Phase 2 of [configurable-agent-platform.md](configurable-agent-platform.md) into slices, in the same format as [phase-1-execution-spec.md](phase-1-execution-spec.md). **Slices 2.1–2.3 are implemented**; slices 2.4–2.8 are specified and not yet built.
+This spec turns Phase 2 of [configurable-agent-platform.md](configurable-agent-platform.md) into slices, in the same format as [phase-1-execution-spec.md](phase-1-execution-spec.md). **Slices 2.1–2.4 are implemented**; slices 2.5–2.8 are specified and not yet built.
 
 **Phase 2 exit evidence** (from the roadmap):
 
@@ -80,7 +80,7 @@ Every call, allowed or denied, is recorded in `platform_tool_calls`: run, attemp
 - **Credential redaction.** If a response body contains the connection's credential verbatim (an API that echoes headers, for example), the executor replaces it with `[REDACTED]` before the model sees it. Encoded forms, such as base64, are not detected.
 - **Spring AI never executes tools.** `OpenAiCompatibleModelInvoker` offers tools as definitions only, and each callback throws if called. A change in Spring AI's defaults therefore can't run a tool outside `ToolExecutor`.
 - **Path parameters.** Values are percent-encoded, including `/`. `.` and `..` are refused. Tool paths may not contain `//`, `..`, a backslash, whitespace, a query or a fragment, so a path cannot escape the connection's base URL.
-- **Known gap: DNS rebinding.** The HTTP client resolves the host again when it connects. A name whose DNS answer changes between the check and the connect is therefore not pinned to the checked addresses. Slice 2.4's egress proxy closes this gap.
+- **Known gap: DNS rebinding.** The HTTP client resolves the host again when it connects. A name whose DNS answer changes between the check and the connect is therefore not pinned to the checked addresses. Slice 2.4's egress proxy closes it for sandbox traffic only (it connects to the address it checked); `http` tools still resolve twice.
 - **Endpoint added: `GET /api/workspaces/{ws}/connections`** (members). It lists the `HTTP_API` connections granted to the workspace, without secret references, so tool authors can choose one.
 - **Configuration.** `pdlc.egress.allowed-private-hosts` (`PDLC_EGRESS_ALLOWED_PRIVATE_HOSTS`) is set on both control-plane and agents, and the two values must match.
 
@@ -221,6 +221,86 @@ Every call, allowed or denied, is recorded in `platform_tool_calls`: run, attemp
 - **Cancellation and timeout** delete the Job, including its whole process tree, and revoke the Job's short-lived credentials.
 - **Custom tools and verifiers** are enterprise-approved image references with declared input/output schemas.
 - **Exit:** a custom package can't read a host sentinel file, another workspace's artifact, or an unapproved endpoint. Terminating the Job revokes its credentials.
+
+**As built:**
+
+- **Enterprise image catalog** (`sandbox_images`, V22; `/api/platform/sandbox-images`).
+  - Only the enterprise Admin adds, re-pins or retires entries; any signed-in user can list them.
+  - An entry is a digest-pinned image (`name@sha256:<64 hex>`; tags are refused) with:
+    - a declared input schema and an optional output schema;
+    - the hosts the package may reach (`host` or `host:port`, at most 20);
+    - CPU (50–4000m), memory (32–4096 MiB) and time (1–600 s) limits.
+- **`kind: sandbox` tools.** A tool names a catalog entry (`sandboxImage`) and the exact `sandboxImageRef` it was reviewed with. It has no connection, method or path, and its idempotency is NONE.
+  - Publishing needs an active entry that still carries that ref and the same input schema, and the tool's timeout may not exceed the image's.
+  - Re-pinning or retiring an entry makes agents pinning the tool refuse to start ("…needs re-review"), and running agents are denied their next call.
+  - The Studio's "Update draft to the catalog image" button, followed by publishing a new version, is the re-review.
+- **`SandboxPort`** (core) has two adapters, both refusing every call when no isolation runtime is configured:
+  - **`KubernetesJobSandbox`** runs one Job per call under `runtimeClassName`. The pod:
+    - runs as non-root (65534) with `RuntimeDefault` seccomp, a read-only root filesystem, no privilege escalation and all capabilities dropped;
+    - has no service-account token, no service links and no host namespaces;
+    - has CPU and memory requests equal to its limits, `activeDeadlineSeconds`, and no retries;
+    - gets only two volumes, size-capped `emptyDir`s for `/workspace` and `/tmp`.
+    
+    Input and the proxy credential go in a per-call Secret, never in the Job spec. Timeout, completion and `terminateRun` delete the Job with `propagationPolicy=Foreground` (and its Secret). `ensureNetworkPolicy` installs `pdlc-sandbox-egress`: no ingress, and egress only to the agents pods' proxy port and cluster DNS. `infra/k8s/sandbox.yaml` has the namespace (Pod Security `restricted`), the `gvisor` RuntimeClass, an `agents-sandbox` service account limited to that namespace, and the proxy Service.
+  - **`DockerSandbox`** (local development) applies the same rules with `docker run --runtime runsc`:
+    - `--read-only`, `--user 65534`, `--cap-drop ALL`, `no-new-privileges`;
+    - CPU, memory and pids limits;
+    - tmpfs `/workspace` and `/tmp`, and no mounts;
+    - input only through an owner-only env file.
+    
+    It runs on an `--internal` network whose only way out is a socat relay to the egress proxy. Docker's embedded DNS does not work under gVisor, so the relay's address is pinned with `--add-host` and the container gets no resolver: packages resolve nothing themselves.
+- **Egress proxy** (`SandboxEgressProxy`, in the agents worker). It is the only route out: absolute-form HTTP and `CONNECT`.
+  - Each call gets a random credential in its proxy URL, scoped to the image's hosts and expiring with the call's timeout. The credential is revoked when the call returns, however it ends, and every credential of a run is revoked when the run is cancelled.
+  - The proxy checks, in order: the credential (407), then the approved host (403), then `EgressPolicy`. It connects to the address it checked, which closes the DNS-rebinding gap noted in 2.1.
+  - Every decision is logged and summarised in the call's trace (`egress: api:443 allowed, other:443 denied`).
+- **Execution** goes through `ToolExecutor`. After the pin, hash, retirement and argument checks:
+  1. The catalog entry is re-read: it must be active, with the reviewed ref and the same input schema. An isolation runtime must be configured.
+  2. A WRITE uses the 2.2 approval and effect-intent path. A package has no idempotency key, so a timeout or infrastructure error after starting waits for an operator.
+  3. The validated arguments reach the package as `PDLC_INPUT`. The timeout is the smallest of the tool's, the image's and the run's remaining time.
+  4. The package must exit 0 and print one JSON value that matches the image's output schema. Otherwise the model gets a tool error with the (capped) stdout.
+  5. The proxy credential is redacted from anything returned.
+- **Cancellation.** The workflow's ABANDON cancellation runs `markCancelled` while the tool activity is still blocked. `markCancelled` calls `ToolExecutor.cancelRun`, which revokes the run's credentials and then kills its containers or Jobs (`docker rm -f` by the `pdlc.run` label, or a Kubernetes deletecollection).
+- **Configuration** (`pdlc.sandbox.*` in the agents `application.yml`):
+  - `provider` is `none` (the default), `docker` or `kubernetes`;
+  - `runtime` is the Docker runtime or the RuntimeClass;
+  - the proxy's bind host, port and advertised host.
+
+**Exit evidence** (live, under Docker with gVisor `runsc` 20250113: Postgres 16, a Temporal dev server, control-plane, agents with `provider=docker`, a stub LLM, a local registry for a digest-pinned probe image, and a Python upstream standing in for an approved and an unapproved API):
+
+1. **Catalog.**
+   - A workspace admin adding an image gets 403, and a tag-only ref gets 400.
+   - The enterprise Admin adds `localhost:5000/pdlc/sandbox-probe@sha256:ab1f9c…`.
+   - The sandbox tool and a pinning agent publish in `ops` and `finance`.
+2. **Exit: the package can't read a host sentinel file.** Asked to `cat /tmp/pdlc-host-sentinel.txt` (present on the host), the package reports `hostFileReadable:false`, `uid 65534`, `dockerSocket:false`, and the kernel `Starting gVisor…`.
+3. **Exit: the package can't see another workspace's artifact.**
+   - A `finance` call writes `/workspace/artifact.txt`.
+   - The next `ops` call, and the next `finance` call, both find `artifactFound:false, workspaceEntries:0`: every call gets a fresh workspace.
+4. **Exit: the package can't reach an unapproved endpoint.** The run trace shows `egress: approved-api.local:18090 allowed, unapproved-api.local:18090 denied`, and the upstream logged only `GET /ok`.
+
+   | Attempt | Result |
+   |---|---|
+   | Approved host, through the proxy | 200 |
+   | Unapproved host, through the proxy | 403 |
+   | Direct connection to the host | no route (`000`) |
+   | Direct connection to 169.254.169.254 | no route (`000`) |
+5. **Exit: terminating the sandbox revokes its credentials.**
+   - A package posts its proxy URL to the approved API (a leaked credential) and sleeps. Used from outside, the leaked credential gets 200.
+   - Cancelling the run removed the container within 2 s (exit 137). The same credential then gets **407**, and the run is `CANCELLED`.
+   - The credential appears 0 times in the control-plane and agents logs, the model requests, a data-only `pg_dump`, and the run's workflow history (17 events). No env files or sandbox containers are left.
+6. **Re-review.** Re-pinning the catalog entry to another digest makes the next run fail to start ("sandbox image probe now pins … needs re-review"). Restoring it lets runs start again.
+7. **Kubernetes.** Checked against a k3s v1.31 API server with `infra/k8s/sandbox.yaml` applied, as the `agents-sandbox` service account:
+   - `KubernetesJobSandboxClusterTest` passes (4 tests): the Job is accepted with every restriction, the NetworkPolicy is installed once, and a run and `terminateRun` leave no Job, pod or Secret behind.
+   - The adapter's pod template passes the `restricted` Pod Security level (server dry run), while the same pod with privilege escalation is refused.
+   - A delete returns with the `foregroundDeletion` finalizer, and the pod goes first.
+   - The service account cannot create Jobs in `pdlc` or read Secrets.
+   - Pods themselves cannot start in this CI container: runsc needs `CAP_SYS_RESOURCE` to set `oom_score_adj`, and the container lacks it. The Jobs therefore time out there. That run also found and fixed a bug: a Job's own `DeadlineExceeded` had been reported as exit code 1 instead of a timeout.
+   - `scripts/sandbox-colima.sh` installs gVisor in the Colima VM, smoke-tests a gVisor pod, applies the manifest and runs the same cluster test. `--agents` also switches the agents Deployment to the kubernetes provider. The script has not been run on Colima as part of this change.
+8. **Studio** (Playwright):
+   - "New tool" offers "Sandbox image" with the catalog entries.
+   - The editor shows the digest, the limits and the approved hosts, and the schema is read-only. The draft validates as publishable.
+   - A re-pinned catalog image shows the re-review warning; a matching one does not.
+   - The run trace shows the egress summary.
+   - At 390 px wide, the page has no horizontal scroll.
 
 ## Slice 2.5 — A2A outbound adapter
 

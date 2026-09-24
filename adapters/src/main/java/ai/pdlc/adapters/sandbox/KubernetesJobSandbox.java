@@ -78,6 +78,10 @@ public final class KubernetesJobSandbox implements SandboxPort {
                 if (job == null) {
                     return new Result(-1, "", false, false, "the sandbox Job disappeared");
                 }
+                if (status.path("failed").asInt() > 0 && deadlineExceeded(status)) {
+                    // The Job's own activeDeadlineSeconds fired first: a timeout, not a package failure.
+                    return new Result(-1, "", false, true, null);
+                }
                 if (status.path("succeeded").asInt() > 0 || status.path("failed").asInt() > 0) {
                     return collect(name, r, status.path("succeeded").asInt() > 0);
                 }
@@ -104,6 +108,15 @@ public final class KubernetesJobSandbox implements SandboxPort {
         }
     }
 
+    private static boolean deadlineExceeded(JsonNode status) {
+        for (JsonNode condition : status.path("conditions")) {
+            if ("DeadlineExceeded".equals(condition.path("reason").asText())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private Result collect(String name, Request r, boolean succeeded) {
         JsonNode pods = api.get("/api/v1/namespaces/" + config.namespace() + "/pods?labelSelector="
                 + KubernetesApi.label("job-name=" + name));
@@ -111,8 +124,11 @@ public final class KubernetesJobSandbox implements SandboxPort {
         if (pod == null || pod.isMissingNode()) {
             return new Result(succeeded ? 0 : 1, "", false, false, null);
         }
-        int exit = pod.path("status").path("containerStatuses").path(0).path("state").path("terminated").path("exitCode")
-                .asInt(succeeded ? 0 : 1);
+        JsonNode terminated = pod.path("status").path("containerStatuses").path(0).path("state").path("terminated");
+        if (terminated.isMissingNode() && !succeeded) {
+            return new Result(-1, "", false, false, "the sandbox pod never ran the package");
+        }
+        int exit = terminated.path("exitCode").asInt(succeeded ? 0 : 1);
         String log = api.getText("/api/v1/namespaces/" + config.namespace() + "/pods/" + pod.path("metadata").path("name").asText()
                 + "/log?container=package&limitBytes=" + (r.maxOutputBytes() + 1));
         boolean truncated = log.getBytes(StandardCharsets.UTF_8).length > r.maxOutputBytes();

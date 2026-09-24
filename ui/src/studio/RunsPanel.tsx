@@ -422,7 +422,7 @@ function ToolTrace({ calls, error }: { calls: ToolCallRecord[]; error: unknown }
                       </Text>
                     ) : (
                       <Text size="1">
-                        {c.httpStatus != null ? `HTTP ${c.httpStatus}` : 'no response'}
+                        {c.httpStatus != null ? `HTTP ${c.httpStatus}` : c.error ? 'failed' : 'completed'}
                         {c.durationMs != null ? ` · ${c.durationMs} ms` : ''}
                         {c.responseBytes != null ? ` · ${c.responseBytes} B` : ''}
                         {c.truncated ? ' · truncated' : ''}
