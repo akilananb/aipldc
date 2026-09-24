@@ -22,6 +22,11 @@ pdlc:
     scope: ${PDLC_SERVICE_OAUTH_SCOPE:pdlc.board.read}
     static-token: ${PDLC_SERVICE_TOKEN:}
 
+  # Phase 2 slice 2.1: internal hosts HTTP_API tools may reach (comma-separated); must match
+  # control-plane's setting. Everything else must resolve only to public addresses.
+  egress:
+    allowed-private-hosts: ${PDLC_EGRESS_ALLOWED_PRIVATE_HOSTS:}
+
 temporal:
   target: ${TEMPORAL_TARGET:127.0.0.1:7233}
   namespace: ${TEMPORAL_NAMESPACE:default}

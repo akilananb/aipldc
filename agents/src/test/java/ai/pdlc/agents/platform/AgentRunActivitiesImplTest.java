@@ -37,15 +37,16 @@ class AgentRunActivitiesImplTest {
     private final List<ModelInvoker.Endpoint> endpoints = new ArrayList<>();
     private ModelInvoker.Reply reply = new ModelInvoker.Reply("ALPHA", 12, 3);
     private RuntimeException providerError;
-    private final ModelInvoker invoker = (endpoint, prompt, maxTokens, timeout) -> {
+    private final ModelInvoker invoker = (endpoint, history, tools, maxTokens, timeout) -> {
         endpoints.add(endpoint);
-        prompts.add(prompt);
+        prompts.add(((ModelInvoker.UserMessage) history.get(0)).text());
         if (providerError != null) {
             throw providerError;
         }
         return reply;
     };
-    private final AgentRunActivitiesImpl runner = new AgentRunActivitiesImpl(runs, secrets, invoker);
+    private final AgentRunActivitiesImpl runner = new AgentRunActivitiesImpl(runs, secrets, invoker, mock(ToolStore.class),
+            mock(ToolExecutor.class));
 
     private static String missing(String ref) {
         throw new IllegalStateException("No environment variable for " + ref);
@@ -62,7 +63,7 @@ class AgentRunActivitiesImplTest {
         String hash = hashOverride != null ? hashOverride : ContentHash.ofAgent("Labeler", spec);
         return new Invocation(RUN, "engineering", "QUEUED", "labeler", 1, hash, "Labeler",
                 ContentHash.canonicalJson(spec), inputs, "sonnet", "anthropic/claude-sonnet-4", modelEnabled, "gw",
-                connectionStatus, null, "API_KEY", "kv://llm-key", "https://gateway.example/v1");
+                connectionStatus, null, "API_KEY", "kv://llm-key", "https://gateway.example/v1", 0);
     }
 
     private void given(Invocation invocation) {
@@ -115,7 +116,7 @@ class AgentRunActivitiesImplTest {
         Invocation base = invocation(spec(null), Map.of("input", "x"), true, "ACTIVE", null);
         given(new Invocation(base.runId(), base.workspaceId(), base.status(), base.agentId(), base.version(),
                 base.contentHash(), base.name(), base.specJson(), base.inputs(), base.model(), base.providerModel(),
-                true, "gw", "ACTIVE", null, "API_KEY", "kv://rotated-key", base.baseUrl()));
+                true, "gw", "ACTIVE", null, "API_KEY", "kv://rotated-key", base.baseUrl(), 0));
 
         assertNonRetryable(() -> runner.invoke(RUN.toString()),
                 "Secret reference kv://rotated-key for connection gw could not be resolved");
@@ -160,7 +161,7 @@ class AgentRunActivitiesImplTest {
         Invocation done = invocation(spec(null), Map.of("input", "x"), true, "ACTIVE", null);
         when(runs.load(RUN)).thenReturn(Optional.of(new Invocation(done.runId(), done.workspaceId(), "CANCELLED",
                 done.agentId(), done.version(), done.contentHash(), done.name(), done.specJson(), done.inputs(),
-                done.model(), done.providerModel(), true, "gw", "ACTIVE", null, "API_KEY", "kv://llm-key", done.baseUrl())));
+                done.model(), done.providerModel(), true, "gw", "ACTIVE", null, "API_KEY", "kv://llm-key", done.baseUrl(), 0)));
         when(runs.markRunning(RUN)).thenReturn(false);
 
         assertThat(runner.invoke(RUN.toString()).status()).isEqualTo("CANCELLED");
