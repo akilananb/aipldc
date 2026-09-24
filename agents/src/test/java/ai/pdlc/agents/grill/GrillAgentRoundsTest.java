@@ -1,10 +1,13 @@
 package ai.pdlc.agents.grill;
 
+import ai.pdlc.agents.config.PortRegistry;
 import ai.pdlc.agents.templates.PromptTemplates;
 import ai.pdlc.core.config.AgentsConfig;
 import ai.pdlc.core.config.BoardConfig;
 import ai.pdlc.core.config.NotifyConfig;
 import ai.pdlc.core.config.Profile;
+import ai.pdlc.core.config.ProjectDirectory;
+import ai.pdlc.core.config.ProjectMeta;
 import ai.pdlc.core.config.RepoConfig;
 import ai.pdlc.core.domain.CanonicalState;
 import ai.pdlc.core.domain.GrillHandoff;
@@ -41,10 +44,11 @@ class GrillAgentRoundsTest {
 
     private static Profile profile() {
         BoardConfig board = new BoardConfig("in-memory", null, null, Map.of(), Map.of(), null);
-        RepoConfig repo = new RepoConfig("in-memory", "local://x", "main", "openspec");
+        RepoConfig repo = new RepoConfig("main", "in-memory", "local://x", "main", "openspec", List.of(), true);
         NotifyConfig notify = new NotifyConfig("none", "none");
         AgentsConfig agents = new AgentsConfig("http://stub", null, Map.of());
-        return new Profile("local", board, repo, notify, agents, Map.of());
+        return new Profile("local", new ProjectMeta("local", "local", null, List.of(), "", null),
+                board, List.of(repo), notify, agents, Map.of());
     }
 
     private static Handoff envelope() {
@@ -59,11 +63,17 @@ class GrillAgentRoundsTest {
         PromptRunner runner = mock(PromptRunner.class);
         BoardPort board = mock(BoardPort.class);
         RepoPort repo = mock(RepoPort.class);
+        Profile profile = profile();
+        ProjectDirectory projects = mock(ProjectDirectory.class);
+        PortRegistry ports = mock(PortRegistry.class);
         when(ai.withDefaultLlm()).thenReturn(runner);
         when(runner.withReference(any())).thenReturn(runner);
         when(board.getItem(any())).thenReturn(new WorkItem("4412", "feature", title, description, CanonicalState.NEW, null, "orders", List.of()));
         when(board.listComments(any())).thenReturn(List.of());
-        GrillAgent agent = new GrillAgent(ai, board, repo, new PromptTemplates(profile()), profile(), SKILLS);
+        when(projects.project("local")).thenReturn(profile);
+        when(ports.board("local")).thenReturn(board);
+        when(ports.primaryRepo("local")).thenReturn(repo);
+        GrillAgent agent = new GrillAgent(ai, ports, projects, new PromptTemplates(profile), profile, SKILLS);
         return new Fixture(ai, runner, board, repo, agent);
     }
 

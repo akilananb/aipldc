@@ -8,7 +8,7 @@ import path from 'node:path';
  * `__dirname` resolution works both from `dist/` in-repo and from the npm-pack tarball (`templates`
  * is a sibling of `dist`, see package.json's `files`). A missing bundled file is a build-worker
  * install bug, so it throws the raw `ENOENT` rather than a friendlier wrapper. */
-export function loadTemplate(name: 'build-task' | 'plan-tasks', dir?: string): string {
+export function loadTemplate(name: 'build-task' | 'plan-consultation', dir?: string): string {
   if (dir) {
     const override = path.join(dir, `${name}.mustache`);
     if (existsSync(override)) {

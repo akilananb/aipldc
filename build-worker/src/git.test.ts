@@ -5,7 +5,7 @@ import { promisify } from 'node:util';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { addWorktree, changedFiles, commitAll, removeWorktree, revParse } from './git';
+import { addWorktree, changedFiles, commitAll, currentBranch, removeWorktree, revParse } from './git';
 
 const execFileAsync = promisify(execFile);
 
@@ -75,4 +75,52 @@ test('changedFiles against session start correctly reports only this session\'s 
 
   assert.deepEqual(touched, ['src/mine.js']);
   await removeWorktree(repoPath, round2);
+});
+
+test('currentBranch reports the checked-out branch name', async () => {
+  const repoPath = await initBareStoryRepo();
+  assert.equal(await currentBranch(repoPath), 'main');
+});
+
+test('addWorktree on an existing branch removes an orphaned pdlc-task-* worktree from a crashed attempt', async () => {
+  const repoPath = await initBareStoryRepo();
+  const branch = 'story/orphan';
+
+  // Simulates a crashed build-worker: claims T1, opens a `pdlc-task-*` worktree, commits, then
+  // never calls removeWorktree (the process died before finalizeBuild's cleanup ran).
+  const crashed = await mkdtemp(path.join(tmpdir(), 'pdlc-task-orphan-'));
+  await addWorktree(repoPath, crashed, branch, 'main');
+  await writeFile(path.join(crashed, 'committed.txt'), 'survives\n');
+  await execFileAsync('git', ['-C', crashed, 'add', '.']);
+  const committedSha = await commitAll(crashed, 'T1: crashed attempt committed this');
+  await writeFile(path.join(crashed, 'uncommitted.txt'), 'discarded\n');
+
+  // A reclaiming worker opens a second `pdlc-task-*` worktree on the same still-checked-out
+  // branch - the existing-branch path must clear the orphan first, or `git worktree add` would
+  // refuse (branch already checked out).
+  const reclaimed = await mkdtemp(path.join(tmpdir(), 'pdlc-task-reclaim-'));
+  await addWorktree(repoPath, reclaimed, branch, 'main');
+
+  const { stdout: listing } = await execFileAsync('git', ['-C', repoPath, 'worktree', 'list', '--porcelain']);
+  assert.ok(!listing.includes(crashed), 'orphaned worktree must be removed from the worktree list');
+  assert.ok(listing.includes(reclaimed), 'reclaiming worktree must be present');
+
+  // Committed work survives (branch history); uncommitted work is gone (fresh checkout).
+  assert.equal(await revParse(reclaimed, 'HEAD'), committedSha);
+  await assert.rejects(() => execFileAsync('git', ['-C', reclaimed, 'cat-file', '-e', 'HEAD:uncommitted.txt']));
+
+  await removeWorktree(repoPath, reclaimed);
+});
+
+test('addWorktree still rejects a branch checked out by a non-pdlc-task-* worktree', async () => {
+  const repoPath = await initBareStoryRepo();
+  const branch = 'story/manual';
+
+  const manual = await mkdtemp(path.join(tmpdir(), 'pdlc-git-test-manual-'));
+  await addWorktree(repoPath, manual, branch, 'main');
+
+  const second = await mkdtemp(path.join(tmpdir(), 'pdlc-git-test-manual2-'));
+  await assert.rejects(() => addWorktree(repoPath, second, branch, 'main'));
+
+  await removeWorktree(repoPath, manual);
 });

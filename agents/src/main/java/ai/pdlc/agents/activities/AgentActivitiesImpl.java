@@ -3,6 +3,7 @@ package ai.pdlc.agents.activities;
 import ai.pdlc.agents.grill.GrillAgent;
 import ai.pdlc.agents.mention.MentionAgent;
 import ai.pdlc.agents.monitor.MonitorAgent;
+import ai.pdlc.agents.plan.PlanAgent;
 import ai.pdlc.agents.po.PoAgent;
 import ai.pdlc.agents.quality.QualityAgent;
 import ai.pdlc.agents.release.ReleaseAgent;
@@ -14,6 +15,8 @@ import ai.pdlc.core.domain.GrillHandoff;
 import ai.pdlc.core.domain.GrillRound;
 import ai.pdlc.core.domain.MonitorHandoff;
 import ai.pdlc.core.domain.MonitorRule;
+import ai.pdlc.core.domain.PlanConsultation;
+import ai.pdlc.core.domain.PlanDecision;
 import ai.pdlc.core.domain.PoHandoff;
 import ai.pdlc.core.domain.QualityReport;
 import ai.pdlc.core.domain.ReleaseHandoff;
@@ -35,7 +38,7 @@ import java.util.function.Supplier;
 
 /**
  * Hosts {@link AgentActivities} on the {@code reasoning} queue. Pure reasoning: gathers context
- * best-effort, invokes the grill/PO agents, and records one {@code runs} row per invocation,
+ * best-effort, invokes the grill/PO/plan agents, and records one {@code runs} row per invocation,
  * wrapped in one Langfuse trace ({@link AgentRunTracer}) (plan step 6). No board/DB writes other
  * than the {@code runs} insert — board/repo side effects stay in control-plane's {@code
  * BoardSideEffects}.
@@ -50,14 +53,15 @@ public class AgentActivitiesImpl implements AgentActivities {
     private final MonitorAgent monitorAgent;
     private final MentionAgent mentionAgent;
     private final QualityAgent qualityAgent;
+    private final PlanAgent planAgent;
     private final MetricsPort metrics;
     private final RunRecorder runs;
     private final AgentRunTracer tracer;
 
     public AgentActivitiesImpl(GrillAgent grillAgent, PoAgent poAgent,
                                 ReviewAgent reviewAgent, ReleaseAgent releaseAgent, MonitorAgent monitorAgent,
-                                MentionAgent mentionAgent, QualityAgent qualityAgent, MetricsPort metrics, RunRecorder runs,
-                                AgentRunTracer tracer) {
+                                MentionAgent mentionAgent, QualityAgent qualityAgent, PlanAgent planAgent,
+                                MetricsPort metrics, RunRecorder runs, AgentRunTracer tracer) {
         this.grillAgent = grillAgent;
         this.poAgent = poAgent;
         this.reviewAgent = reviewAgent;
@@ -65,6 +69,7 @@ public class AgentActivitiesImpl implements AgentActivities {
         this.monitorAgent = monitorAgent;
         this.mentionAgent = mentionAgent;
         this.qualityAgent = qualityAgent;
+        this.planAgent = planAgent;
         this.metrics = metrics;
         this.runs = runs;
         this.tracer = tracer;
@@ -113,6 +118,14 @@ public class AgentActivitiesImpl implements AgentActivities {
     }
 
     @Override
+    public PlanDecision planNextStep(WorkItemRef story, PoHandoff po, String storyMarkdown, List<ai.pdlc.core.config.RepoConfig> repos,
+                                      List<PlanConsultation.Exchange> history, List<String> feedback,
+                                      boolean canConsult) {
+        return traced("plan", "round", story,
+                () -> planAgent.nextStep(story, po, storyMarkdown, repos, history, feedback, canConsult));
+    }
+
+    @Override
     public String mentionAnalyze(AgentMentionRequest request) {
         UUID workItemId = UUID.fromString(request.workItemId());
         String workflowId = workflowId();
@@ -122,9 +135,9 @@ public class AgentActivitiesImpl implements AgentActivities {
                 String result = mentionAgent.analyze(request);
                 runs.finish(runId, "ok");
                 return result;
-            } catch (RuntimeException e) {
+            } catch (Throwable e) {
                 runs.finish(runId, "error");
-                throw e;
+                throw sneaky(e);
             }
         });
     }
@@ -139,11 +152,25 @@ public class AgentActivitiesImpl implements AgentActivities {
                 T result = body.get();
                 runs.finish(runId, "ok");
                 return result;
-            } catch (RuntimeException e) {
+            } catch (Throwable e) {
                 runs.finish(runId, "error");
-                throw e;
+                throw sneaky(e);
             }
         });
+    }
+
+    /** Rethrows {@code t} unchecked without wrapping when it already is (matches prior {@code
+     * catch (RuntimeException)} behavior); an {@link Error} is rethrown as-is; anything else
+     * (unreachable today — no invoked method declares checked exceptions) is wrapped so the
+     * {@code runs} row is still closed before propagating (plan step 1). */
+    private static RuntimeException sneaky(Throwable t) {
+        if (t instanceof RuntimeException r) {
+            return r;
+        }
+        if (t instanceof Error err) {
+            throw err;
+        }
+        return new IllegalStateException(t);
     }
 
     private static String workflowId() {

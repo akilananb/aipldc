@@ -19,12 +19,12 @@ import ai.pdlc.controlplane.web.dto.CommentDto;
 import ai.pdlc.controlplane.web.dto.CommentRequest;
 import ai.pdlc.controlplane.web.dto.ScenarioReviewDto;
 import ai.pdlc.controlplane.web.dto.ScenarioReviewRequest;
-import ai.pdlc.core.config.PdlcConfig;
+import ai.pdlc.controlplane.config.PortRegistry;
+import ai.pdlc.core.config.ProjectDirectory;
 import ai.pdlc.core.domain.Anchor;
 import ai.pdlc.core.domain.AgentMentionRequest;
 import ai.pdlc.core.domain.Comment;
 import ai.pdlc.core.domain.WorkItemRef;
-import ai.pdlc.core.port.RepoPort;
 import ai.pdlc.core.workflow.AgentMentionWorkflow;
 import ai.pdlc.core.workflow.FeatureWorkflow;
 import ai.pdlc.core.workflow.TaskQueues;
@@ -66,31 +66,31 @@ public class ArtifactsController {
     private final ArtifactRepository artifacts;
     private final CommentRepository comments;
     private final ScenarioReviewRepository scenarioReviews;
-    private final RepoPort repo;
+    private final PortRegistry ports;
     private final CommentReanchorer reanchorer;
     private final ReviewTrailService reviewTrail;
     private final WorkflowStubs workflowStubs;
     private final IdentityResolver identityResolver;
     private final WorkflowClient workflowClient;
-    private final PdlcConfig pdlcConfig;
+    private final ProjectDirectory projects;
     private final ai.pdlc.controlplane.demo.DemoSnapshotService demoSnapshots;
 
     public ArtifactsController(WorkItemRepository workItems, ArtifactRepository artifacts, CommentRepository comments,
-                                ScenarioReviewRepository scenarioReviews, RepoPort repo, CommentReanchorer reanchorer,
+                                ScenarioReviewRepository scenarioReviews, PortRegistry ports, CommentReanchorer reanchorer,
                                 ReviewTrailService reviewTrail, WorkflowStubs workflowStubs, IdentityResolver identityResolver,
-                                WorkflowClient workflowClient, PdlcConfig pdlcConfig,
+                                WorkflowClient workflowClient, ProjectDirectory projects,
                                 ai.pdlc.controlplane.demo.DemoSnapshotService demoSnapshots) {
         this.workItems = workItems;
         this.artifacts = artifacts;
         this.comments = comments;
         this.scenarioReviews = scenarioReviews;
-        this.repo = repo;
+        this.ports = ports;
         this.reanchorer = reanchorer;
         this.reviewTrail = reviewTrail;
         this.workflowStubs = workflowStubs;
         this.identityResolver = identityResolver;
         this.workflowClient = workflowClient;
-        this.pdlcConfig = pdlcConfig;
+        this.projects = projects;
         this.demoSnapshots = demoSnapshots;
     }
 
@@ -100,7 +100,7 @@ public class ArtifactsController {
         ArtifactEntity artifact = artifacts.findByWorkItemIdAndVersion(id, v)
                 .orElseThrow(() -> new NotFoundException("No version " + v + " for item " + id));
 
-        String storyMarkdown = repo.readFile(artifact.gitRef(), story.specChangePath() + "/proposal.md");
+        String storyMarkdown = ports.primaryRepo(story.profile()).readFile(artifact.gitRef(), story.specChangePath() + "/proposal.md");
         List<CommentReanchorer.Line> lines = reanchorer.index(storyMarkdown);
 
         List<CommentDto> commentDtos = comments.findByArtifactIdOrderByCreatedAt(artifact.id()).stream()
@@ -127,7 +127,7 @@ public class ArtifactsController {
         ArtifactEntity latest = artifacts.findByWorkItemIdOrderByVersionDesc(id).stream().findFirst()
                 .orElseThrow(() -> new NotFoundException("No artifact for item " + id));
 
-        String storyMarkdown = repo.readFile(latest.gitRef(), story.specChangePath() + "/proposal.md");
+        String storyMarkdown = ports.primaryRepo(story.profile()).readFile(latest.gitRef(), story.specChangePath() + "/proposal.md");
         Anchor anchor = resolveAnchor(request.target(), storyMarkdown);
         String anchorJson = reanchorer.toAnchorJson(anchor);
 
@@ -168,7 +168,7 @@ public class ArtifactsController {
         demoSnapshots.requireWritable(id);
         Identity identity = identityResolver.resolve(httpRequest);
         WorkItemEntity story = requireItem(id);
-        var gate1 = pdlcConfig.profile(story.profile()).gate("G1");
+        var gate1 = projects.project(story.profile()).gate("G1");
         if (!gate1.roles().contains(identity.role())) {
             throw new ForbiddenException("Role " + identity.role() + " is not a gate 1 checker");
         }
@@ -203,7 +203,7 @@ public class ArtifactsController {
         demoSnapshots.requireWritable(id);
         Identity identity = identityResolver.resolve(httpRequest);
         WorkItemEntity story = requireItem(id);
-        var gate1 = pdlcConfig.profile(story.profile()).gate("G1");
+        var gate1 = projects.project(story.profile()).gate("G1");
         if (!gate1.roles().contains(identity.role())) {
             throw new ForbiddenException("Role " + identity.role() + " is not a gate 1 checker");
         }
@@ -215,7 +215,7 @@ public class ArtifactsController {
 
         ArtifactEntity artifact = artifacts.findByWorkItemIdAndVersion(id, v)
                 .orElseThrow(() -> new NotFoundException("No version " + v + " for item " + id));
-        String storyMarkdown = repo.readFile(artifact.gitRef(), story.specChangePath() + "/proposal.md");
+        String storyMarkdown = ports.primaryRepo(story.profile()).readFile(artifact.gitRef(), story.specChangePath() + "/proposal.md");
         boolean scenarioExists = storyMarkdown.lines().anyMatch(line -> line.trim().equals("Scenario: " + scenario));
         if (!scenarioExists) {
             throw new NotFoundException("No scenario " + scenario + " in v" + v);

@@ -9,11 +9,13 @@ import java.util.List;
 import java.util.Map;
 
 /** {@code @QueryMethod state()} result — {@code {version, approvals, openComments, stage,
- * activeStoryBoardId}}. {@code activeStoryBoardId} is the board id of the story currently driving
- * the pipeline when a feature was split into multiple stories (sequential-in-one-workflow); null
- * until the first story is published. */
+ * activeStoryBoardId, lastFailure}}. {@code activeStoryBoardId} is the board id of the story
+ * currently driving the pipeline when a feature was split into multiple stories
+ * (sequential-in-one-workflow); null until the first story is published. {@code lastFailure} is
+ * non-null exactly when the workflow is currently blocked awaiting a {@link
+ * FeatureWorkflow#retryStep} signal after a bounded-retry LLM/agent activity failure. */
 public record ReviewState(int version, Map<String, Approval> approvals, List<Comment> openComments,
-                           CanonicalState stage, String activeStoryBoardId) {
+                           CanonicalState stage, String activeStoryBoardId, StepFailure lastFailure) {
     public ReviewState {
         approvals = approvals == null ? Map.of() : Map.copyOf(approvals);
         openComments = openComments == null ? List.of() : List.copyOf(openComments);

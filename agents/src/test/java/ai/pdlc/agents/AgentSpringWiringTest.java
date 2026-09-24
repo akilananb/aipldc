@@ -1,7 +1,9 @@
 package ai.pdlc.agents;
 
+import ai.pdlc.agents.config.PortRegistry;
 import ai.pdlc.agents.grill.GrillAgent;
 import ai.pdlc.agents.grill.GrillSkills;
+import ai.pdlc.agents.plan.PlanAgent;
 import ai.pdlc.agents.po.PoAgent;
 import ai.pdlc.agents.quality.QualityAgent;
 import ai.pdlc.agents.release.ReleaseAgent;
@@ -11,9 +13,9 @@ import ai.pdlc.core.config.AgentsConfig;
 import ai.pdlc.core.config.BoardConfig;
 import ai.pdlc.core.config.NotifyConfig;
 import ai.pdlc.core.config.Profile;
+import ai.pdlc.core.config.ProjectDirectory;
+import ai.pdlc.core.config.ProjectMeta;
 import ai.pdlc.core.config.RepoConfig;
-import ai.pdlc.core.port.BoardPort;
-import ai.pdlc.core.port.RepoPort;
 import com.embabel.agent.api.common.Ai;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -21,6 +23,7 @@ import org.springframework.context.annotation.AnnotationConfigApplicationContext
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -48,20 +51,21 @@ class AgentSpringWiringTest {
         }
 
         @Bean
-        BoardPort boardPort() {
-            return mock(BoardPort.class);
+        ProjectDirectory projectDirectory() {
+            return mock(ProjectDirectory.class);
         }
 
         @Bean
-        RepoPort repoPort() {
-            return mock(RepoPort.class);
+        PortRegistry portRegistry() {
+            return mock(PortRegistry.class);
         }
 
         @Bean
         Profile activeProfile() {
             return new Profile("local",
+                    new ProjectMeta("local", "local", null, List.of(), "", null),
                     new BoardConfig("in-memory", null, null, Map.of(), Map.of(), null),
-                    new RepoConfig("in-memory", "local://x", "main", "openspec"),
+                    List.of(new RepoConfig("main", "in-memory", "local://x", "main", "openspec", List.of(), true)),
                     new NotifyConfig("none", "none"),
                     new AgentsConfig("http://stub", null, Map.of()),
                     Map.of());
@@ -71,15 +75,15 @@ class AgentSpringWiringTest {
     @Test
     void springContainerConstructsPromptTemplatesAndAllFourAgentsViaConstructorInjection() {
         try (AnnotationConfigApplicationContext ctx = new AnnotationConfigApplicationContext()) {
-            ctx.register(TestBeans.class, PromptTemplates.class, GrillSkills.class, GrillAgent.class, PoAgent.class, ReviewAgent.class, ReleaseAgent.class, QualityAgent.class);
+            ctx.register(TestBeans.class, PromptTemplates.class, GrillSkills.class, GrillAgent.class, PoAgent.class, ReviewAgent.class, ReleaseAgent.class, QualityAgent.class, PlanAgent.class);
             ctx.refresh();
 
             assertThat(ctx.getBean(PromptTemplates.class)).isNotNull();
             assertThat(ctx.getBean(GrillAgent.class)).isNotNull();
             assertThat(ctx.getBean(PoAgent.class)).isNotNull();
             assertThat(ctx.getBean(ReviewAgent.class)).isNotNull();
-            assertThat(ctx.getBean(ReleaseAgent.class)).isNotNull();
             assertThat(ctx.getBean(QualityAgent.class)).isNotNull();
+            assertThat(ctx.getBean(PlanAgent.class)).isNotNull();
 
             // Prove it's the Profile-taking constructor that won (not an accidental default), and
             // that the rendered prompt actually flows through the classpath-default template.

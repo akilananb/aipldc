@@ -61,17 +61,24 @@ public final class PdlcConfig {
         return profile;
     }
 
+    /** The DB-persisted half of the named profile (project meta + board + repos + gates). */
+    public ProjectDocument document(String name) {
+        Profile p = profile(name);
+        return new ProjectDocument(p.project(), p.board(), p.repos(), p.gates());
+    }
+
     public Map<String, Profile> profiles() {
         return Map.copyOf(profiles);
     }
 
     private static Profile parseProfile(String name, Map<String, Object> raw) {
         BoardConfig board = parseBoard(asMap(raw.get("board")));
-        RepoConfig repo = parseRepo(asMap(raw.get("repo")));
+        List<RepoConfig> repos = parseRepos(name, raw);
+        ProjectMeta project = parseProjectMeta(name, asMap(raw.get("project")));
         NotifyConfig notify = parseNotify(asMap(raw.get("notify")));
         AgentsConfig agents = parseAgents(asMap(raw.get("agents")));
         Map<String, GateConfig> gates = parseGates(asMap(raw.get("gates")));
-        return new Profile(name, board, repo, notify, agents, gates);
+        return new Profile(name, project, board, repos, notify, agents, gates);
     }
 
     private static BoardConfig parseBoard(Map<String, Object> raw) {
@@ -87,12 +94,72 @@ public final class PdlcConfig {
                 auth);
     }
 
-    private static RepoConfig parseRepo(Map<String, Object> raw) {
-        return new RepoConfig(
-                asString(raw.get("provider")),
-                asString(raw.get("url")),
-                asString(raw.get("default_branch")),
-                asString(raw.get("spec_dir")));
+    @SuppressWarnings("unchecked")
+    private static List<RepoConfig> parseRepos(String name, Map<String, Object> raw) {
+        Object rawRepos = raw.get("repos");
+        Object rawRepo = raw.get("repo");
+        if (rawRepos != null && rawRepo != null) {
+            throw new PdlcConfigException("profile " + name + ": use either repo or repos");
+        }
+        if (rawRepos != null) {
+            List<Map<String, Object>> entries = (List<Map<String, Object>>) rawRepos;
+            List<RepoConfig> repos = new java.util.ArrayList<>();
+            boolean anyPrimary = false;
+            for (Map<String, Object> entry : entries) {
+                boolean primary = Boolean.TRUE.equals(entry.get("primary"));
+                anyPrimary = anyPrimary || primary;
+                repos.add(new RepoConfig(
+                        asString(entry.get("id")),
+                        asString(entry.get("provider")),
+                        asString(entry.get("url")),
+                        asString(entry.get("default_branch")),
+                        asString(entry.get("spec_dir")),
+                        (List<String>) entry.get("areas"),
+                        primary));
+            }
+            if (!anyPrimary && !repos.isEmpty()) {
+                RepoConfig first = repos.get(0);
+                repos.set(0, new RepoConfig(first.id(), first.provider(), first.url(),
+                        first.defaultBranch(), first.specDir(), first.areas(), true));
+            }
+            return repos;
+        }
+        Map<String, Object> legacy = asMap(rawRepo);
+        return List.of(new RepoConfig(
+                "main",
+                asString(legacy.get("provider")),
+                asString(legacy.get("url")),
+                asString(legacy.get("default_branch")),
+                asString(legacy.get("spec_dir")),
+                List.of(),
+                true));
+    }
+
+    private static ProjectMeta parseProjectMeta(String name, Map<String, Object> raw) {
+        String metaName = raw.get("name") == null ? name : asString(raw.get("name"));
+        List<ProjectMeta.DocLink> docs = parseDocs(raw.get("docs"));
+        Map<String, Object> rawBuild = asMap(raw.get("build"));
+        ProjectMeta.BuildDefaults build = new ProjectMeta.BuildDefaults(asString(rawBuild.get("acp_agent")));
+        return new ProjectMeta(
+                name,
+                metaName,
+                asString(raw.get("confluence_url")),
+                docs,
+                asString(raw.get("brief")),
+                build);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<ProjectMeta.DocLink> parseDocs(Object value) {
+        if (value == null) {
+            return List.of();
+        }
+        List<Map<String, Object>> raw = (List<Map<String, Object>>) value;
+        List<ProjectMeta.DocLink> docs = new java.util.ArrayList<>();
+        for (Map<String, Object> entry : raw) {
+            docs.add(new ProjectMeta.DocLink(asString(entry.get("title")), asString(entry.get("url"))));
+        }
+        return docs;
     }
 
     private static NotifyConfig parseNotify(Map<String, Object> raw) {

@@ -23,7 +23,8 @@ import ai.pdlc.controlplane.web.dto.ReviewStateDto;
 import ai.pdlc.controlplane.web.dto.QualityReportDto;
 import ai.pdlc.controlplane.web.dto.AgentRunDto;
 import ai.pdlc.controlplane.web.dto.SpecDocsDto;
-import ai.pdlc.core.config.PdlcConfig;
+import ai.pdlc.controlplane.config.PortRegistry;
+import ai.pdlc.core.config.ProjectDirectory;
 import ai.pdlc.core.domain.Approval;
 import ai.pdlc.core.domain.CommentRef;
 import ai.pdlc.core.domain.GrillHandoff;
@@ -68,30 +69,33 @@ public class ItemsController {
     private final ApprovalRepository approvalOps;
     private final QualityReportRepository qualityReports;
     private final RunRepository runs;
-    private final BoardPort board;
-    private final PdlcConfig pdlcConfig;
+    private final PortRegistry ports;
+    private final ProjectDirectory projects;
     private final WorkflowStubs workflowStubs;
     private final IdentityResolver identityResolver;
     private final ReviewTrailService reviewTrail;
-    private final RepoPort repo;
     private final ai.pdlc.controlplane.demo.DemoSnapshotService demoSnapshots;
+    private final ai.pdlc.controlplane.temporal.BuildTaskService buildTasks;
+    private final ai.pdlc.controlplane.temporal.AgentPresenceService presence;
 
     public ItemsController(WorkItemRepository workItems, ArtifactRepository artifacts,
                             ApprovalRepository approvalOps, QualityReportRepository qualityReports, RunRepository runs,
-                            BoardPort board, PdlcConfig pdlcConfig, WorkflowStubs workflowStubs, IdentityResolver identityResolver,
-                            ReviewTrailService reviewTrail, RepoPort repo, ai.pdlc.controlplane.demo.DemoSnapshotService demoSnapshots) {
+                            PortRegistry ports, ProjectDirectory projects, WorkflowStubs workflowStubs, IdentityResolver identityResolver,
+                            ReviewTrailService reviewTrail, ai.pdlc.controlplane.demo.DemoSnapshotService demoSnapshots,
+                            ai.pdlc.controlplane.temporal.BuildTaskService buildTasks, ai.pdlc.controlplane.temporal.AgentPresenceService presence) {
         this.workItems = workItems;
         this.artifacts = artifacts;
         this.approvalOps = approvalOps;
         this.qualityReports = qualityReports;
         this.runs = runs;
-        this.board = board;
-        this.pdlcConfig = pdlcConfig;
+        this.ports = ports;
+        this.projects = projects;
         this.workflowStubs = workflowStubs;
         this.identityResolver = identityResolver;
         this.reviewTrail = reviewTrail;
-        this.repo = repo;
         this.demoSnapshots = demoSnapshots;
+        this.buildTasks = buildTasks;
+        this.presence = presence;
     }
 
     private static ai.pdlc.controlplane.web.dto.DemoSnapshotDto snapshotDto(ai.pdlc.controlplane.demo.DemoSnapshotEntity s) {
@@ -104,7 +108,7 @@ public class ItemsController {
         Map<UUID, AgentRunDto> active = activeRuns();
         Map<UUID, ai.pdlc.controlplane.demo.DemoSnapshotEntity> snapshotIndex = demoSnapshots.findAllIndexed();
         return workItems.findAllByOrderByUpdatedAtDesc().stream()
-                .map(row -> new ItemSummaryDto(row.id(), row.boardId(), row.kind(),
+                .map(row -> new ItemSummaryDto(row.id(), row.profile(), row.boardId(), row.kind(),
                         safeTitle(row), row.canonicalState(), row.updatedAt(), row.parentId(), latestQualityVerdict(row.id()),
                         active.get(row.id()), snapshotDto(snapshotIndex.get(row.id()))))
                 .toList();
@@ -113,12 +117,14 @@ public class ItemsController {
     @GetMapping("/{id}")
     public ItemDetailDto get(@PathVariable UUID id) {
         WorkItemEntity row = requireItem(id);
-        WorkItem item = board.getItem(new WorkItemRef(row.profile(), row.boardId()));
+        WorkItem item = ports.board(row.profile()).getItem(new WorkItemRef(row.profile(), row.boardId()));
         ArtifactEntity latest = artifacts.findByWorkItemIdOrderByVersionDesc(id).stream().findFirst().orElse(null);
         ReviewStateDto gate = queryGate(row);
+        AgentRunDto activeRun = activeRuns().get(id);
         return new ItemDetailDto(row.id(), row.profile(), row.boardId(), row.kind(), item.title(), item.description(),
                 row.canonicalState(), latest == null ? null : latest.version(), latest == null ? null : latest.contentHash(),
-                gate, row.parentId(), latestQualityVerdict(row.id()), activeRuns().get(id), snapshotDto(demoSnapshots.find(id).orElse(null)));
+                gate, row.parentId(), latestQualityVerdict(row.id()), activeRun, snapshotDto(demoSnapshots.find(id).orElse(null)),
+                agentWork(row, activeRun));
     }
 
 
@@ -155,7 +161,7 @@ public class ItemsController {
     @GetMapping("/{id}/board-comments")
     public List<ai.pdlc.core.domain.Comment> boardComments(@PathVariable UUID id) {
         WorkItemEntity row = requireItem(id);
-        return board.listComments(new WorkItemRef(row.profile(), row.boardId()));
+        return ports.board(row.profile()).listComments(new WorkItemRef(row.profile(), row.boardId()));
     }
 
     @GetMapping("/{id}/spec-docs")
@@ -175,12 +181,12 @@ public class ItemsController {
         if (slug != null) {
             java.util.Optional<ai.pdlc.controlplane.demo.DemoSnapshotEntity> snap = demoSnapshots.find(storyRow.id());
             String readRef = snap.map(ai.pdlc.controlplane.demo.DemoSnapshotEntity::gitRef)
-                    .orElseGet(() -> pdlcConfig.profile(row.profile()).repo().defaultBranch());
-            proposalMd = readOrNull(readRef, slug + "/proposal.md");
-            tasksMd = readOrNull(readRef, slug + "/tasks.md");
+                    .orElseGet(() -> projects.project(row.profile()).repo().defaultBranch());
+            proposalMd = readOrNull(row.profile(), readRef, slug + "/proposal.md");
+            tasksMd = readOrNull(row.profile(), readRef, slug + "/tasks.md");
             Matcher areaMatch = proposalMd == null ? null : AREA_PATTERN.matcher(proposalMd);
             String area = areaMatch != null && areaMatch.find() ? areaMatch.group(1) : "default";
-            specMd = readOrNull(readRef, slug + "/specs/" + area + "/spec.md");
+            specMd = readOrNull(row.profile(), readRef, slug + "/specs/" + area + "/spec.md");
         }
 
         List<SpecDocsDto.DocApproval> approvals = artifacts.findByWorkItemIdOrderByVersionDesc(storyRow.id()).stream()
@@ -196,7 +202,7 @@ public class ItemsController {
         demoSnapshots.requireWritable(id);
         Identity identity = identityResolver.resolve(httpRequest);
         WorkItemEntity story = requireItem(id);
-        var gate1 = pdlcConfig.profile(story.profile()).gate("G1");
+        var gate1 = projects.project(story.profile()).gate("G1");
         if (!gate1.roles().contains(identity.role())) {
             throw new ForbiddenException("Role " + identity.role() + " is not a gate 1 checker");
         }
@@ -249,6 +255,56 @@ public class ItemsController {
 
         stub.requestChanges(identity.user());
         return ResponseEntity.ok(ReviewStateDto.from(stub.state()));
+    }
+
+    /** Retries the currently-blocked reasoning/LLM step for this item (see {@link
+     * ReviewState#lastFailure} / {@code FeatureWorkflowImpl#reasoningStep}) — signals the same
+     * workflow execution to resume exactly where it blocked, never a fresh restart. Works on
+     * either a feature (pre-story failures: grill/po-draft) or a story (po-revise/quality/review/
+     * release) item, unlike {@link #approve}/{@link #requestChanges} which are story-only. Gate-
+     * role-restricted by {@link #gateForStep}, not open to any identity: retrying resumes real
+     * pipeline work, so it needs the same authorization as the gate the step feeds into. */
+    @PostMapping("/{id}/retry")
+    public ResponseEntity<ReviewStateDto> retry(@PathVariable UUID id, HttpServletRequest httpRequest) {
+        demoSnapshots.requireWritable(id);
+        Identity identity = identityResolver.resolve(httpRequest);
+        WorkItemEntity row = requireItem(id);
+        WorkItemRef featureRef = "feature".equals(row.kind())
+                ? new WorkItemRef(row.profile(), row.boardId())
+                : new WorkItemRef(row.profile(), row.parentId());
+        FeatureWorkflow stub = workflowStubs.featureWorkflow(featureRef);
+
+        ReviewState state;
+        try {
+            state = stub.state();
+        } catch (RuntimeException notRunning) {
+            throw new NotFoundException("No running workflow for item " + id);
+        }
+        if (state.lastFailure() == null) {
+            throw new ConflictException("Nothing is currently blocked for item " + id);
+        }
+        var gate = projects.project(row.profile()).gate(gateForStep(state.lastFailure().step()));
+        if (!gate.roles().contains(identity.role())) {
+            throw new ForbiddenException("Role " + identity.role() + " cannot retry step " + state.lastFailure().step());
+        }
+
+        stub.retryStep(identity.user());
+        return ResponseEntity.ok(ReviewStateDto.from(stub.state()));
+    }
+
+    /** Maps a {@link ai.pdlc.core.workflow.StepFailure#step()} name to the gate whose roles may
+     * retry it: {@code release-draft} feeds gate 3 (release pack), {@code review-story} feeds gate
+     * 2 (PR review) — every earlier step (grill/po-draft/po-revise/evaluate-quality/plan-next-step/
+     * plan-consult) happens before any gate-2/3 review has started, so gate 1 owns it. Pure/static
+     * so it's directly unit-testable without a Spring context. */
+    static String gateForStep(String step) {
+        if (step != null && step.startsWith("release-")) {
+            return "G3";
+        }
+        if ("review-story".equals(step)) {
+            return "G2";
+        }
+        return "G1";
     }
 
     @GetMapping("/{id}/grill")
@@ -319,13 +375,13 @@ public class ItemsController {
             throw new ConflictException("Proceed is available after two grill rounds");
         }
 
-        var gate1 = pdlcConfig.profile(row.profile()).gate("G1");
+        var gate1 = projects.project(row.profile()).gate("G1");
         if (!gate1.roles().contains(identity.role())) {
             throw new ForbiddenException("Role " + identity.role() + " cannot proceed intake");
         }
 
         WorkItemRef itemRef = new WorkItemRef(row.profile(), row.boardId());
-        board.addComment(itemRef, "Proceeding to story drafting; remaining open questions parked.", identity.user());
+        ports.board(row.profile()).addComment(itemRef, "Proceeding to story drafting; remaining open questions parked.", identity.user());
         stub.proceedToStory(identity.user());
         return ResponseEntity.noContent().build();
     }
@@ -377,9 +433,9 @@ public class ItemsController {
             throw new ConflictException("Question " + questionId + " is already " + question.status().wireValue());
         }
 
-        Set<String> allowed = new LinkedHashSet<>(pdlcConfig.profile(row.profile()).gate("G1").roles());
+        Set<String> allowed = new LinkedHashSet<>(projects.project(row.profile()).gate("G1").roles());
         if (question.askedByBuildLoop()) {
-            allowed.addAll(pdlcConfig.profile(row.profile()).gate("G2").roles());
+            allowed.addAll(projects.project(row.profile()).gate("G2").roles());
         }
         if (!allowed.contains(identity.role())) {
             throw new ForbiddenException("Role " + identity.role() + " cannot answer clarification questions");
@@ -387,7 +443,7 @@ public class ItemsController {
 
         WorkItemRef itemRef = new WorkItemRef(row.profile(), row.boardId());
         String line = question.id() + ": " + body;
-        CommentRef ref = board.addComment(itemRef, line, identity.user());
+        CommentRef ref = ports.board(row.profile()).addComment(itemRef, line, identity.user());
         stub.commentAdded(new BoardCommentEvent(ref.id(), identity.user(), line));
     }
 
@@ -397,13 +453,21 @@ public class ItemsController {
 
     private String safeTitle(WorkItemEntity row) {
         try {
-            return board.getItem(new WorkItemRef(row.profile(), row.boardId())).title();
+            return ports.board(row.profile()).getItem(new WorkItemRef(row.profile(), row.boardId())).title();
         } catch (RuntimeException e) {
             return "(unavailable)";
         }
     }
 
     private ReviewStateDto queryGate(WorkItemEntity row) {
+        if ("feature".equals(row.kind())) {
+            try {
+                FeatureWorkflow stub = workflowStubs.featureWorkflow(new WorkItemRef(row.profile(), row.boardId()));
+                return ReviewStateDto.from(stub.state());
+            } catch (RuntimeException notRunning) {
+                return null;
+            }
+        }
         if (!"story".equals(row.kind()) || row.parentId() == null) {
             return null;
         }
@@ -442,9 +506,33 @@ public class ItemsController {
         return active;
     }
 
-    private String readOrNull(String branch, String path) {
+    /** Live plan/build status for a story item - see {@link ItemDetailDto.AgentWorkDto}. Null for
+     * every non-story item and for a story with nothing currently in flight. */
+    private ItemDetailDto.AgentWorkDto agentWork(WorkItemEntity row, AgentRunDto activeRun) {
+        if (!"story".equals(row.kind())) {
+            return null;
+        }
+        java.time.Instant now = java.time.Instant.now();
+        int workersOnline = (int) presence.list().stream()
+                .filter(p -> "acp".equals(p.kind()))
+                .filter(p -> ai.pdlc.controlplane.temporal.AgentPresenceService.onlineAt(p.lastSeenAt(), now))
+                .count();
+        if (activeRun != null && "plan".equals(activeRun.agent())) {
+            return new ItemDetailDto.AgentWorkDto("reasoning", "plan", null, null, null, null, workersOnline);
+        }
+        return buildTasks.latestOpenTask(row.profile(), row.boardId())
+                .map(open -> {
+                    String phase = "pending".equals(open.state()) ? "waiting-for-worker" : "running";
+                    String kind = "plan".equals(open.taskId()) ? "plan" : "build";
+                    return new ItemDetailDto.AgentWorkDto(phase, kind, open.taskId(), open.round(), open.claimedBy(),
+                            open.since(), workersOnline);
+                })
+                .orElse(null);
+    }
+
+    private String readOrNull(String profile, String branch, String path) {
         try {
-            return repo.readFile(branch, path);
+            return ports.primaryRepo(profile).readFile(branch, path);
         } catch (RuntimeException notFound) {
             return null;
         }

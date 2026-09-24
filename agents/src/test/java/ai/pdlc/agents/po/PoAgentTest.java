@@ -1,11 +1,14 @@
 package ai.pdlc.agents.po;
 
+import ai.pdlc.agents.config.PortRegistry;
 import ai.pdlc.agents.fixtures.DemoFixtures;
 import ai.pdlc.agents.templates.PromptTemplates;
 import ai.pdlc.core.config.AgentsConfig;
 import ai.pdlc.core.config.BoardConfig;
 import ai.pdlc.core.config.NotifyConfig;
 import ai.pdlc.core.config.Profile;
+import ai.pdlc.core.config.ProjectDirectory;
+import ai.pdlc.core.config.ProjectMeta;
 import ai.pdlc.core.config.RepoConfig;
 import ai.pdlc.core.domain.CanonicalState;
 import ai.pdlc.core.domain.Comment;
@@ -237,10 +240,21 @@ class PoAgentTest {
     private static Profile profile(String defaultBranch) {
         BoardConfig board = new BoardConfig("inmemory", "org", "proj", Map.of(), Map.of(),
                 new BoardConfig.AuthConfig("none", null));
-        RepoConfig repo = new RepoConfig("local-git", "url", defaultBranch, "openspec");
+        RepoConfig repo = new RepoConfig("main", "local-git", "url", defaultBranch, "openspec", List.of(), true);
         NotifyConfig notify = new NotifyConfig("stub", "chan");
         AgentsConfig agents = new AgentsConfig(null, null, Map.of());
-        return new Profile("local", board, repo, notify, agents, Map.of());
+        return new Profile("local", new ProjectMeta("local", "local", null, List.of(), "", null),
+                board, List.of(repo), notify, agents, Map.of());
+    }
+
+    private static PoAgent poAgent(Ai ai, BoardPort board, RepoPort repo) {
+        Profile profile = profile("restaurant-base");
+        ProjectDirectory projects = mock(ProjectDirectory.class);
+        PortRegistry ports = mock(PortRegistry.class);
+        when(projects.project("local")).thenReturn(profile);
+        when(ports.board("local")).thenReturn(board);
+        when(ports.primaryRepo("local")).thenReturn(repo);
+        return new PoAgent(ai, ports, projects, new PromptTemplates(profile), profile);
     }
 
     private static PoHandoff previous(String change, String parent) {
@@ -265,7 +279,7 @@ class PoAgentTest {
                 "Feature-level description: allow admins to export orders.", CanonicalState.NEW, null, "orders", List.of());
         when(board.getItem(new WorkItemRef("local", "4400"))).thenReturn(feature);
 
-        PoAgent agent = new PoAgent(ai, board, repo, new PromptTemplates(profile("restaurant-base")), profile("restaurant-base"));
+        PoAgent agent = poAgent(ai, board, repo);
         WorkItemRef item = new WorkItemRef("local", "4412");
         List<Comment> comments = List.of(
                 new Comment("c1", "lead@acme", "SquadLead", "story", "line:46", "20/hour for admin",
@@ -311,7 +325,7 @@ class PoAgentTest {
         WorkItemRef item = new WorkItemRef("local", "4412");
         when(board.getItem(item)).thenReturn(storyItem);
 
-        PoAgent agent = new PoAgent(ai, board, repo, new PromptTemplates(profile("restaurant-base")), profile("restaurant-base"));
+        PoAgent agent = poAgent(ai, board, repo);
         StoryDraft draft = agent.revise(item, previous("openspec/changes/export-orders-csv", null),
                 List.of(new Comment("c1", "lead@acme", "SquadLead", "story", "line:46", "20/hour for admin",
                         Comment.Intent.CHANGE, false, 1)), null);
@@ -333,7 +347,7 @@ class PoAgentTest {
         WorkItemRef item = new WorkItemRef("local", "4412");
         when(board.getItem(item)).thenReturn(null); // no repo copy, no board description
 
-        PoAgent agent = new PoAgent(ai, board, repo, new PromptTemplates(profile("restaurant-base")), profile("restaurant-base"));
+        PoAgent agent = poAgent(ai, board, repo);
 
         assertThatThrownBy(() -> agent.revise(item, previous("openspec/changes/export-orders-csv", null),
                 List.of(new Comment("c1", "lead@acme", "SquadLead", "story", "line:46", "change it",
@@ -356,7 +370,7 @@ class PoAgentTest {
         String proposalV2 = CURRENT_PROPOSAL + "\n- EARLIER-EDIT-SURVIVES: admin threshold raised to 30/hour\n";
         when(repo.readFile(eq("restaurant-base"), anyString())).thenReturn(proposalV1, proposalV2);
 
-        PoAgent agent = new PoAgent(ai, board, repo, new PromptTemplates(profile("restaurant-base")), profile("restaurant-base"));
+        PoAgent agent = poAgent(ai, board, repo);
         WorkItemRef item = new WorkItemRef("local", "4412");
         List<Comment> feedback = List.of(new Comment("c1", "lead@acme", "SquadLead", "story", "line:46",
                 "raise admin limit", Comment.Intent.CHANGE, false, 1));
@@ -384,7 +398,7 @@ class PoAgentTest {
         when(repo.readFile(eq("restaurant-base"), anyString())).thenReturn(CURRENT_PROPOSAL);
         when(board.getItem(new WorkItemRef("local", "4400"))).thenThrow(new RuntimeException("board down"));
 
-        PoAgent agent = new PoAgent(ai, board, repo, new PromptTemplates(profile("restaurant-base")), profile("restaurant-base"));
+        PoAgent agent = poAgent(ai, board, repo);
         WorkItemRef item = new WorkItemRef("local", "4412");
 
         // Optional feature read fails and the legacy grill is null; the valid current-story baseline

@@ -1,5 +1,6 @@
 package ai.pdlc.controlplane.web;
 
+import ai.pdlc.controlplane.config.PortRegistry;
 import ai.pdlc.controlplane.demo.DemoSnapshotRepository;
 import ai.pdlc.controlplane.demo.DemoSnapshotService;
 import ai.pdlc.controlplane.identity.Identity;
@@ -30,10 +31,13 @@ import ai.pdlc.controlplane.web.dto.CommentRequest;
 import ai.pdlc.controlplane.web.dto.GrillAnswerRequest;
 import ai.pdlc.controlplane.web.dto.ItemSummaryDto;
 import ai.pdlc.controlplane.web.dto.QualityReportDto;
+import ai.pdlc.core.config.AgentsConfig;
 import ai.pdlc.core.config.BoardConfig;
 import ai.pdlc.core.config.GateConfig;
-import ai.pdlc.core.config.PdlcConfig;
+import ai.pdlc.core.config.NotifyConfig;
 import ai.pdlc.core.config.Profile;
+import ai.pdlc.core.config.ProjectDirectory;
+import ai.pdlc.core.config.ProjectMeta;
 import ai.pdlc.core.config.RepoConfig;
 import ai.pdlc.core.domain.CanonicalEvent;
 import ai.pdlc.core.domain.CanonicalState;
@@ -160,9 +164,11 @@ class DemoReadOnlyTest {
     private WorkflowStubs liveStubs;
     private RepoPort repo;
     private IdentityResolver identityResolver;
-    private PdlcConfig pdlcConfig;
+    private ProjectDirectory projects;
     private WorkflowClient workflowClient;
     private FeatureWorkflowStarter featureWorkflowStarter;
+    private ai.pdlc.controlplane.temporal.BuildTaskService buildTasks;
+    private ai.pdlc.controlplane.temporal.AgentPresenceService presence;
     private HttpServletRequest httpRequest;
 
     private DemoSnapshotService demoSnapshots;
@@ -248,8 +254,10 @@ class DemoReadOnlyTest {
         snapshotBoard = mock(BoardPort.class);
         liveBoard = mock(BoardPort.class);
         repo = mock(RepoPort.class);
+        buildTasks = mock(ai.pdlc.controlplane.temporal.BuildTaskService.class);
+        presence = mock(ai.pdlc.controlplane.temporal.AgentPresenceService.class);
         identityResolver = mock(IdentityResolver.class);
-        pdlcConfig = mock(PdlcConfig.class);
+        projects = mock(ProjectDirectory.class);
         workflowClient = mock(WorkflowClient.class);
         featureWorkflowStarter = mock(FeatureWorkflowStarter.class);
         httpRequest = mock(HttpServletRequest.class);
@@ -266,12 +274,18 @@ class DemoReadOnlyTest {
         when(liveStubs.featureWorkflow(any())).thenReturn(liveWorkflow);
 
         BoardConfig boardConfig = new BoardConfig("in-memory", "local", "PDLC", Map.of(), Map.of(), null);
-        RepoConfig repoConfig = new RepoConfig("local-git", "/tmp/x", "demo/restaurant-v1", "openspec/changes");
-        Profile profile = new Profile("local", boardConfig, repoConfig, null, null, Map.of(
-                "G1", new GateConfig(List.of("PO", "SquadLead"), true),
-                "G2", new GateConfig(List.of("FSDeveloper", "QA"), true),
-                "G3", new GateConfig(List.of("PO", "SquadLead"), true)));
-        when(pdlcConfig.profile("local")).thenReturn(profile);
+        RepoConfig repoConfig = new RepoConfig("main", "local-git", "/tmp/x", "main", "openspec", List.of(), true);
+        Profile profile = new Profile("local",
+                new ProjectMeta("local", "local", null, List.of(), "", null),
+                boardConfig,
+                List.of(repoConfig),
+                new NotifyConfig("none", "none"),
+                new AgentsConfig("http://stub", null, Map.of()),
+                Map.of(
+                        "G1", new GateConfig(List.of("PO", "SquadLead"), true),
+                        "G2", new GateConfig(List.of("FSDeveloper", "QA"), true),
+                        "G3", new GateConfig(List.of("PO", "SquadLead"), true)));
+        when(projects.project("local")).thenReturn(profile);
         when(identityResolver.resolve(any())).thenReturn(new Identity("po@bistro", "PO"));
 
         WorkItem boardItem = new WorkItem("demo-story", "story", "Snapshot story title", "Snapshot description",
@@ -293,20 +307,23 @@ class DemoReadOnlyTest {
     }
 
     private Controllers buildControllers(WorkflowStubs stubs, BoardPort board) {
-        ReviewTrailService reviewTrail = new ReviewTrailService(pdlcConfig, repo, reviewEvents);
+        PortRegistry ports = mock(PortRegistry.class);
+        when(ports.board("local")).thenReturn(board);
+        when(ports.primaryRepo("local")).thenReturn(repo);
+        when(ports.repo(anyString(), any())).thenReturn(repo);
+
+        ReviewTrailService reviewTrail = new ReviewTrailService(projects, ports, reviewEvents);
         CommentReanchorer reanchorer = new CommentReanchorer();
         IngestedEventStore ingestedEvents = new IngestedEventStore(jdbc);
 
         ItemsController items = new ItemsController(workItems, artifacts, approvals, qualityReports, runs,
-                board, pdlcConfig, stubs, identityResolver, reviewTrail, repo, demoSnapshots);
-        ArtifactsController arts = new ArtifactsController(workItems, artifacts, comments, scenarioReviews, repo, reanchorer,
-                reviewTrail, stubs, identityResolver, workflowClient, pdlcConfig, demoSnapshots);
-        PrController pr = new PrController(workItems, prs, repo, pdlcConfig, stubs, identityResolver, demoSnapshots);
+                ports, projects, stubs, identityResolver, reviewTrail, demoSnapshots, buildTasks, presence);
+        ArtifactsController arts = new ArtifactsController(workItems, artifacts, comments, scenarioReviews, ports, reanchorer,
+                reviewTrail, stubs, identityResolver, workflowClient, projects, demoSnapshots);
+        PrController pr = new PrController(workItems, prs, ports, projects, stubs, identityResolver, demoSnapshots);
         ReleaseController release = new ReleaseController(workItems, releaseDocuments, stubs, identityResolver, demoSnapshots);
-        WebhookController webhook = new WebhookController(board, ingestedEvents, featureWorkflowStarter,
-                workflowClient, new Profile("local", new BoardConfig("in-memory", "local", "PDLC", Map.of(), Map.of(), null),
-                new RepoConfig("local-git", "/tmp/x", "demo/restaurant-v1", "openspec/changes"), null, null, Map.of()),
-                demoSnapshots);
+        WebhookController webhook = new WebhookController(ports, ingestedEvents, featureWorkflowStarter,
+                workflowClient, "local", demoSnapshots);
         return new Controllers(items, arts, pr, release, webhook);
     }
 

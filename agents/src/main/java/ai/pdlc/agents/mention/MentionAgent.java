@@ -1,8 +1,11 @@
 package ai.pdlc.agents.mention;
 
 import ai.pdlc.agents.activities.AgentContext;
+import ai.pdlc.agents.activities.ProjectContext;
+import ai.pdlc.agents.config.PortRegistry;
 import ai.pdlc.agents.templates.PromptTemplates;
 import ai.pdlc.core.config.Profile;
+import ai.pdlc.core.config.ProjectDirectory;
 import ai.pdlc.core.domain.AgentMentionRequest;
 import ai.pdlc.core.port.RepoPort;
 import com.embabel.agent.api.common.Ai;
@@ -41,14 +44,14 @@ public class MentionAgent {
     private final Ai ai;
     private final PromptTemplates templates;
     private final String mentionModel;
-    private final RepoPort repo;
-    private final Profile activeProfile;
+    private final PortRegistry ports;
+    private final ProjectDirectory projects;
 
-    public MentionAgent(Ai ai, PromptTemplates templates, Profile activeProfile, RepoPort repo) {
+    public MentionAgent(Ai ai, PromptTemplates templates, Profile activeProfile, PortRegistry ports, ProjectDirectory projects) {
         this.ai = ai;
         this.templates = templates;
-        this.activeProfile = activeProfile;
-        this.repo = repo;
+        this.ports = ports;
+        this.projects = projects;
         var role = activeProfile.agents().roles().get("mention");
         this.mentionModel = role != null ? role.model() : null;
     }
@@ -57,7 +60,9 @@ public class MentionAgent {
         if (!AGENTS.contains(request.agentName())) {
             throw new IllegalArgumentException("Unknown mention agent: " + request.agentName());
         }
-        String defaultBranch = activeProfile.repo().defaultBranch();
+        Profile project = projects.project(request.profile());
+        RepoPort repo = ports.primaryRepo(request.profile());
+        String defaultBranch = project.repo().defaultBranch();
         String storyMarkdown = AgentContext.readFile(repo, defaultBranch, request.specChangePath() + "/proposal.md");
         String areasConfig = AgentContext.readFile(repo, defaultBranch, "openspec/config.yaml");
 
@@ -66,13 +71,14 @@ public class MentionAgent {
         view.put("target", request.target());
         view.put("storyMarkdown", storyMarkdown == null ? "" : storyMarkdown);
         view.put("areasConfig", areasConfig == null ? "" : areasConfig);
+        view.put("project", ProjectContext.view(project));
 
         if ("dev".equals(request.agentName())) {
             String tasksMd = AgentContext.readFile(repo, defaultBranch, request.specChangePath() + "/tasks.md");
             String buildBranch = "story/" + request.boardId();
             view.put("tasksMd", tasksMd == null ? "" : tasksMd);
             view.put("buildBranch", buildBranch);
-            view.put("codeFiles", loadCodeFiles(areasConfig, buildBranch, defaultBranch));
+            view.put("codeFiles", loadCodeFiles(repo, areasConfig, buildBranch, defaultBranch));
         }
 
         String prompt = templates.render("mention-" + request.agentName(), view);
@@ -80,7 +86,7 @@ public class MentionAgent {
     }
 
     @SuppressWarnings("unchecked")
-    private List<Map<String, String>> loadCodeFiles(String areasConfig, String buildBranch, String defaultBranch) {
+    private List<Map<String, String>> loadCodeFiles(RepoPort repo, String areasConfig, String buildBranch, String defaultBranch) {
         Set<String> paths = new LinkedHashSet<>();
         if (areasConfig != null) {
             try {

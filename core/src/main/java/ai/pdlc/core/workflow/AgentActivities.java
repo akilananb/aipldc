@@ -1,5 +1,6 @@
 package ai.pdlc.core.workflow;
 
+import ai.pdlc.core.config.RepoConfig;
 import ai.pdlc.core.domain.AgentMentionRequest;
 import ai.pdlc.core.domain.Comment;
 import ai.pdlc.core.domain.GrillHandoff;
@@ -7,6 +8,8 @@ import ai.pdlc.core.domain.GrillRound;
 import ai.pdlc.core.domain.MonitorHandoff;
 import ai.pdlc.core.domain.QualityReport;
 import ai.pdlc.core.domain.MonitorRule;
+import ai.pdlc.core.domain.PlanConsultation;
+import ai.pdlc.core.domain.PlanDecision;
 import ai.pdlc.core.domain.PoHandoff;
 import ai.pdlc.core.domain.ReleaseHandoff;
 import ai.pdlc.core.domain.ReviewHandoff;
@@ -84,4 +87,16 @@ public interface AgentActivities {
     /** One-shot LLM analysis for an @-mentioned agent (analyst|architect|qa); returns raw markdown. */
     @ActivityMethod
     String mentionAnalyze(AgentMentionRequest request);
+
+    /** One reasoning step in the bounded plan consultation — {@code ai.pdlc.core.workflow.PlanningLoop}
+     * owns the deterministic control flow; this call only ever returns a {@link PlanDecision}, never
+     * a published plan. {@code storyMarkdown} is the exact approved version (frozen requirements,
+     * never re-interpreted); {@code history} is every prior successful consultation exchange;
+     * {@code feedback} is validation-rejection lines from the previous FINALIZE attempt (empty
+     * otherwise); {@code canConsult} is false once the consultation budget is exhausted — the agent
+     * must FINALIZE from existing evidence or return BLOCKED. */
+    @ActivityMethod
+    PlanDecision planNextStep(WorkItemRef story, PoHandoff po, String storyMarkdown, List<RepoConfig> repos,
+                               List<PlanConsultation.Exchange> history, List<String> feedback,
+                               boolean canConsult);
 }

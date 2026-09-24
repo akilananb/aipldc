@@ -13,6 +13,7 @@ import java.util.List;
  * @param description agent-written markdown brief: what to change, approach found in code, what
  *                     the test asserts
  * @param area        code area (matches a {@link PoHandoff} area)
+ * @param repo        id of the project repo this task touches — {@code ai.pdlc.core.config.RepoConfig#id()}
  * @param scenario    the spec-delta scenario this task proves
  * @param touches     files the build loop may edit; anything else is a scope violation
  * @param testPath    the test file the verifier runs to prove {@code scenario}
@@ -24,6 +25,7 @@ public record Task(
         String title,
         String description,
         String area,
+        String repo,
         String scenario,
         List<String> touches,
         String testPath,

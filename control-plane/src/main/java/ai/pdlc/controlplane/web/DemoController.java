@@ -3,7 +3,6 @@ package ai.pdlc.controlplane.web;
 import ai.pdlc.controlplane.persistence.WorkItemEntity;
 import ai.pdlc.controlplane.persistence.WorkItemRepository;
 import ai.pdlc.controlplane.temporal.FeatureWorkflowStarter;
-import ai.pdlc.core.config.Profile;
 import ai.pdlc.core.domain.WorkItemRef;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
@@ -30,14 +29,15 @@ public class DemoController {
 
     private final WorkItemRepository workItems;
     private final FeatureWorkflowStarter featureWorkflowStarter;
-    private final Profile activeProfile;
+    private final String defaultProjectId;
     private final boolean demoEnabled;
 
-    public DemoController(WorkItemRepository workItems, FeatureWorkflowStarter featureWorkflowStarter, Profile activeProfile,
+    public DemoController(WorkItemRepository workItems, FeatureWorkflowStarter featureWorkflowStarter,
+                           @Value("${pdlc.active-profile}") String defaultProjectId,
                            @Value("${pdlc.demo.enabled:false}") boolean demoEnabled) {
         this.workItems = workItems;
         this.featureWorkflowStarter = featureWorkflowStarter;
-        this.activeProfile = activeProfile;
+        this.defaultProjectId = defaultProjectId;
         this.demoEnabled = demoEnabled;
     }
 
@@ -71,6 +71,6 @@ public class DemoController {
     }
 
     private Optional<WorkItemEntity> findLiveItem() {
-        return workItems.findByProfileAndBoardId(activeProfile.name(), LIVE_BOARD_ID);
+        return workItems.findByProfileAndBoardId(defaultProjectId, LIVE_BOARD_ID);
     }
 }

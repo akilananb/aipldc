@@ -1,14 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useParams, useSearchParams } from 'react-router-dom';
+import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { Check, GitBranch, Sparkles } from 'lucide-react';
+import { AlertTriangle, Check, GitBranch, Sparkles } from 'lucide-react';
 import { Box, Button, Callout, Select, Skeleton, Spinner, Text, Tabs } from '@radix-ui/themes';
 import { api } from '../api';
 import type { CommentIntent } from '../types';
-import { agentRunLabel, extendLineTarget, formatLineTarget, parseLineTarget, parseQualityFindings, parseStoryDoc } from '../ui-utils';
+import { agentRunLabel, extendLineTarget, formatLineTarget, isChildOf, parseLineTarget, parseQualityFindings, parseStoryDoc } from '../ui-utils';
+import RelativeTime from '../components/RelativeTime';
 import { requestCompose } from '../composer';
-import { GATE_ROLES } from '../gates';
+import { useProjectGates } from '../useProject';
 import PageHeader, { MetaItems } from '../components/PageHeader';
+import ProjectMetaLink from '../components/ProjectMetaLink';
 import StatusBadge from '../components/StatusBadge';
 import AgentActivityBadge from '../components/AgentActivityBadge';
 import DemoSnapshotBadge from '../components/DemoSnapshotBadge';
@@ -106,7 +108,7 @@ export default function ReviewPage() {
     enabled: !!item,
     refetchInterval: 2000,
   });
-  const childTasks = (tasksQuery.data ?? []).filter((i) => i.kind === 'task' && i.parentId === item?.boardId);
+  const childTasks = (tasksQuery.data ?? []).filter((i) => i.kind === 'task' && item != null && isChildOf(i, item));
   const graph = useTaskGraph(item?.kind === 'story' ? (id ?? null) : null, childTasks);
   const selectedNode = graph.nodes.find((n) => n.item.id === selectedTaskId) ?? null;
   const clarification = useClarification(item?.kind === 'story' ? item : undefined, 'build');
@@ -147,7 +149,8 @@ export default function ReviewPage() {
   });
 
   const currentComments = artifactQuery.data?.comments ?? [];
-  const actions = useReviewActions(id ?? null, currentComments, item?.gate ?? null);
+  const projectGates = useProjectGates(item?.profile);
+  const actions = useReviewActions(id ?? null, currentComments, item?.gate ?? null, item?.profile);
 
   const qualityQuery = useQuery({
     queryKey: ['quality', id],
@@ -196,20 +199,76 @@ export default function ReviewPage() {
     return <ErrorCallout title="Failed to load item" error={itemQuery.error} />;
   }
   if (!item) return null;
-  if (item.kind === 'task') return <TaskDetailPage item={item} />;
-  if (item.kind === 'feature') return <FeaturePage item={item} />;
-  if (item.kind === 'release' || item.kind === 'bug') return <BoardItemPage item={item} />;
+
+  const failureBanner = item.gate?.lastFailure && (
+    <Callout.Root color="red" mb="4">
+      <Callout.Icon>
+        <AlertTriangle size={15} />
+      </Callout.Icon>
+      <Callout.Text>
+        {item.gate.lastFailure.step} failed: {item.gate.lastFailure.message}
+      </Callout.Text>
+      <Button
+        size="1"
+        variant="solid"
+        color="red"
+        loading={actions.retryStep.isPending}
+        onClick={() => actions.retryStep.mutate()}
+      >
+        Retry
+      </Button>
+    </Callout.Root>
+  );
+
+  const waitBanner = item.agentWork?.phase === 'waiting-for-worker' && item.agentWork.workersOnline === 0 && (
+    <Callout.Root color="amber" mb="4">
+      <Callout.Icon>
+        <AlertTriangle size={15} />
+      </Callout.Icon>
+      <Callout.Text>
+        No build-worker is online — the {item.agentWork.kind} task for this story is waiting.{' '}
+        <Link to="/agents">Run one locally</Link>.
+      </Callout.Text>
+    </Callout.Root>
+  );
+
+  if (item.kind === 'task')
+    return (
+      <>
+        {failureBanner}
+        {waitBanner}
+        <TaskDetailPage item={item} />
+      </>
+    );
+  if (item.kind === 'feature')
+    return (
+      <>
+        {failureBanner}
+        {waitBanner}
+        <FeaturePage item={item} />
+      </>
+    );
+  if (item.kind === 'release' || item.kind === 'bug')
+    return (
+      <>
+        {failureBanner}
+        {waitBanner}
+        <BoardItemPage item={item} />
+      </>
+    );
 
   const rank = currentRank(item);
   const gateStage = item.gate?.stage;
   const gateOwner =
     gateStage === 'awaiting-G1'
-      ? GATE_ROLES.G1.join(' + ')
+      ? (projectGates.roles.G1 ?? []).join(' + ') || '—'
       : gateStage === 'awaiting-G2'
-        ? GATE_ROLES.G2.join(' + ')
+        ? (projectGates.roles.G2 ?? []).join(' + ') || '—'
         : gateStage === 'awaiting-G3'
-          ? GATE_ROLES.G3.join(' + ')
+          ? (projectGates.roles.G3 ?? []).join(' + ') || '—'
           : '—';
+  const parentFeature =
+    item.kind === 'story' ? (tasksQuery.data ?? []).find((i) => i.kind === 'feature' && isChildOf(item, i)) : undefined;
 
   return (
     <Box>
@@ -223,7 +282,21 @@ export default function ReviewPage() {
             {item.snapshot && <DemoSnapshotBadge snapshot={item.snapshot} />}
           </>
         }
-        meta={<MetaItems items={[`Board ${item.boardId}`, `${item.profile} profile`]} />}
+        meta={
+          <MetaItems
+            items={[
+              `Board ${item.boardId}`,
+              <ProjectMetaLink profile={item.profile} />,
+              ...(parentFeature
+                ? [
+                    <>
+                      Feature: <Link to={`/items/${encodeURIComponent(parentFeature.id)}`}>{parentFeature.title}</Link>
+                    </>,
+                  ]
+                : []),
+            ]}
+          />
+        }
         subtitle={stageSubtitle(item)}
         actions={
           <>
@@ -256,6 +329,9 @@ export default function ReviewPage() {
       />
 
       <DeliveryMap item={item} />
+
+      {failureBanner}
+      {waitBanner}
 
       <ReviewBar item={item} actions={actions} onOpenRelease={() => setTab('release')} />
 
@@ -367,13 +443,14 @@ export default function ReviewPage() {
           />
           {artifactQuery.isLoading && <Text color="gray">Loading version…</Text>}
           {artifactQuery.isError && <ErrorCallout title="Failed to load artifact" error={artifactQuery.error} />}
-          {item.activeRun && (
+          {item.activeRun && !item.gate?.lastFailure && (
             <Callout.Root color="cyan" mb="4">
               <Callout.Icon>
                 <Spinner size="1" />
               </Callout.Icon>
               <Callout.Text>
-                {agentRunLabel(item.activeRun)}… the preview refreshes automatically when it finishes.
+                {agentRunLabel(item.activeRun)}… the preview refreshes automatically when it finishes. Running for{' '}
+                <RelativeTime iso={item.activeRun.startedAt} />.
               </Callout.Text>
             </Callout.Root>
           )}

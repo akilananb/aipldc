@@ -1,7 +1,7 @@
 import { getIdentity } from './identity';
-import type { AgentRun, ArtifactVersion, BoardComment, Comment, CommentIntent, DemoStatus, GrillQuestions, ItemDetail, ItemSummary, QualityReport, ReleaseDocument, ScenarioReview, SpecDocs } from './types';
+import type { AgentRun, AgentsStatus, ArtifactVersion, BoardComment, Comment, CommentIntent, DemoStatus, GrillQuestions, ItemDetail, ItemSummary, Project, ProjectRequest, QualityReport, ReleaseDocument, ScenarioReview, SpecDocs } from './types';
 
-const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8081';
+export const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8081';
 
 export class ApiError extends Error {
   constructor(
@@ -122,6 +122,12 @@ export const api = {
     });
   },
 
+  retryStep(id: string): Promise<unknown> {
+    return request<unknown>(`/api/items/${encodeURIComponent(id)}/retry`, {
+      method: 'POST',
+    });
+  },
+
   approveAgentResult(id: string, commentId: string): Promise<void> {
     return request<void>(`/api/artifacts/${encodeURIComponent(id)}/comments/${encodeURIComponent(commentId)}/approve-agent-result`, {
       method: 'POST',
@@ -144,6 +150,19 @@ export const api = {
 
   prRequestChanges(id: string): Promise<unknown> {
     return request<unknown>(`/api/items/${encodeURIComponent(id)}/pr/request-changes`, {
+      method: 'POST',
+    });
+  },
+
+  planApprove(id: string, note: string): Promise<unknown> {
+    return request<unknown>(`/api/items/${encodeURIComponent(id)}/plan/approve`, {
+      method: 'POST',
+      body: JSON.stringify({ note }),
+    });
+  },
+
+  planRequestChanges(id: string): Promise<unknown> {
+    return request<unknown>(`/api/items/${encodeURIComponent(id)}/plan/request-changes`, {
       method: 'POST',
     });
   },
@@ -189,6 +208,31 @@ export const api = {
   proceedGrill(id: string): Promise<void> {
     return request<void>(`/api/items/${encodeURIComponent(id)}/grill/proceed`, {
       method: 'POST',
+    });
+  },
+
+  listAgents(): Promise<AgentsStatus> {
+    return request<AgentsStatus>('/api/agents');
+  },
+
+  listProjects(): Promise<Project[]> {
+    return request<Project[]>('/api/projects');
+  },
+
+  getProject(id: string): Promise<Project> {
+    return request<Project>(`/api/projects/${encodeURIComponent(id)}`);
+  },
+
+  saveProject(id: string, body: ProjectRequest): Promise<Project> {
+    return request<Project>(`/api/projects/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    });
+  },
+
+  deleteProject(id: string): Promise<void> {
+    return request<void>(`/api/projects/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
     });
   },
 };

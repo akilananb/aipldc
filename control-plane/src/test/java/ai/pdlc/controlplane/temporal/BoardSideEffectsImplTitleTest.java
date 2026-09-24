@@ -77,7 +77,7 @@ class BoardSideEffectsImplTitleTest {
 
     @Test
     void taskTitleOrDefaultPassesThroughANonBlankTitle() {
-        Task task = new Task("T1", "Rate limit on /export", "brief", "orders", "export-under-limit",
+        Task task = new Task("T1", "Rate limit on /export", "brief", "orders", "main", "export-under-limit",
                 List.of("orders-service/export"), "orders-service/export.spec.ts",
                 new Task.TaskBudget(6, 120_000L, Duration.ofMinutes(10)), List.of());
 
@@ -86,7 +86,7 @@ class BoardSideEffectsImplTitleTest {
 
     @Test
     void taskTitleOrDefaultFallsBackToTaskIdWhenTitleIsBlank() {
-        Task task = new Task("T1", "   ", "brief", "orders", "export-under-limit",
+        Task task = new Task("T1", "   ", "brief", "orders", "main", "export-under-limit",
                 List.of("orders-service/export"), "orders-service/export.spec.ts",
                 new Task.TaskBudget(6, 120_000L, Duration.ofMinutes(10)), List.of());
 
@@ -97,7 +97,7 @@ class BoardSideEffectsImplTitleTest {
     void taskTitleOrDefaultIgnoresABlankScenarioWhenTitleIsNonBlank() {
         // The title is agent-written and independent of the scenario name, so a blank scenario
         // (a separate plan-validation concern, not this guard's) never triggers the fallback.
-        Task task = new Task("T1", "Rate limit on /export", "brief", "orders", "  ",
+        Task task = new Task("T1", "Rate limit on /export", "brief", "orders", "main", "  ",
                 List.of("orders-service/export"), "orders-service/export.spec.ts",
                 new Task.TaskBudget(6, 120_000L, Duration.ofMinutes(10)), List.of());
 

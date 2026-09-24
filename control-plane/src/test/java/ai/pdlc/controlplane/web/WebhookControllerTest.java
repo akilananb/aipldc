@@ -1,14 +1,9 @@
 package ai.pdlc.controlplane.web;
 
 import ai.pdlc.adapters.inmemory.InMemoryBoardAdapter;
+import ai.pdlc.controlplane.config.PortRegistry;
 import ai.pdlc.controlplane.persistence.IngestedEventStore;
 import ai.pdlc.controlplane.temporal.FeatureWorkflowStarter;
-import ai.pdlc.core.config.AgentsConfig;
-import ai.pdlc.core.config.BoardConfig;
-import ai.pdlc.core.config.GateConfig;
-import ai.pdlc.core.config.NotifyConfig;
-import ai.pdlc.core.config.Profile;
-import ai.pdlc.core.config.RepoConfig;
 import ai.pdlc.core.domain.Approval;
 import ai.pdlc.core.domain.Comment;
 import ai.pdlc.core.domain.WorkItemRef;
@@ -69,7 +64,7 @@ class WebhookControllerTest {
 
         @Override
         public ReviewState state() {
-            return new ReviewState(1, Map.of(), List.of(), ai.pdlc.core.domain.CanonicalState.NEW, null);
+            return new ReviewState(1, Map.of(), List.of(), ai.pdlc.core.domain.CanonicalState.NEW, null, null);
         }
 
         @Override
@@ -82,6 +77,10 @@ class WebhookControllerTest {
         }
 
         @Override
+        public void retryStep(String by) {
+        }
+
+        @Override
         public int grillRounds() {
             return 0;
         }
@@ -91,14 +90,10 @@ class WebhookControllerTest {
         JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
         when(jdbcTemplate.update(anyString(), any(Object[].class))).thenReturn(1);
         IngestedEventStore store = new IngestedEventStore(jdbcTemplate);
-        Profile profile = new Profile("local",
-                new BoardConfig("in-memory", "local", "PDLC", Map.of(), Map.of(), new BoardConfig.AuthConfig("none", "kv://none")),
-                new RepoConfig("in-memory", "local://x", "main", "openspec"),
-                new NotifyConfig("none", "none"),
-                new AgentsConfig("http://stub", null, Map.of()),
-                Map.of("G1", new GateConfig(List.of("PO", "SquadLead"), true)));
+        PortRegistry ports = mock(PortRegistry.class);
+        when(ports.board("local")).thenReturn(board);
         ai.pdlc.controlplane.demo.DemoSnapshotService demoSnapshots = mock(ai.pdlc.controlplane.demo.DemoSnapshotService.class);
-        return new WebhookController(board, store, new FeatureWorkflowStarter(client), client, profile, demoSnapshots);
+        return new WebhookController(ports, store, new FeatureWorkflowStarter(client), client, "local", demoSnapshots);
     }
 
     @AfterEach
@@ -139,14 +134,10 @@ class WebhookControllerTest {
         // First call "new" (1 row inserted), second call "duplicate" (0 rows - ON CONFLICT DO NOTHING).
         when(jdbcTemplate.update(anyString(), any(Object[].class))).thenReturn(1).thenReturn(0);
         IngestedEventStore store = new IngestedEventStore(jdbcTemplate);
-        Profile profile = new Profile("local",
-                new BoardConfig("in-memory", "local", "PDLC", Map.of(), Map.of(), new BoardConfig.AuthConfig("none", "kv://none")),
-                new RepoConfig("in-memory", "local://x", "main", "openspec"),
-                new NotifyConfig("none", "none"),
-                new AgentsConfig("http://stub", null, Map.of()),
-                Map.of("G1", new GateConfig(List.of("PO", "SquadLead"), true)));
-        WebhookController controller = new WebhookController(board, store, new FeatureWorkflowStarter(testEnv.getWorkflowClient()),
-                testEnv.getWorkflowClient(), profile, mock(ai.pdlc.controlplane.demo.DemoSnapshotService.class));
+        PortRegistry ports = mock(PortRegistry.class);
+        when(ports.board("local")).thenReturn(board);
+        WebhookController controller = new WebhookController(ports, store, new FeatureWorkflowStarter(testEnv.getWorkflowClient()),
+                testEnv.getWorkflowClient(), "local", mock(ai.pdlc.controlplane.demo.DemoSnapshotService.class));
 
         var first = controller.local(Map.of("kind", "item.created", "boardId", "4413", "rev", 1,
                 "itemKind", "feature", "title", "Second feature"));

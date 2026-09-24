@@ -1,15 +1,17 @@
 package ai.pdlc.controlplane.temporal;
 
-import ai.pdlc.controlplane.web.dto.PlanResultRequest;
-import ai.pdlc.controlplane.web.dto.PlanResultRequest.PlannedTask;
+import ai.pdlc.controlplane.web.dto.PlanConsultationResultRequest;
+import ai.pdlc.controlplane.web.dto.PlanConsultationResultRequest.FileEvidenceRequest;
 import ai.pdlc.core.config.AgentsConfig;
 import ai.pdlc.core.config.BoardConfig;
 import ai.pdlc.core.config.NotifyConfig;
 import ai.pdlc.core.config.Profile;
+import ai.pdlc.core.config.ProjectDirectory;
+import ai.pdlc.core.config.ProjectMeta;
 import ai.pdlc.core.config.RepoConfig;
 import ai.pdlc.core.domain.CanonicalState;
 import ai.pdlc.core.domain.Handoff;
-import ai.pdlc.core.domain.PlanResult;
+import ai.pdlc.core.domain.PlanConsultation;
 import ai.pdlc.core.domain.PoHandoff;
 import ai.pdlc.core.domain.Task;
 import ai.pdlc.core.domain.VerifierResult;
@@ -102,13 +104,16 @@ class BuildTaskAsyncCompletionTest {
 
         ActivityCompletionClient completionClient = testEnv.getWorkflowClient().newActivityCompletionClient();
         BuildTaskService service = new BuildTaskService(jdbcTemplate, completionClient);
-        Profile activeProfile = new Profile("local",
+        ProjectDirectory projects = mock(ProjectDirectory.class);
+        Profile profile = new Profile("local",
+                new ProjectMeta("local", "local", null, List.of(), "", null),
                 new BoardConfig("in-memory", "local", "PDLC", Map.of(), Map.of(), new BoardConfig.AuthConfig("none", "kv://none")),
-                new RepoConfig("git", "https://example.test/orders-service.git", "main", "openspec"),
+                List.of(new RepoConfig("orders-service", "git", "https://example.test/orders-service.git", "main", "openspec", List.of(), true)),
                 new NotifyConfig("none", "none"),
                 new AgentsConfig("http://stub", null, Map.of()),
                 Map.of());
-        BuildActivitiesImpl buildActivities = new BuildActivitiesImpl(service, activeProfile);
+        when(projects.project("local")).thenReturn(profile);
+        BuildActivitiesImpl buildActivities = new BuildActivitiesImpl(service, projects);
 
         Worker buildWorker = testEnv.newWorker(TaskQueues.BUILD);
         buildWorker.registerActivitiesImplementations(buildActivities);
@@ -123,7 +128,7 @@ class BuildTaskAsyncCompletionTest {
         TestBuildWorkflow stub = client.newWorkflowStub(TestBuildWorkflow.class, options);
 
         WorkItemRef story = new WorkItemRef("local", "4414");
-        Task task = new Task("T1", "Add CSV export", "brief", "orders", "export-csv", List.of("src/export.js"),
+        Task task = new Task("T1", "Add CSV export", "brief", "orders", "orders-service", "export-csv", List.of("src/export.js"),
                 "test/export.test.js", new Task.TaskBudget(5, 20_000L, Duration.ofMinutes(10)), List.of());
         WorkflowClient.start(stub::run, story, task, "story/4414", "main");
 
@@ -161,7 +166,7 @@ class BuildTaskAsyncCompletionTest {
     @WorkflowInterface
     public interface TestPlanWorkflow {
         @WorkflowMethod
-        PlanResult run(WorkItemRef story, PoHandoff po);
+        PlanConsultation.Report run(WorkItemRef story, PoHandoff po, PlanConsultation consultation);
     }
 
     public static class TestPlanWorkflowImpl implements TestPlanWorkflow {
@@ -174,13 +179,13 @@ class BuildTaskAsyncCompletionTest {
         private final BuildActivities build = Workflow.newActivityStub(BuildActivities.class, PLAN_ACTIVITY_OPTIONS);
 
         @Override
-        public PlanResult run(WorkItemRef story, PoHandoff po) {
-            return build.planTasks(story, po);
+        public PlanConsultation.Report run(WorkItemRef story, PoHandoff po, PlanConsultation consultation) {
+            return build.consultPlan(story, po, consultation);
         }
     }
 
     @Test
-    void parkedPlanActivityCompletesWithThePostedPlan() throws Exception {
+    void parkedPlanActivityCompletesWithThePostedConsultationReport() throws Exception {
         testEnv = TestWorkflowEnvironment.newInstance();
 
         Worker reasoningWorker = testEnv.newWorker(TaskQueues.REASONING);
@@ -192,13 +197,16 @@ class BuildTaskAsyncCompletionTest {
 
         ActivityCompletionClient completionClient = testEnv.getWorkflowClient().newActivityCompletionClient();
         BuildTaskService service = new BuildTaskService(jdbcTemplate, completionClient);
-        Profile activeProfile = new Profile("local",
+        ProjectDirectory projects = mock(ProjectDirectory.class);
+        Profile profile = new Profile("local",
+                new ProjectMeta("local", "local", null, List.of(), "", null),
                 new BoardConfig("in-memory", "local", "PDLC", Map.of(), Map.of(), new BoardConfig.AuthConfig("none", "kv://none")),
-                new RepoConfig("git", "https://example.test/orders-service.git", "main", "openspec"),
+                List.of(new RepoConfig("orders-service", "git", "https://example.test/orders-service.git", "main", "openspec", List.of(), true)),
                 new NotifyConfig("none", "none"),
                 new AgentsConfig("http://stub", null, Map.of()),
                 Map.of());
-        BuildActivitiesImpl buildActivities = new BuildActivitiesImpl(service, activeProfile);
+        when(projects.project("local")).thenReturn(profile);
+        BuildActivitiesImpl buildActivities = new BuildActivitiesImpl(service, projects);
 
         Worker buildWorker = testEnv.newWorker(TaskQueues.BUILD);
         buildWorker.registerActivitiesImplementations(buildActivities);
@@ -217,12 +225,15 @@ class BuildTaskAsyncCompletionTest {
                 new Handoff("po-agent", "gate-1", "4415", CanonicalState.READY_FOR_STORY, List.of(), 0.9, List.of(), List.of()),
                 "4400", "openspec/changes/export-orders-csv", List.of("a", "b"), Map.of(), List.of("orders"),
                 Map.of(), List.of(), Map.of());
-        WorkflowClient.start(stub::run, story, po);
+        PlanConsultation consultation = new PlanConsultation(1, "orders-service",
+                List.of("Where is export implemented and what test proves it?"),
+                List.of("src/export.js", "test/export.test.js"), "", List.of());
+        WorkflowClient.start(stub::run, story, po, consultation);
 
         WorkflowStub untyped = WorkflowStub.fromTyped(stub);
 
-        // workflow does not complete while the plan row is parked.
-        assertThatThrownBy(() -> untyped.getResult(2, TimeUnit.SECONDS, PlanResult.class))
+        // workflow does not complete while the plan consultation row is parked.
+        assertThatThrownBy(() -> untyped.getResult(2, TimeUnit.SECONDS, PlanConsultation.Report.class))
                 .isInstanceOf(TimeoutException.class);
 
         // Grab the plan enqueue INSERT's payload_json/task_token (task_id 'plan' is arg index 2).
@@ -232,14 +243,18 @@ class BuildTaskAsyncCompletionTest {
                 .orElseThrow(() -> new AssertionError("enqueuePlan INSERT was never captured"));
         String payloadJson = (String) insertArgs[4];
         String base64Token = (String) insertArgs[5];
+        assertThat(payloadJson).contains("\"kind\":\"plan\"").contains("\"consultation\"");
 
-        // completePlan re-reads the row (state/task_token) and the stored payload (for po.scenarios).
+        // completePlan re-reads the row (state/task_token) and the stored payload (for the
+        // requested consultation's baseCommit/paths).
         UUID rowId = UUID.randomUUID();
+        String leaseToken = UUID.randomUUID().toString();
         ResultSet fakeRs = mock(ResultSet.class);
         when(fakeRs.getString("id")).thenReturn(rowId.toString());
         when(fakeRs.getString("state")).thenReturn("claimed");
         when(fakeRs.getString("task_token")).thenReturn(base64Token);
         when(fakeRs.getString("claimed_by")).thenReturn("test-agent");
+        when(fakeRs.getString("lease_token")).thenReturn(leaseToken);
         when(jdbcTemplate.query(anyString(), any(RowMapper.class), any()))
                 .thenAnswer(invocation -> {
                     RowMapper<?> mapper = invocation.getArgument(1);
@@ -247,23 +262,41 @@ class BuildTaskAsyncCompletionTest {
                 });
         when(jdbcTemplate.queryForObject(anyString(), eq(String.class), any())).thenReturn(payloadJson);
 
-        PlannedTask t1 = new PlannedTask("T1", "Rate limit on /export", "brief", "orders", "a",
-                List.of("src/export.js"), "test/export.test.js", List.of());
-        PlannedTask t2 = new PlannedTask("T2", "Second export guard", "brief2", "orders", "b",
-                List.of("src/export.js"), "test/export.test.js", List.of());
+        String sha = "a".repeat(40);
+        PlanConsultationResultRequest request = new PlanConsultationResultRequest(sha,
+                "src/export.js has the handler; test/export.test.js already exists.",
+                List.of(new FileEvidenceRequest("src/export.js", true), new FileEvidenceRequest("test/export.test.js", true)));
 
-        PlanResult result = service.completePlan(rowId, new PlanResultRequest(List.of(t1, t2), List.of()));
+        PlanConsultation.Report result = service.completePlan(rowId, leaseToken, request);
 
-        assertThat(result.plan().waves()).containsExactly(List.of("T1"), List.of("T2"));
-        assertThat(result.checksByTaskId().get("T2").reportMd())
-                .contains("blocked by: none")
-                .contains("src/export.js (exists)");
+        assertThat(result.baseCommit()).isEqualTo(sha);
+        assertThat(result.findingsMarkdown()).contains("src/export.js has the handler");
+        assertThat(result.files()).hasSize(2);
 
-        PlanResult actual = untyped.getResult(5, TimeUnit.SECONDS, PlanResult.class);
+        PlanConsultation.Report actual = untyped.getResult(5, TimeUnit.SECONDS, PlanConsultation.Report.class);
         assertThat(actual).isEqualTo(result);
 
-        assertThatThrownBy(() -> service.completePlan(rowId, new PlanResultRequest(List.of(t1), List.of())))
+        assertThatThrownBy(() -> service.completePlan(rowId, leaseToken, new PlanConsultationResultRequest(sha, "findings",
+                List.of(new FileEvidenceRequest("src/export.js", true)))))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("coverage: scenario");
+                .hasMessageContaining("missing requested path in report: test/export.test.js");
+
+        assertThatThrownBy(() -> service.completePlan(rowId, leaseToken, new PlanConsultationResultRequest("not-a-sha", "findings",
+                List.of(new FileEvidenceRequest("src/export.js", true), new FileEvidenceRequest("test/export.test.js", true)))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("baseCommit must be a full hexadecimal git SHA");
+
+        assertThatThrownBy(() -> service.completePlan(rowId, leaseToken, new PlanConsultationResultRequest(sha, "  ",
+                List.of(new FileEvidenceRequest("src/export.js", true), new FileEvidenceRequest("test/export.test.js", true)))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("findingsMarkdown must be non-blank");
+
+        assertThatThrownBy(() -> service.completePlan(rowId, leaseToken, new PlanConsultationResultRequest(sha, "findings",
+                List.of(new FileEvidenceRequest("src/export.js", null), new FileEvidenceRequest("test/export.test.js", true)))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("exists flag is required");
+
+        assertThatThrownBy(() -> service.completePlan(rowId, "other-token", request))
+                .isInstanceOf(BuildTaskGoneException.class);
     }
 }

@@ -1,6 +1,7 @@
 package ai.pdlc.controlplane.demo;
 
 import ai.pdlc.adapters.localgit.LocalGitRepoAdapter;
+import ai.pdlc.controlplane.config.PortRegistry;
 import ai.pdlc.controlplane.persistence.ApprovalRepository;
 import ai.pdlc.controlplane.persistence.ArtifactEntity;
 import ai.pdlc.controlplane.persistence.ArtifactRepository;
@@ -16,6 +17,8 @@ import ai.pdlc.core.config.AgentsConfig;
 import ai.pdlc.core.config.BoardConfig;
 import ai.pdlc.core.config.NotifyConfig;
 import ai.pdlc.core.config.Profile;
+import ai.pdlc.core.config.ProjectDirectory;
+import ai.pdlc.core.config.ProjectMeta;
 import ai.pdlc.core.config.RepoConfig;
 import ai.pdlc.core.domain.Anchor;
 import ai.pdlc.core.domain.CanonicalState;
@@ -54,6 +57,8 @@ import java.util.stream.StreamSupport;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 /**
  * Integration test for {@link DemoInitializer}'s crash-recovery, idempotency and
@@ -245,14 +250,19 @@ class DemoInitializerIntegrationTest {
 
     private DemoInitializer newInitializer(RepoPort repo, String profileName) {
         Profile profile = new Profile(profileName,
+                new ProjectMeta(profileName, profileName, null, List.of(), "", null),
                 new BoardConfig("local-jdbc", "org", "project", Map.of(), Map.of(), null),
-                new RepoConfig("local-git", "test-repo-path", "main", "openspec"),
+                List.of(new RepoConfig("main", "local-git", "test-repo-path", "main", "openspec", List.of(), true)),
                 new NotifyConfig("none", null),
                 new AgentsConfig(null, null, Map.of()),
                 Map.of());
+        ProjectDirectory projects = mock(ProjectDirectory.class);
+        when(projects.project(profileName)).thenReturn(profile);
+        PortRegistry ports = mock(PortRegistry.class);
+        when(ports.primaryRepo(profileName)).thenReturn(repo);
         return new DemoInitializer(dataSource, txManager, jdbc, aggregateTemplate,
                 workItems, artifacts, comments, approvals, qualityReports, releaseDocuments, reviewEvents,
-                repo, profile);
+                ports, projects, profileName);
     }
 
     private int demoSeedsCount() {

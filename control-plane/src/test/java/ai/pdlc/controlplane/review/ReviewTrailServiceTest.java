@@ -1,6 +1,13 @@
 package ai.pdlc.controlplane.review;
 
-import ai.pdlc.core.config.PdlcConfig;
+import ai.pdlc.controlplane.config.PortRegistry;
+import ai.pdlc.core.config.AgentsConfig;
+import ai.pdlc.core.config.BoardConfig;
+import ai.pdlc.core.config.NotifyConfig;
+import ai.pdlc.core.config.Profile;
+import ai.pdlc.core.config.ProjectDirectory;
+import ai.pdlc.core.config.ProjectMeta;
+import ai.pdlc.core.config.RepoConfig;
 import ai.pdlc.core.domain.CanonicalEvent;
 import ai.pdlc.core.domain.CommitRef;
 import ai.pdlc.core.domain.Diff;
@@ -10,30 +17,38 @@ import ai.pdlc.core.domain.WorkItemRef;
 import ai.pdlc.core.port.RepoPort;
 import org.junit.jupiter.api.Test;
 
-import java.io.ByteArrayInputStream;
-import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 /** {@link ReviewTrailService#appendReviewMd} must retry a concurrent-writer conflict (two threads
  * racing to update {@code review.md} on the same branch - e.g. a human's REST approve call and the
  * workflow's own gate-passed transition), not lose the block or fail the caller's request. */
 class ReviewTrailServiceTest {
 
-    private static final PdlcConfig CONFIG = PdlcConfig.load(new ByteArrayInputStream("""
-            profiles:
-              local:
-                board: { provider: in-memory, org: local, project: PDLC, types: {}, states: {}, auth: { kind: none, secret_ref: kv://none } }
-                repo: { provider: local-git, url: /tmp/x, default_branch: main, spec_dir: openspec }
-                notify: { provider: none, channel: none }
-                agents: { gateway: http://x, roles: {} }
-                gates: { G1: { roles: [], sod: false } }
-            """.getBytes(StandardCharsets.UTF_8)));
+    private static final Profile PROFILE = new Profile(
+            "local",
+            new ProjectMeta("local", "local", null, List.of(), "", null),
+            new BoardConfig("in-memory", "local", "PDLC", Map.of(), Map.of(), new BoardConfig.AuthConfig("none", "kv://none")),
+            List.of(new RepoConfig("main", "local-git", "/tmp/x", "main", "openspec", List.of(), true)),
+            new NotifyConfig("none", "none"),
+            new AgentsConfig("http://x", null, Map.of()),
+            Map.of());
 
     private static final WorkItemRef STORY = new WorkItemRef("local", "4413");
+
+    private static ReviewTrailService newService(RepoPort repo) {
+        ProjectDirectory projects = mock(ProjectDirectory.class);
+        when(projects.project("local")).thenReturn(PROFILE);
+        PortRegistry ports = mock(PortRegistry.class);
+        when(ports.primaryRepo("local")).thenReturn(repo);
+        return new ReviewTrailService(projects, ports, null);
+    }
 
     /** In-memory fake standing in for LocalGitRepoAdapter's optimistic-concurrency CAS: the Nth
      * write (1-indexed) throws a conflict; every other write reads/writes a single in-memory file. */
@@ -98,7 +113,7 @@ class ReviewTrailServiceTest {
     void retriesOnceOnAConflictAndStillWritesTheBlock() {
         ConflictingRepo repo = new ConflictingRepo();
         repo.failOnAttempt = 1; // first attempt loses the race, second (after re-read) succeeds
-        ReviewTrailService service = new ReviewTrailService(CONFIG, repo, null);
+        ReviewTrailService service = newService(repo);
 
         service.appendReviewMd(STORY, "openspec/changes/x", "\nblock-a\n");
 
@@ -109,7 +124,7 @@ class ReviewTrailServiceTest {
     @Test
     void aLoserReReadsSoBothBlocksSurviveTheRace() {
         ConflictingRepo repo = new ConflictingRepo();
-        ReviewTrailService service = new ReviewTrailService(CONFIG, repo, null);
+        ReviewTrailService service = newService(repo);
 
         // Simulates the winner writing first (as if from a concurrent thread), then the loser's
         // retry re-reading that content before appending its own block.
@@ -129,7 +144,7 @@ class ReviewTrailServiceTest {
                 throw new RuntimeException("git update-ref refs/heads/main failed (128): cannot lock ref");
             }
         };
-        ReviewTrailService service = new ReviewTrailService(CONFIG, repo, null);
+        ReviewTrailService service = newService(repo);
 
         assertThatThrownBy(() -> service.appendReviewMd(STORY, "openspec/changes/x", "\nblock-a\n"))
                 .isInstanceOf(RuntimeException.class)

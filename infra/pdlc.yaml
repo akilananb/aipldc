@@ -19,11 +19,19 @@ profiles:
         done: done
         stale: stale
       auth: { kind: none, secret_ref: kv://none }
-    repo:
-      provider: local-git                # real git CLI adapter; anything other than github/local-git resolves to InMemoryRepoAdapter
-      url: /Users/work/Documents/restaurant-runtime
-      default_branch: restaurant-base
-      spec_dir: openspec
+    repos:
+      - id: restaurant-runtime
+        provider: local-git             # real git CLI adapter; anything other than github/local-git resolves to InMemoryRepoAdapter
+        url: /Users/work/Documents/restaurant-runtime
+        default_branch: restaurant-base
+        spec_dir: openspec
+        areas: [orders]
+        primary: true
+    project:
+      name: "Restaurant runtime"
+      confluence_url: ""
+      docs: []
+      brief: ""
     notify:
       provider: none
       channel: none
@@ -40,10 +48,12 @@ profiles:
         release: { model: sonnet, budget_tokens: 30000 }
         mention: { model: sonnet, budget_tokens: 20000 }
         quality: { model: sonnet, budget_tokens: 20000 }
+        plan: { model: sonnet, budget_tokens: 40000 }
     gates:
       G1: { roles: [PO, SquadLead], sod: true }
       G2: { roles: [FSDeveloper, QA], sod: true }
       G3: { roles: [PO, SquadLead, QA], sod: true }
+      PLAN: { roles: [SquadLead], sod: true }
 
   ado-pilot:
     board:
@@ -65,11 +75,19 @@ profiles:
         done: Closed
         stale: New
       auth: { kind: pat, secret_ref: kv://ado-pat }
-    repo:
-      provider: github
-      url: https://github.com/acme/orders-service
-      default_branch: main
-      spec_dir: openspec
+    repos:
+      - id: orders-service
+        provider: github
+        url: https://github.com/acme/orders-service
+        default_branch: main
+        spec_dir: openspec
+        areas: []
+        primary: true
+    project:
+      name: "Payments"
+      confluence_url: "https://acme.atlassian.net/wiki/spaces/PAY"
+      docs: []
+      brief: ""
     notify:
       provider: none
       channel: none
@@ -86,7 +104,9 @@ profiles:
         release: { model: anthropic/claude-sonnet, budget_tokens: 30000 }
         mention: { model: anthropic/claude-sonnet, budget_tokens: 20000 }
         quality: { model: anthropic/claude-sonnet, budget_tokens: 20000 }
+        plan: { model: anthropic/claude-sonnet, budget_tokens: 40000 }
     gates:
       G1: { roles: [PO, SquadLead], sod: true }
       G2: { roles: [FSDeveloper, QA], sod: true }
       G3: { roles: [PO, SquadLead, QA], sod: true }
+      PLAN: { roles: [SquadLead], sod: true }

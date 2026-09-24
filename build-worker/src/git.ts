@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import path from 'node:path';
 import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
@@ -28,13 +29,49 @@ export async function branchExists(repoPath: string, branch: string): Promise<bo
 
 /** Adds a worktree at `worktreePath` on `branch`, creating the branch off `baseBranch` if it does
  * not exist yet (the first task in a story's build loop) or checking it out as-is (later tasks
- * continuing the same shared branch). */
+ * continuing the same shared branch). On the existing-branch path, first clears out any
+ * `pdlc-task-*` worktree a crashed prior attempt left holding `branch` (see {@link
+ * removeOrphanedTaskWorktrees}) - the server hands a story to only one live claim at a time, so
+ * such a worktree is always an orphan, never a second legitimate holder. */
 export async function addWorktree(repoPath: string, worktreePath: string, branch: string, baseBranch: string): Promise<void> {
   if (await branchExists(repoPath, branch)) {
+    await removeOrphanedTaskWorktrees(repoPath, branch);
     await git(repoPath, ['worktree', 'add', worktreePath, branch]);
   } else {
     await git(repoPath, ['worktree', 'add', '-b', branch, worktreePath, baseBranch]);
   }
+}
+
+/** Removes linked worktrees on `branch` left behind by a crashed build-worker attempt (the
+ * server only hands a story to one live claim at a time, so any `pdlc-task-*` worktree still
+ * holding the branch is an orphan). Never touches the main worktree or a worktree whose
+ * directory basename does not start with `pdlc-task-` (a developer's manual checkout keeps
+ * failing `worktree add` loudly, as before). Uncommitted work in a removed worktree is
+ * intentionally discarded - commits only land in `finalizeBuild`, so the branch's committed
+ * history is the correct resume point for whoever reclaims the task. Plan worktrees
+ * (`pdlc-plan-*`/`pdlc-assist-plan-*`) are detached and never hold a branch, so they never
+ * match here. */
+export async function removeOrphanedTaskWorktrees(repoPath: string, branch: string): Promise<void> {
+  let listing: string;
+  try {
+    listing = await git(repoPath, ['worktree', 'list', '--porcelain']);
+  } catch {
+    return;
+  }
+  for (const block of listing.split(/\n\n+/)) {
+    const lines = block.split('\n');
+    const worktreeLine = lines.find((l) => l.startsWith('worktree '));
+    const branchLine = lines.find((l) => l.startsWith('branch '));
+    if (!worktreeLine || branchLine !== `branch refs/heads/${branch}`) {
+      continue;
+    }
+    const orphanPath = worktreeLine.slice('worktree '.length);
+    if (!path.basename(orphanPath).startsWith('pdlc-task-')) {
+      continue;
+    }
+    await git(repoPath, ['worktree', 'remove', '--force', orphanPath]).catch(() => undefined);
+  }
+  await git(repoPath, ['worktree', 'prune']).catch(() => undefined);
 }
 
 /** Adds a read-only detached worktree at `worktreePath` on `ref` - used by the plan step, which
@@ -94,6 +131,12 @@ export async function commitAll(worktreePath: string, message: string): Promise<
 
 export async function revParse(repoPath: string, ref: string): Promise<string> {
   return (await git(repoPath, ['rev-parse', ref])).trim();
+}
+
+/** Current branch name for presence reporting (worker.ts#describePresence) - a detached HEAD
+ * (e.g. mid-worktree-add elsewhere in the same repo) resolves to the literal string `HEAD`. */
+export async function currentBranch(repoPath: string): Promise<string> {
+  return (await git(repoPath, ['rev-parse', '--abbrev-ref', 'HEAD'])).trim();
 }
 
 export function basicAuthHeader(token: string): string {

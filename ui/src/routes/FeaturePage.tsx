@@ -5,8 +5,9 @@ import { FileQuestion, MessageSquare } from 'lucide-react';
 import { Avatar, Badge, Box, Card, Flex, Tabs, Text } from '@radix-ui/themes';
 import { api } from '../api';
 import type { ItemDetail } from '../types';
-import { intentBadgeColor } from '../ui-utils';
+import { intentBadgeColor, isChildOf } from '../ui-utils';
 import PageHeader, { MetaItems } from '../components/PageHeader';
+import ProjectMetaLink from '../components/ProjectMetaLink';
 import StatusBadge from '../components/StatusBadge';
 import AgentActivityBadge from '../components/AgentActivityBadge';
 import DemoSnapshotBadge from '../components/DemoSnapshotBadge';
@@ -43,7 +44,7 @@ export default function FeaturePage({ item }: Props) {
     queryFn: api.listItems,
     refetchInterval: 5000,
   });
-  const stories = (itemsQuery.data ?? []).filter((i) => i.kind === 'story' && i.parentId === item.boardId);
+  const stories = (itemsQuery.data ?? []).filter((i) => i.kind === 'story' && isChildOf(i, item));
 
   const boardCommentsQuery = useQuery({
     queryKey: ['board-comments', item.id],
@@ -64,7 +65,7 @@ export default function FeaturePage({ item }: Props) {
             {item.snapshot && <DemoSnapshotBadge snapshot={item.snapshot} />}
           </>
         }
-        meta={<MetaItems items={[`Board ${item.boardId}`, `${item.profile} profile`]} />}
+        meta={<MetaItems items={[`Board ${item.boardId}`, <ProjectMetaLink profile={item.profile} />]} />}
         subtitle={stageSubtitle(item)}
       />
 

@@ -26,13 +26,15 @@ export interface AssistBrief {
   /** Markdown injected into the session on `session_start` - the same prompt text the autonomous
    * ACP path would have sent (see assist.ts). */
   briefing: string;
-  /** Plan only: absolute path of the compiled, dependency-free `planValidator.js`, so the
-   * extension can import `validatePlan` without duplicating its rules or pulling in `acp.ts`'s
-   * `mustache` dependency (unresolvable from inside omp's extension-loading context). */
-  planValidatorModule?: string;
-  /** Plan only: the story's scenario list, passed to `validatePlan`. */
-  scenarios?: string[];
-  /** Plan only: repo-relative path the agent must write, e.g. `.pdlc/plan.json`. */
+  /** Plan only: absolute path of the compiled, dependency-free `planConsultationValidator.js`,
+   * so the extension can import `validateConsultationOutput` without duplicating its rules or
+   * pulling in `acp.ts`'s `mustache` dependency (unresolvable from inside omp's
+   * extension-loading context). */
+  consultationValidatorModule?: string;
+  /** Plan only: the workflow-level {@code PlanConsultation.round} this claim answers - distinct
+   * from {@link round}, which counts local omp launches within this one claim; display-only. */
+  consultationRound?: number;
+  /** Plan only: repo-relative path the agent must write, e.g. `.pdlc/consultation.json`. */
   outputPath?: string;
   /** Build only: `BuildScope.effectiveTouches`. */
   touches?: string[];

@@ -5,9 +5,9 @@ import org.springframework.stereotype.Component;
 
 /**
  * Pilot identity = dev headers {@code X-User} (OIDC-sub stand-in) and {@code X-Role}
- * ({@code PO|SquadLead|FSDeveloper|QA}); missing headers → 401. OIDC is a later build-order phase;
- * this is the single dev-only auth shim (plan step 7) — swapping in Spring Security OIDC means
- * changing only this class.
+ * ({@code PO|SquadLead|FSDeveloper|QA|Admin}); missing headers → 401. OIDC is a later build-order
+ * phase; this is the single dev-only auth shim (plan step 7) — swapping in Spring Security OIDC
+ * means changing only this class.
  */
 @Component
 public class IdentityResolver {

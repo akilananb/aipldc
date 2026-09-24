@@ -32,10 +32,19 @@ class FeatureWorkflowImplTest {
     private FakeBuildActivities buildActivities;
 
     private FeatureWorkflow start(String boardId) {
+        return start(boardId, a -> { });
+    }
+
+    /** Same as {@link #start(String)} but lets the caller configure {@link #agentActivities}
+     * (e.g. {@code failFirstNRounds}) after construction and before the workflow's first activity
+     * dispatch — {@code testEnv.start()} begins polling immediately, so configuring the fake after
+     * that point races the workflow's first task. */
+    private FeatureWorkflow start(String boardId, java.util.function.Consumer<FakeAgentActivities> configureAgents) {
         testEnv = TestWorkflowEnvironment.newInstance();
         Worker worker = testEnv.newWorker(TaskQueues.REASONING);
         worker.registerWorkflowImplementationTypes(FeatureWorkflowImpl.class);
         agentActivities = new FakeAgentActivities();
+        configureAgents.accept(agentActivities);
         worker.registerActivitiesImplementations(agentActivities);
 
         Worker boardWorker = testEnv.newWorker(TaskQueues.BOARD);
@@ -66,7 +75,13 @@ class FeatureWorkflowImplTest {
     }
 
     private void awaitState(FeatureWorkflow wf, java.util.function.Predicate<ReviewState> condition) throws InterruptedException {
-        long deadline = System.currentTimeMillis() + 5000;
+        awaitState(wf, condition, 5000);
+    }
+
+    /** Longer-deadline variant for assertions that must outlast real-time activity retry backoff
+     * (see {@link #boundedRetryExhaustionBlocksInPlaceAndRetryStepResumesWithoutRestarting}). */
+    private void awaitState(FeatureWorkflow wf, java.util.function.Predicate<ReviewState> condition, long timeoutMillis) throws InterruptedException {
+        long deadline = System.currentTimeMillis() + timeoutMillis;
         while (System.currentTimeMillis() < deadline) {
             if (condition.test(wf.state())) {
                 return;
@@ -100,6 +115,15 @@ class FeatureWorkflowImplTest {
         wf.commentAdded(new BoardCommentEvent(qid + "-confirm", "PO", qid + ": confirm"));
     }
 
+    /** Approves the plan gate (SquadLead, stage {@code plan}) once the story reaches {@code
+     * planned} - every test that drives a story past gate 1 and into the build loop must pass
+     * through here first, now that a SquadLead must approve the task plan before the build loop
+     * starts (mirrors {@link #confirmIntake}'s role as a mandatory pipeline step). */
+    private void approvePlanGate(FeatureWorkflow wf) throws InterruptedException {
+        awaitState(wf, s -> s.stage() == CanonicalState.PLANNED);
+        wf.approve(new Approval("lead@acme", "SquadLead", "plan", wf.state().version(), "hash-plan", Instant.now()));
+    }
+
     @Test
     void fullGate1SequenceDraftCommentRevisionTwoDistinctApprovalsCompletes() throws Exception {
         FeatureWorkflow wf = start("4412");
@@ -125,6 +149,7 @@ class FeatureWorkflowImplTest {
 
         // Gate 1 passing continues straight into plan -> build (omp over ACP, faked here) ->
         // review -> PR -> gate 2, reusing the same approve/comment signal surface.
+        approvePlanGate(wf);
         awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G2);
         assertThat(boardSideEffects.tasksPublished).hasSize(1);
         assertThat(boardSideEffects.qualityReportsSaved).contains("task-T1:1:passed");
@@ -155,6 +180,45 @@ class FeatureWorkflowImplTest {
     }
 
     @Test
+    void planGateHoldsAtPlannedUntilSquadLeadApprovesAndRequestChangesReplans() throws Exception {
+        FeatureWorkflow wf = start("4412-plan-gate");
+        confirmIntake(wf);
+        awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G1);
+        wf.approve(new Approval("po@acme", "PO", "story", 1, "hash-v1", Instant.now()));
+        wf.approve(new Approval("lead@acme", "SquadLead", "story", 1, "hash-v1", Instant.now()));
+
+        awaitState(wf, s -> s.stage() == CanonicalState.PLANNED);
+        assertThat(boardSideEffects.inProgressCalls).isEmpty();
+
+        // A gate-1 role has no standing at the plan gate - PO is not in gates.PLAN.roles.
+        wf.approve(new Approval("po@acme", "PO", "plan", 1, "hash-plan", Instant.now()));
+        Thread.sleep(200);
+        assertThat(wf.state().stage()).isEqualTo(CanonicalState.PLANNED);
+        assertThat(wf.state().approvals()).isEmpty();
+
+        wf.comment(new Comment("c1", "lead@acme", "SquadLead", "plan", null,
+                "split T1", Comment.Intent.CHANGE, false, 1));
+        wf.requestChanges("lead@acme");
+        awaitState(wf, s -> s.version() == 2);
+
+        // The re-plan itself (PlanningLoop.run -> republishTasks) runs asynchronously after the
+        // version bump above; poll for its terminal side effect before asserting on it.
+        long deadline = System.currentTimeMillis() + 5000;
+        while (boardSideEffects.tasksRepublished.isEmpty() && System.currentTimeMillis() < deadline) {
+            Thread.sleep(20);
+        }
+        // 2 planNextStep calls (CONSULT then FINALIZE) per PlanningLoop.run invocation - the
+        // initial pass plus the re-plan triggered by requestChanges above.
+        assertThat(agentActivities.planNextStepCalls).hasSize(4);
+        assertThat(agentActivities.planNextStepFeedback).anySatisfy(f -> assertThat(f).contains("split T1"));
+        assertThat(boardSideEffects.tasksRepublished).hasSize(1);
+
+        wf.approve(new Approval("lead@acme", "SquadLead", "plan", 2, "hash-plan-v2", Instant.now()));
+        awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G2);
+        assertThat(boardSideEffects.planApprovals).containsExactly(2);
+    }
+
+    @Test
     void staleVersionApprovalIsIgnored() throws Exception {
         FeatureWorkflow wf = start("4412-stale-version");
         confirmIntake(wf);
@@ -164,6 +228,33 @@ class FeatureWorkflowImplTest {
         Thread.sleep(200); // give the signal a chance to be (mis)applied
 
         assertThat(wf.state().approvals()).isEmpty();
+    }
+
+    @Test
+    void boundedRetryExhaustionBlocksInPlaceAndRetryStepResumesWithoutRestarting() throws Exception {
+        FeatureWorkflow wf = start("4412-retry-blocks", a -> a.failFirstNRounds = 5);
+
+        // AGENT_ACTIVITY_OPTIONS caps real Temporal retries at 5 attempts with real exponential
+        // backoff (2s, 4s, 8s, 16s - ~30s cumulative before the 5th and final attempt); once
+        // exhausted the workflow durably records the failure and blocks in place (never dies,
+        // never restarts). Generous 45s deadline to outlast that real-time backoff.
+        awaitState(wf, s -> s.lastFailure() != null, 45_000);
+        StepFailure failure = wf.state().lastFailure();
+        assertThat(failure.step()).isEqualTo("grill-next-round");
+        assertThat(failure.message()).contains("simulated grillNextRound failure 5");
+        assertThat(boardSideEffects.stepFailuresRecorded).hasSize(1);
+        assertThat(boardSideEffects.stepFailuresRecorded.get(0)).contains("grill-next-round");
+
+        // A retry before anything failed further is a no-op that changes nothing (belt-and-braces
+        // - the real assertion is that a *matching* retryStep below actually resumes the workflow).
+        wf.retryStep("po@acme");
+        awaitState(wf, s -> s.lastFailure() == null);
+
+        // The workflow resumed the SAME execution (not a fresh one) with its interview state
+        // intact - completing the adaptive-intake confirmation flow now proceeds normally.
+        confirmIntake(wf);
+        awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G1);
+        assertThat(boardSideEffects.published).hasSize(1);
     }
 
     @Test
@@ -243,6 +334,7 @@ class FeatureWorkflowImplTest {
         awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G1);
         wf.approve(new Approval("po@acme", "PO", "story", 1, "hash-v1", Instant.now()));
         wf.approve(new Approval("lead@acme", "SquadLead", "story", 1, "hash-v1", Instant.now()));
+        approvePlanGate(wf);
         awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G2);
 
         // A gate-1 role has no standing at gate 2 - PO/SquadLead are not in gates.G2.roles.
@@ -274,6 +366,7 @@ class FeatureWorkflowImplTest {
         // then still hands off to review/PR/G2 once answered.
         buildActivities.returnRed = true;
 
+        approvePlanGate(wf);
         awaitState(wf, s -> s.stage() == CanonicalState.NEEDS_CLARIFICATION);
         assertThat(boardSideEffects.humanInputRequests.get()).isEqualTo(1);
         wf.commentAdded(new BoardCommentEvent("c", "dev@acme", "h1: skip"));
@@ -291,6 +384,7 @@ class FeatureWorkflowImplTest {
         awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G1);
         wf.approve(new Approval("po@acme", "PO", "story", 1, "hash-v1", Instant.now()));
         wf.approve(new Approval("lead@acme", "SquadLead", "story", 1, "hash-v1", Instant.now()));
+        approvePlanGate(wf);
         awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G2);
 
         // The review agent's blocker finding seeded a blocking comment; both gate-2 approvals
@@ -313,6 +407,7 @@ class FeatureWorkflowImplTest {
         awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G1);
         wf.approve(new Approval("po@acme", "PO", "story", 1, "hash-v1", Instant.now()));
         wf.approve(new Approval("lead@acme", "SquadLead", "story", 1, "hash-v1", Instant.now()));
+        approvePlanGate(wf);
         awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G2);
         wf.approve(new Approval("fsdev@acme", "FSDeveloper", "pr", 1, "hash-pr-v1", Instant.now()));
         wf.approve(new Approval("qa@acme", "QA", "pr", 1, "hash-pr-v1", Instant.now()));
@@ -344,6 +439,7 @@ class FeatureWorkflowImplTest {
         awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G1);
         wf.approve(new Approval("po@acme", "PO", "story", 1, "hash-v1", Instant.now()));
         wf.approve(new Approval("lead@acme", "SquadLead", "story", 1, "hash-v1", Instant.now()));
+        approvePlanGate(wf);
         awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G2);
         wf.approve(new Approval("fsdev@acme", "FSDeveloper", "pr", 1, "hash-pr-v1", Instant.now()));
         wf.approve(new Approval("qa@acme", "QA", "pr", 1, "hash-pr-v1", Instant.now()));
@@ -376,6 +472,7 @@ class FeatureWorkflowImplTest {
         awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G1);
         wf.approve(new Approval("po@acme", "PO", "story", 1, "hash-v1", Instant.now()));
         wf.approve(new Approval("lead@acme", "SquadLead", "story", 1, "hash-v1", Instant.now()));
+        approvePlanGate(wf);
         awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G2);
         wf.approve(new Approval("fsdev@acme", "FSDeveloper", "pr", 1, "hash-pr-v1", Instant.now()));
         wf.approve(new Approval("qa@acme", "QA", "pr", 1, "hash-pr-v1", Instant.now()));
@@ -439,6 +536,7 @@ class FeatureWorkflowImplTest {
         wf.approve(new Approval("lead@acme", "SquadLead", "story", 2, "hash-v2", Instant.now()));
 
         // Gate 1 still opens normally once the quality gate passed and both approvals land.
+        approvePlanGate(wf);
         awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G2);
     }
 
@@ -479,6 +577,7 @@ class FeatureWorkflowImplTest {
         // Drive story 1 (the active one) fully through G1 -> plan -> build -> G2 -> release -> G3 -> deploy.
         wf.approve(new Approval("po@acme", "PO", "story", 1, "hash-v1", Instant.now()));
         wf.approve(new Approval("lead@acme", "SquadLead", "story", 1, "hash-v1", Instant.now()));
+        approvePlanGate(wf);
         awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G2);
         wf.approve(new Approval("fsdev@acme", "FSDeveloper", "pr", 1, "hash-pr-v1", Instant.now()));
         wf.approve(new Approval("qa@acme", "QA", "pr", 1, "hash-pr-v1", Instant.now()));
@@ -496,6 +595,7 @@ class FeatureWorkflowImplTest {
         // Drive story 2 through gate 1 to prove the workflow reaches it and doesn't hang.
         wf.approve(new Approval("po@acme", "PO", "story", 1, "hash-v1", Instant.now()));
         wf.approve(new Approval("lead@acme", "SquadLead", "story", 1, "hash-v1", Instant.now()));
+        approvePlanGate(wf);
         awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G2);
     }
 
@@ -574,6 +674,7 @@ class FeatureWorkflowImplTest {
         awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G1);
         wf.approve(new Approval("po@acme", "PO", "story", 1, "hash-v1", Instant.now()));
         wf.approve(new Approval("lead@acme", "SquadLead", "story", 1, "hash-v1", Instant.now()));
+        approvePlanGate(wf);
         awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G2);
 
         wf.comment(new Comment("c1", "qa@acme", "QA", "pr", "file:src/export.js:12",
@@ -610,6 +711,7 @@ class FeatureWorkflowImplTest {
         wf.approve(new Approval("po@acme", "PO", "story", 1, "hash-v1", Instant.now()));
         wf.approve(new Approval("lead@acme", "SquadLead", "story", 1, "hash-v1", Instant.now()));
 
+        approvePlanGate(wf);
         awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G2 && s.version() == 2);
         long deadline = System.currentTimeMillis() + 5000;
         while (boardSideEffects.fixRoundsPosted.isEmpty() && System.currentTimeMillis() < deadline) {
@@ -633,6 +735,7 @@ class FeatureWorkflowImplTest {
         wf.approve(new Approval("po@acme", "PO", "story", 1, "hash-v1", Instant.now()));
         wf.approve(new Approval("lead@acme", "SquadLead", "story", 1, "hash-v1", Instant.now()));
 
+        approvePlanGate(wf);
         awaitState(wf, s -> s.stage() == CanonicalState.NEEDS_CLARIFICATION);
         assertThat(boardSideEffects.humanInputRequests.get()).isEqualTo(1);
         assertThat(wf.grill().openQuestions()).hasSize(1);
@@ -656,6 +759,7 @@ class FeatureWorkflowImplTest {
         wf.approve(new Approval("po@acme", "PO", "story", 1, "hash-v1", Instant.now()));
         wf.approve(new Approval("lead@acme", "SquadLead", "story", 1, "hash-v1", Instant.now()));
 
+        approvePlanGate(wf);
         awaitState(wf, s -> s.stage() == CanonicalState.NEEDS_CLARIFICATION);
         wf.commentAdded(new BoardCommentEvent("c1", "dev@acme", "h1: skip"));
         awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G2);
@@ -670,6 +774,7 @@ class FeatureWorkflowImplTest {
         awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G1);
         wf.approve(new Approval("po@acme", "PO", "story", 1, "hash-v1", Instant.now()));
         wf.approve(new Approval("lead@acme", "SquadLead", "story", 1, "hash-v1", Instant.now()));
+        approvePlanGate(wf);
         awaitState(wf, s -> s.stage() == CanonicalState.AWAITING_G2);
         wf.approve(new Approval("fsdev@acme", "FSDeveloper", "pr", 1, "hash-pr-v1", Instant.now()));
         wf.approve(new Approval("qa@acme", "QA", "pr", 1, "hash-pr-v1", Instant.now()));

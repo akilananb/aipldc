@@ -84,4 +84,98 @@ class PdlcConfigTest {
                 .isInstanceOf(PdlcConfigException.class)
                 .hasMessageContaining("gates.G1");
     }
+
+    @Test
+    void legacyRepoYieldsOnePrimaryRepoWithIdMainAndNoAreas() {
+        String yaml = """
+                profiles:
+                  legacy:
+                    board: { provider: azure-devops, org: https://dev.azure.com/acme, project: X }
+                    repo: { provider: github, url: https://github.com/acme/x, default_branch: main, spec_dir: openspec }
+                    gates:
+                      G1: { roles: [PO, SquadLead], sod: true }
+                """;
+        PdlcConfig config = PdlcConfig.load(new ByteArrayInputStream(yaml.getBytes(StandardCharsets.UTF_8)));
+        Profile legacy = config.profile("legacy");
+        assertThat(legacy.repos()).hasSize(1);
+        RepoConfig repo = legacy.repo();
+        assertThat(repo.id()).isEqualTo("main");
+        assertThat(repo.primary()).isTrue();
+        assertThat(repo.areas()).isEmpty();
+        assertThat(repo.url()).isEqualTo("https://github.com/acme/x");
+        assertThat(repo.defaultBranch()).isEqualTo("main");
+        assertThat(repo.specDir()).isEqualTo("openspec");
+    }
+
+    @Test
+    void reposListWithoutPrimaryMarksTheFirstEntryPrimary() {
+        String yaml = """
+                profiles:
+                  multi:
+                    board: { provider: azure-devops, org: https://dev.azure.com/acme, project: X }
+                    repos:
+                      - { id: web, provider: github, url: https://github.com/acme/web, default_branch: main, spec_dir: openspec }
+                      - { id: api, provider: github, url: https://github.com/acme/api, default_branch: main, spec_dir: openspec, areas: [orders] }
+                    gates:
+                      G1: { roles: [PO, SquadLead], sod: true }
+                """;
+        PdlcConfig config = PdlcConfig.load(new ByteArrayInputStream(yaml.getBytes(StandardCharsets.UTF_8)));
+        Profile multi = config.profile("multi");
+        assertThat(multi.repos()).hasSize(2);
+        assertThat(multi.repo().id()).isEqualTo("web");
+        assertThat(multi.repo().primary()).isTrue();
+        assertThat(multi.repo("api").primary()).isFalse();
+        assertThat(multi.repo("api").areas()).containsExactly("orders");
+    }
+
+    @Test
+    void repoAndReposTogetherFail() {
+        String yaml = """
+                profiles:
+                  both:
+                    board: { provider: azure-devops, org: https://dev.azure.com/acme, project: X }
+                    repo: { provider: github, url: https://github.com/acme/x }
+                    repos:
+                      - { id: web, provider: github, url: https://github.com/acme/web }
+                    gates:
+                      G1: { roles: [PO, SquadLead], sod: true }
+                """;
+        assertThatThrownBy(() -> PdlcConfig.load(new ByteArrayInputStream(yaml.getBytes(StandardCharsets.UTF_8))))
+                .isInstanceOf(PdlcConfigException.class)
+                .hasMessageContaining("use either repo or repos");
+    }
+
+    @Test
+    void projectMetaParsesNameConfluenceDocsBriefAndBuild() {
+        String yaml = """
+                profiles:
+                  meta:
+                    project:
+                      name: Payments
+                      confluence_url: https://acme.atlassian.net/wiki/spaces/PAY
+                      docs:
+                        - { title: Tech stack, url: https://acme/wiki/tech-stack }
+                      brief: Kitchen ticket fidelity pilot
+                      build: { acp_agent: my acp agent }
+                    board: { provider: azure-devops, org: https://dev.azure.com/acme, project: X }
+                    repos:
+                      - { id: web, provider: github, url: https://github.com/acme/web, primary: true }
+                    gates:
+                      G1: { roles: [PO, SquadLead], sod: true }
+                """;
+        PdlcConfig config = PdlcConfig.load(new ByteArrayInputStream(yaml.getBytes(StandardCharsets.UTF_8)));
+        Profile meta = config.profile("meta");
+        assertThat(meta.project().name()).isEqualTo("Payments");
+        assertThat(meta.project().confluenceUrl()).isEqualTo("https://acme.atlassian.net/wiki/spaces/PAY");
+        assertThat(meta.project().brief()).isEqualTo("Kitchen ticket fidelity pilot");
+        assertThat(meta.project().docs()).hasSize(1);
+        assertThat(meta.project().docs().get(0).title()).isEqualTo("Tech stack");
+        assertThat(meta.project().docs().get(0).url()).isEqualTo("https://acme/wiki/tech-stack");
+        assertThat(meta.project().build().acpAgent()).isEqualTo("my acp agent");
+
+        ProjectDocument doc = config.document("meta");
+        assertThat(doc.project().name()).isEqualTo("Payments");
+        assertThat(doc.repos()).hasSize(1);
+        assertThat(doc.repos().get(0).id()).isEqualTo("web");
+    }
 }

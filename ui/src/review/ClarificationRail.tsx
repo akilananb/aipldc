@@ -5,6 +5,7 @@ import { api, errorMessage } from '../api';
 import { splitGrillRecommendation } from '../ui-utils';
 import type { ClarificationScope } from './useClarification';
 import { useClarification } from './useClarification';
+import ProjectMetaLink from '../components/ProjectMetaLink';
 import type { ItemDetail } from '../types';
 
 interface Props {
@@ -45,7 +46,7 @@ export default function ClarificationRail({ item, scope }: Props) {
         <div className="kv">
           <span>Source</span>
           <span>
-            Board {item.boardId} · {item.profile}
+            Board {item.boardId} · <ProjectMetaLink profile={item.profile} />
           </span>
         </div>
         {item.description && <p className="inspector-sub clamp">{item.description}</p>}

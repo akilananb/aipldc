@@ -1,6 +1,7 @@
 package ai.pdlc.core.workflow;
 
 import ai.pdlc.core.config.GateConfig;
+import ai.pdlc.core.config.RepoConfig;
 import ai.pdlc.core.domain.GrillHandoff;
 import ai.pdlc.core.domain.MonitorHandoff;
 import ai.pdlc.core.domain.QualityReport;
@@ -28,6 +29,11 @@ public interface BoardSideEffects {
     /** Reads {@code gates.G1} for {@code profile} from {@code pdlc.yaml}; fails workflow start if absent. */
     @ActivityMethod
     GateConfig loadGate1Config(String profile);
+
+    /** The project's repos at the moment planning starts — {@code ai.pdlc.core.workflow.PlanningLoop}
+     * and {@link ai.pdlc.core.plan.PlanAssembler} require every task/CONSULT round to name one. */
+    @ActivityMethod
+    List<RepoConfig> loadRepos(String profile);
 
     /** Posts the grill questions as a single comment on the work item, one numbered question per
      * line, category prefixed (playbook §1 "Does" step 3). */
@@ -85,6 +91,25 @@ public interface BoardSideEffects {
     @ActivityMethod
     PublishTasksResult publishTasks(WorkItemRef story, PlanHandoff plan);
 
+    /** Reads {@code gates.PLAN} for {@code profile} from {@code pdlc.yaml}; fails workflow start
+     * if absent. */
+    @ActivityMethod
+    GateConfig loadPlanGateConfig(String profile);
+
+    /** A SquadLead sent the task plan back for changes: re-plans and republishes {@code tasks.md}
+     * without leaving {@code planned}. Reuses each still-present task's {@code _idempotencyKey}
+     * (updating its title/description); any task id from {@code previousTaskBoardIds} that is
+     * absent from the new plan is marked "[superseded]" (title prefix + comment) rather than
+     * removed - {@link ai.pdlc.core.domain.CanonicalState} has no cancelled value. */
+    @ActivityMethod
+    PublishTasksResult republishTasks(WorkItemRef story, PlanHandoff plan, Map<String, String> previousTaskBoardIds, int planVersion);
+
+    /** The plan gate passed: appends {@code review_events: plan-approved} + a {@code review.md}
+     * line. No board transition here - the caller ({@link FeatureWorkflowImpl#run}) transitions
+     * to {@code in-progress} once the build loop actually starts. */
+    @ActivityMethod
+    void recordPlanApproved(WorkItemRef story, int planVersion);
+
     /** Build loop starting: {@code board.transition(in-progress)}. */
     @ActivityMethod
     void transitionInProgress(WorkItemRef story);
@@ -94,7 +119,7 @@ public interface BoardSideEffects {
      * task, posts the review agent's findings as PR comments, appends the review.md "PR opened"
      * block, sets {@code awaiting-G2}. */
     @ActivityMethod
-    PRRef openStoryPr(WorkItemRef story, String branch, List<Task> tasks, List<BuildResult> results, ReviewHandoff review);
+    List<PRRef> openStoryPr(WorkItemRef story, String branch, List<Task> tasks, List<BuildResult> results, ReviewHandoff review);
 
     /** Build loop finished: transitions each task's board card to {@code done} and re-saves its
      * quality report from the real verifier outcome (green/red), superseding the pre-build
@@ -128,6 +153,14 @@ public interface BoardSideEffects {
     /** Stores the agent's draft (status pending|failed) on the mention comment; appends review_events. */
     @ActivityMethod
     void saveAgentMentionResult(String commentId, String markdown, String status);
+
+    /** Durably records a step's bounded-retry-exhausted failure: {@code review_events: step-failed}
+     * always, plus a {@code review.md} block when {@code ref}'s work item has a spec change path
+     * (mirrors {@link #saveQualityReport}'s dual-trail-when-available shape). Called from within
+     * {@link FeatureWorkflowImpl}'s {@code reasoningStep} retry loop — the workflow blocks in
+     * place afterward, awaiting {@link FeatureWorkflow#retryStep}, rather than dying. */
+    @ActivityMethod
+    void recordStepFailure(WorkItemRef ref, String step, String message);
 
     /** A queued story (see {@link #publishStory}) becomes the pipeline's active story once the
      * previous story's episode finishes: {@code board.transition(awaiting-G1)}. */

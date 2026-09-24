@@ -4,7 +4,7 @@ interface Props {
   iso: string;
 }
 
-function relativize(iso: string): string {
+export function relativize(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
   const deltaMs = Date.now() - d.getTime();

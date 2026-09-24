@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import type { UseQueryResult } from '@tanstack/react-query';
 import { api } from '../api';
 import { useIdentity } from '../identity';
-import { GATE_ROLES } from '../gates';
+import { useProjectGates } from '../useProject';
 import { GRILL_CATEGORY_ORDER, GRILL_CONFIRMATION_EVIDENCE, grillCategoryLabel } from '../ui-utils';
 import type { GrillQuestion, GrillQuestions, ItemDetail } from '../types';
 
@@ -41,6 +41,7 @@ export interface Clarification {
  * `item` undefined every list is empty and every boolean is false. */
 export function useClarification(item: ItemDetail | undefined, scope: ClarificationScope): Clarification {
   const identity = useIdentity();
+  const { roles: gateRoles } = useProjectGates(item?.profile);
 
   const query = useQuery({
     queryKey: ['grill', item?.id],
@@ -73,11 +74,11 @@ export function useClarification(item: ItemDetail | undefined, scope: Clarificat
     const readOnly = item?.snapshot != null;
     const grillRunning = item?.activeRun?.agent === 'grill' && item.activeRun.status === 'running';
 
-    const canReply = !readOnly && (GATE_ROLES.G1.includes(identity.role) || (scope === 'build' && GATE_ROLES.G2.includes(identity.role)));
+    const canReply = !readOnly && ((gateRoles.G1 ?? []).includes(identity.role) || (scope === 'build' && (gateRoles.G2 ?? []).includes(identity.role)));
     const replyRolesHint = scope === 'build' ? 'Switch to a Gate 1 or Gate 2 role to answer' : 'Switch to PO or SquadLead to answer';
-    const canProceed = scope === 'intake' && !readOnly && GATE_ROLES.G1.includes(identity.role) && rounds >= 2;
+    const canProceed = scope === 'intake' && !readOnly && (gateRoles.G1 ?? []).includes(identity.role) && rounds >= 2;
 
     return { query, questions, open, confirmation, confirmedConfirmation, answered, parked, coverage, rounds, resolved, canReply, canProceed, readOnly, grillRunning, replyRolesHint };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query.data, scope, identity.role, item?.snapshot, item?.activeRun]);
+  }, [query.data, scope, identity.role, item?.snapshot, item?.activeRun, gateRoles]);
 }

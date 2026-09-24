@@ -7,7 +7,7 @@ import path from 'node:path';
 import { ApiClient } from './client';
 import type { AgentConfig } from './config';
 import type { BuildResult, ClaimedTask } from './types';
-import { handleClaim, type BuildRunner, type PlanRunner } from './worker';
+import { describePresence, handleClaim, type BuildRunner, type PlanRunner } from './worker';
 
 interface RecordedRequest {
   method: string;
@@ -56,6 +56,8 @@ function claimFixture(id: string): ClaimedTask {
   return {
     id,
     attempt: 1,
+    leaseToken: `lease-${id}`,
+    claimCount: 1,
     payload: {
       kind: 'build',
       story: { profile: 'local', boardId: '4414' },
@@ -64,6 +66,7 @@ function claimFixture(id: string): ClaimedTask {
         title: 'Add CSV export',
         description: 'brief',
         area: 'orders',
+        repo: 'main',
         scenario: 'export-csv',
         touches: ['src/export.js'],
         testPath: 'test/export.test.js',
@@ -73,7 +76,7 @@ function claimFixture(id: string): ClaimedTask {
       branch: 'story/4414',
       baseBranch: 'main',
       feedback: [],
-      repo: { provider: 'local-git', url: '/unused-because-repoOverride-wins', defaultBranch: 'main', specDir: 'openspec' },
+      repo: { id: 'main', provider: 'local-git', url: '/unused-because-repoOverride-wins', defaultBranch: 'main', specDir: 'openspec', areas: [], primary: true },
     },
   };
 }
@@ -123,7 +126,7 @@ test('handleClaim heartbeats while the runner works, posts its result, and sends
       filters: { profile: 'local' },
       pollIntervalMs: 1000,
       heartbeatIntervalMs: 20,
-      repoOverride: { mode: 'local', path: repoDir },
+      repoOverrides: new Map([['main', { mode: 'local', path: repoDir }]]),
       cacheDir: repoDir,
       acpAgent: 'omp acp',
     };
@@ -161,6 +164,13 @@ test('handleClaim heartbeats while the runner works, posts its result, and sends
     for (const req of requests) {
       assert.equal(req.headers['x-agent-token'], 'tok123');
     }
+    const claimReq = requests.find((r) => r.url === '/api/build-tasks/claim');
+    assert.ok(claimReq, 'expected a claim request');
+    assert.equal(claimReq.headers['x-lease-token'], undefined, 'claim must not carry a lease token');
+    const heartbeatReq = requests.find((r) => r.url === '/api/build-tasks/task-1/heartbeat');
+    assert.ok(heartbeatReq, 'expected a heartbeat request');
+    assert.equal(heartbeatReq.headers['x-lease-token'], 'lease-task-1');
+    assert.equal(resultReq.headers['x-lease-token'], 'lease-task-1');
   } finally {
     server.close();
   }
@@ -197,7 +207,7 @@ test('handleClaim aborts the runner and posts nothing when a heartbeat comes bac
       filters: { profile: 'local' },
       pollIntervalMs: 1000,
       heartbeatIntervalMs: 15,
-      repoOverride: { mode: 'local', path: repoDir },
+      repoOverrides: new Map([['main', { mode: 'local', path: repoDir }]]),
       cacheDir: repoDir,
       acpAgent: 'omp acp',
     };
@@ -223,6 +233,58 @@ test('handleClaim aborts the runner and posts nothing when a heartbeat comes bac
     assert.equal(sawAbort, true);
     assert.equal(requests.some((r) => r.url === '/api/build-tasks/task-2/result'), false);
     assert.equal(requests.some((r) => r.url === '/api/build-tasks/task-2/fail'), false);
+  } finally {
+    server.close();
+  }
+});
+
+test('describePresence reports the local repo path and current branch', async () => {
+  const repoDir = await localRepoDir();
+  const cfg: AgentConfig = {
+    apiUrl: 'http://127.0.0.1:0',
+    agentName: 'test-agent',
+    filters: { profile: 'local' },
+    pollIntervalMs: 1000,
+    heartbeatIntervalMs: 20,
+    repoOverrides: new Map([['main', { mode: 'local', path: repoDir }]]),
+    cacheDir: repoDir,
+    acpAgent: 'omp acp',
+  };
+
+  // localRepoDir only creates a bare `.git` marker (poller tests never need a real commit), so
+  // `git rev-parse --abbrev-ref HEAD` fails inside it - describePresence degrades that to a null
+  // branch rather than throwing, which this asserts alongside the resolved mode/location.
+  const presence = await describePresence(cfg);
+  assert.equal(presence.acpAgent, 'omp acp');
+  assert.equal(presence.pollIntervalMs, 1000);
+  assert.deepEqual(presence.repos, [{ id: 'main', mode: 'local', location: repoDir, branch: null }]);
+});
+
+test('a claim poll attaches the presence report to the request body', async () => {
+  const repoDir = await localRepoDir();
+  const { server, port, requests } = await startServer((req, res) => {
+    res.writeHead(204);
+    res.end();
+  });
+
+  try {
+    const cfg: AgentConfig = {
+      apiUrl: `http://127.0.0.1:${port}`,
+      agentName: 'test-agent',
+      filters: { profile: 'local' },
+      pollIntervalMs: 1000,
+      heartbeatIntervalMs: 20,
+      repoOverrides: new Map([['main', { mode: 'local', path: repoDir }]]),
+      cacheDir: repoDir,
+      acpAgent: 'omp acp',
+    };
+    const client = new ApiClient(cfg);
+    await client.claim(await describePresence(cfg));
+
+    const claimReq = requests.find((r) => r.url === '/api/build-tasks/claim');
+    assert.ok(claimReq, 'expected a claim request');
+    const body = claimReq.body as { presence?: { acpAgent?: string } };
+    assert.equal(body.presence?.acpAgent, 'omp acp');
   } finally {
     server.close();
   }

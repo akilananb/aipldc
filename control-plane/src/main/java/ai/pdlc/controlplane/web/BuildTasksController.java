@@ -1,9 +1,10 @@
 package ai.pdlc.controlplane.web;
 
+import ai.pdlc.controlplane.temporal.AgentPresenceService;
 import ai.pdlc.controlplane.temporal.BuildTaskService;
 import ai.pdlc.controlplane.web.dto.ClaimRequest;
 import ai.pdlc.controlplane.web.dto.FailRequest;
-import ai.pdlc.controlplane.web.dto.PlanResultRequest;
+import ai.pdlc.controlplane.web.dto.PlanConsultationResultRequest;
 import ai.pdlc.core.workflow.BuildResult;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -14,6 +15,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -26,13 +28,20 @@ import java.util.UUID;
  * {@code POST /{id}/heartbeat} while working it, {@code POST /{id}/result} or {@code
  * POST /{id}/plan-result} or {@code POST /{id}/fail} to finish. No Temporal client on the agent
  * side; every call here is a thin wrapper over {@link BuildTaskService}, which owns the {@code
- * build_tasks} rows and resolves the parked Temporal activity. Auth: a single shared secret
- * ({@code X-Agent-Token}), optional - matches the pilot's {@code X-User} header-trust model.
+ * build_tasks} rows and resolves the parked Temporal activity. {@code /claim} returns a
+ * per-claim {@code leaseToken} that every subsequent per-task call MUST present as the {@code
+ * X-Lease-Token} header — a stale or mismatched token gets 410 (another worker has since
+ * reclaimed the row) and a missing one gets 400. Auth: a single shared secret ({@code
+ * X-Agent-Token}), optional - matches the pilot's {@code X-User} header-trust model. Concurrent
+ * workers in a pool MUST each use a distinct {@code agent} name (presence rows are keyed by
+ * name); task fencing itself does not depend on it.
  */
 @RestController
 @RequestMapping("/api/build-tasks")
 public class BuildTasksController {
     private final BuildTaskService service;
+    private final AgentPresenceService presence;
+    private final ai.pdlc.core.config.ProjectDirectory projects;
     private final String agentToken;
 
     // Own Jackson 2 mapper rather than an injected Spring bean: Spring Boot 4's Jackson
@@ -41,8 +50,11 @@ public class BuildTasksController {
     // `payload_json` (BuildTaskService#enqueue) is itself Jackson 2 output.
     private final ObjectMapper mapper = new ObjectMapper();
 
-    public BuildTasksController(BuildTaskService service, @Value("${pdlc.build-agent.token:}") String agentToken) {
+    public BuildTasksController(BuildTaskService service, AgentPresenceService presence, ai.pdlc.core.config.ProjectDirectory projects,
+                                 @Value("${pdlc.build-agent.token:}") String agentToken) {
         this.service = service;
+        this.presence = presence;
+        this.projects = projects;
         this.agentToken = agentToken;
     }
 
@@ -55,6 +67,11 @@ public class BuildTasksController {
         if (request.filters() == null || request.filters().profile() == null || request.filters().profile().isBlank()) {
             throw new IllegalArgumentException("filters.profile is required");
         }
+        if (projects.find(request.filters().profile()).isEmpty()) {
+            throw new IllegalArgumentException("unknown project id '" + request.filters().profile()
+                    + "' - must be one of " + projects.projects().keySet());
+        }
+        presence.touchAcpOnClaim(request.filters().profile(), request);
 
         Optional<BuildTaskService.ClaimedRow> claimed = service.claim(
                 request.agent(), request.filters().profile(), request.filters().story(), request.filters().task());
@@ -65,34 +82,44 @@ public class BuildTasksController {
         return ResponseEntity.ok(Map.of(
                 "id", row.id().toString(),
                 "attempt", row.attempt(),
-                "payload", readPayload(row.payloadJson())));
+                "payload", readPayload(row.payloadJson()),
+                "leaseToken", row.leaseToken().toString(),
+                "claimCount", row.claimCount()));
     }
 
     @PostMapping("/{id}/heartbeat")
-    public ResponseEntity<Void> heartbeat(@PathVariable UUID id, HttpServletRequest httpRequest) {
+    public ResponseEntity<Void> heartbeat(@PathVariable UUID id,
+                                           @RequestHeader(name = "X-Lease-Token", required = false) String leaseToken,
+                                           HttpServletRequest httpRequest) {
         checkAuth(httpRequest);
-        service.heartbeat(id);
+        presence.touchAcpOnHeartbeat(service.heartbeat(id, leaseToken));
         return ResponseEntity.ok().build();
     }
 
     @PostMapping("/{id}/result")
-    public ResponseEntity<Void> result(@PathVariable UUID id, @RequestBody BuildResult result, HttpServletRequest httpRequest) {
+    public ResponseEntity<Void> result(@PathVariable UUID id, @RequestBody BuildResult result,
+                                        @RequestHeader(name = "X-Lease-Token", required = false) String leaseToken,
+                                        HttpServletRequest httpRequest) {
         checkAuth(httpRequest);
-        service.complete(id, result);
+        service.complete(id, leaseToken, result);
         return ResponseEntity.ok().build();
     }
 
     @PostMapping("/{id}/plan-result")
-    public ResponseEntity<Void> planResult(@PathVariable UUID id, @RequestBody PlanResultRequest request, HttpServletRequest httpRequest) {
+    public ResponseEntity<Void> planResult(@PathVariable UUID id, @RequestBody PlanConsultationResultRequest request,
+                                            @RequestHeader(name = "X-Lease-Token", required = false) String leaseToken,
+                                            HttpServletRequest httpRequest) {
         checkAuth(httpRequest);
-        service.completePlan(id, request);
+        service.completePlan(id, leaseToken, request);
         return ResponseEntity.ok().build();
     }
 
     @PostMapping("/{id}/fail")
-    public ResponseEntity<Void> fail(@PathVariable UUID id, @RequestBody FailRequest request, HttpServletRequest httpRequest) {
+    public ResponseEntity<Void> fail(@PathVariable UUID id, @RequestBody FailRequest request,
+                                      @RequestHeader(name = "X-Lease-Token", required = false) String leaseToken,
+                                      HttpServletRequest httpRequest) {
         checkAuth(httpRequest);
-        service.fail(id, request.message());
+        service.fail(id, leaseToken, request.message());
         return ResponseEntity.ok().build();
     }
 

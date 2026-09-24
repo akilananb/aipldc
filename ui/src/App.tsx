@@ -4,6 +4,8 @@ import ErrorBoundary from './components/ErrorBoundary';
 import EmptyState from './components/EmptyState';
 import AppShell from './components/AppShell';
 import ItemListPage from './routes/ItemListPage';
+import AgentsPage from './routes/AgentsPage';
+import ProjectsPage from './routes/ProjectsPage';
 import ReviewPage from './routes/ReviewPage';
 
 export default function App() {
@@ -13,6 +15,8 @@ export default function App() {
         <Routes>
           <Route path="/" element={<ItemListPage />} />
           <Route path="/items/:id" element={<ReviewPage />} />
+          <Route path="/agents" element={<AgentsPage />} />
+          <Route path="/projects" element={<ProjectsPage />} />
           <Route
             path="*"
             element={

@@ -1,7 +1,8 @@
 package ai.pdlc.controlplane.temporal;
 
-import ai.pdlc.core.config.Profile;
-import ai.pdlc.core.domain.PlanResult;
+import ai.pdlc.core.config.ProjectDirectory;
+import ai.pdlc.core.config.RepoConfig;
+import ai.pdlc.core.domain.PlanConsultation;
 import ai.pdlc.core.domain.PoHandoff;
 import ai.pdlc.core.domain.Task;
 import ai.pdlc.core.domain.WorkItemRef;
@@ -17,31 +18,34 @@ import org.springframework.stereotype.Component;
  * build loop in-process; the standalone build agent (a host process with omp/ACP installed) polls
  * control-plane's REST API for the row, runs the build locally, and posts back the result, which
  * completes this activity asynchronously via {@link BuildTaskService#complete}/{@link
- * BuildTaskService#fail}.
+ * BuildTaskService#fail}. The target repo is resolved per task/consultation from the story's
+ * project, never a process-startup singleton.
  */
 @Component
 public class BuildActivitiesImpl implements BuildActivities {
 
     private final BuildTaskService service;
-    private final Profile activeProfile;
+    private final ProjectDirectory projects;
 
-    public BuildActivitiesImpl(BuildTaskService service, Profile activeProfile) {
+    public BuildActivitiesImpl(BuildTaskService service, ProjectDirectory projects) {
         this.service = service;
-        this.activeProfile = activeProfile;
+        this.projects = projects;
     }
 
     @Override
     public BuildResult runTask(WorkItemRef story, Task task, String branch, String baseBranch, java.util.List<String> feedback) {
         ActivityExecutionContext ctx = Activity.getExecutionContext();
-        service.enqueue(story, task, branch, baseBranch, feedback, activeProfile.repo(), ctx.getInfo().getAttempt(), ctx.getTaskToken());
+        RepoConfig repo = projects.project(story.profile()).repo(task.repo());
+        service.enqueue(story, task, branch, baseBranch, feedback, repo, ctx.getInfo().getAttempt(), ctx.getTaskToken());
         ctx.doNotCompleteOnReturn();
         return null; // ignored: completed asynchronously via ActivityCompletionClient
     }
 
     @Override
-    public PlanResult planTasks(WorkItemRef story, PoHandoff po) {
+    public PlanConsultation.Report consultPlan(WorkItemRef story, PoHandoff po, PlanConsultation consultation) {
         ActivityExecutionContext ctx = Activity.getExecutionContext();
-        service.enqueuePlan(story, po, activeProfile.repo(), ctx.getInfo().getAttempt(), ctx.getTaskToken());
+        RepoConfig repo = projects.project(story.profile()).repo(consultation.repoId());
+        service.enqueuePlan(story, po, consultation, repo, ctx.getInfo().getAttempt(), ctx.getTaskToken());
         ctx.doNotCompleteOnReturn();
         return null; // ignored: completed asynchronously via ActivityCompletionClient
     }

@@ -1,12 +1,14 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { Link, useMatch, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { Bot, FileText, Moon, Repeat2, Search, ShieldCheck, Sun } from 'lucide-react';
+import { Bot, FileText, FolderKanban, Moon, Radio, Repeat2, Search, ShieldCheck, Sun } from 'lucide-react';
 import { api } from '../api';
 import { getAppearance, setAppearance, useAppearance } from '../theme';
-import { needsAttention } from '../ui-utils';
+import { itemNeedsAttention } from '../ui-utils';
+import { useGateRolesByProject, useProjects } from '../useProject';
 import { useIdentity } from '../identity';
 import IdentitySwitcher from './IdentitySwitcher';
+import AgentPresenceStatus from './AgentPresenceStatus';
 import CommandPalette from './CommandPalette';
 
 interface Props {
@@ -21,6 +23,8 @@ export default function AppShell({ children }: Props) {
   const [params] = useSearchParams();
   const view: View = params.get('view') === 'running' ? 'running' : params.get('view') === 'attention' ? 'attention' : 'items';
   const onItemsRoute = useMatch('/');
+  const onAgentsRoute = useMatch('/agents');
+  const onProjectsRoute = useMatch('/projects');
   const itemMatch = useMatch('/items/:id');
   const [paletteOpen, setPaletteOpen] = useState(false);
 
@@ -29,17 +33,19 @@ export default function AppShell({ children }: Props) {
     queryFn: api.listItems,
     refetchInterval: 2000,
   });
+  const rolesByProject = useGateRolesByProject();
   const topLevel = (itemsQuery.data ?? []).filter((i) => i.kind !== 'task');
   const runningCount = topLevel.filter((i) => i.activeRun != null).length;
-  const attentionCount = topLevel.filter(
-    (i) => i.snapshot == null && needsAttention(i.canonicalState, identity.role),
-  ).length;
+  const attentionCount = topLevel.filter((i) => itemNeedsAttention(i, identity.role, rolesByProject)).length;
 
   const breadcrumbItem = useQuery({
     queryKey: ['item', itemMatch?.params.id],
     queryFn: () => api.getItem(itemMatch!.params.id!),
     enabled: !!itemMatch?.params.id,
   });
+
+  const projects = useProjects();
+  const projectName = projects.data?.find((p) => p.id === breadcrumbItem.data?.profile)?.name ?? breadcrumbItem.data?.profile ?? '…';
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
@@ -82,6 +88,14 @@ export default function AppShell({ children }: Props) {
             <span>Needs review</span>
             {attentionCount > 0 && <span className="badge">{attentionCount}</span>}
           </Link>
+          <Link to="/agents" className={onAgentsRoute ? 'active' : ''}>
+            <Radio size={16} />
+            <span>Agents</span>
+          </Link>
+          <Link to="/projects" className={onProjectsRoute ? 'active' : ''}>
+            <FolderKanban size={16} />
+            <span>Projects</span>
+          </Link>
         </nav>
 
         <div className="side-foot">
@@ -89,6 +103,7 @@ export default function AppShell({ children }: Props) {
             <i style={{ background: itemsQuery.isError ? 'var(--red)' : 'var(--green)' }} />
             <span>{itemsQuery.isError ? 'Control plane unreachable' : 'Control plane connected'}</span>
           </div>
+          <AgentPresenceStatus />
           <IdentitySwitcher />
         </div>
       </aside>
@@ -106,8 +121,14 @@ export default function AppShell({ children }: Props) {
               <Link className="back" to="/">
                 ← Items
               </Link>
-              <span className="crumb">/ {breadcrumbItem.data?.boardId ?? '…'}</span>
+              <span className="crumb">
+                / {projectName} / {breadcrumbItem.data?.boardId ?? '…'}
+              </span>
             </>
+          ) : onAgentsRoute ? (
+            <span className="crumb">Agents</span>
+          ) : onProjectsRoute ? (
+            <span className="crumb">Projects</span>
           ) : (
             <span className="crumb">Items</span>
           )}

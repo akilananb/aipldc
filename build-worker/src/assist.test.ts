@@ -69,7 +69,7 @@ function baseConfig(port: number, repoPath: string, cacheDir: string): AgentConf
     filters: { profile: 'local' },
     pollIntervalMs: 20,
     heartbeatIntervalMs: 20,
-    repoOverride: { mode: 'local', path: repoPath },
+    repoOverrides: new Map([['main', { mode: 'local', path: repoPath }]]),
     cacheDir,
     acpAgent: 'omp acp',
   };
@@ -87,6 +87,8 @@ test('runAssist (build): a cancel decision from the first round fails the claim 
       const claimed: ClaimedTask = {
         id: 'claim-1',
         attempt: 1,
+        leaseToken: 'lease-claim-1',
+        claimCount: 1,
         payload: {
           kind: 'build',
           story: { profile: 'local', boardId: '4414' },
@@ -95,6 +97,7 @@ test('runAssist (build): a cancel decision from the first round fails the claim 
             title: 'Add CSV export',
             description: 'brief',
             area: 'orders',
+            repo: 'main',
             scenario: 'export-csv',
             touches: ['src/export.js'],
             testPath: 'test/export.test.js',
@@ -104,7 +107,7 @@ test('runAssist (build): a cancel decision from the first round fails the claim 
           branch: 'story/4414',
           baseBranch: 'main',
           feedback: [],
-          repo: { provider: 'local-git', url: 'unused', defaultBranch: 'main', specDir: 'openspec' },
+          repo: { id: 'main', provider: 'local-git', url: 'unused', defaultBranch: 'main', specDir: 'openspec', areas: [], primary: true },
         },
       };
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -151,20 +154,32 @@ test('runAssist (build): a cancel decision from the first round fails the claim 
   }
 });
 
-test('runAssist (plan): a submit decision with a valid plan.json posts the plan result', async () => {
+test('runAssist (plan): a submit decision with a valid consultation.json posts the consultation report', async () => {
   const repoPath = await initRepo();
+  const { stdout: headShaRaw } = await execFileAsync('git', ['-C', repoPath, 'rev-parse', 'main']);
+  const headSha = headShaRaw.trim();
   const cacheDir = await mkdtemp(path.join(tmpdir(), 'pdlc-assist-test-cache-'));
   const { server, port, requests } = await startServer((req, res) => {
     if (req.method === 'POST' && req.url === '/api/build-tasks/claim') {
       const claimed: ClaimedTask = {
         id: 'claim-2',
         attempt: 1,
+        leaseToken: 'lease-claim-2',
+        claimCount: 1,
         payload: {
           kind: 'plan',
           story: { profile: 'local', boardId: '4414' },
           po: { change: 'openspec/changes/add-export', scenarios: ['export-csv'], areas: ['orders'], nfr: {} },
           baseBranch: 'main',
-          repo: { provider: 'local-git', url: 'unused', defaultBranch: 'main', specDir: 'openspec' },
+          repo: { id: 'main', provider: 'local-git', url: 'unused', defaultBranch: 'main', specDir: 'openspec', areas: [], primary: true },
+          consultation: {
+            round: 1,
+            repoId: 'main',
+            questions: ['Where is export implemented and what test file should prove it?'],
+            paths: ['README.md', 'src/export.js'],
+            baseCommit: '',
+            history: [],
+          },
         },
       };
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -194,18 +209,10 @@ test('runAssist (plan): a submit decision with a valid plan.json posts the plan 
         const exited = (async () => {
           await mkdir(path.join(worktreePath, '.pdlc'), { recursive: true });
           await writeFile(
-            path.join(worktreePath, '.pdlc/plan.json'),
+            path.join(worktreePath, '.pdlc/consultation.json'),
             JSON.stringify({
-              tasks: [{
-                id: 'T1',
-                title: '429 with Retry-After on 11th export',
-                description: 'Add the rate-limit check in src/export.js.',
-                area: 'orders',
-                scenario: 'export-csv',
-                touches: ['src/export.js'],
-                testPath: 'test/export.test.js',
-                blockedBy: [],
-              }],
+              findingsMarkdown: 'README.md documents the project; src/export.js does not exist yet.',
+              paths: ['README.md', 'src/export.js'],
             }),
             'utf8',
           );
@@ -219,10 +226,14 @@ test('runAssist (plan): a submit decision with a valid plan.json posts the plan 
 
     assert.equal(code, 0);
     const planReq = requests.find((r) => r.url === '/api/build-tasks/claim-2/plan-result');
-    assert.ok(planReq, 'expected a posted plan result');
-    const body = planReq.body as { tasks: Array<{ id: string }>; newFiles: string[] };
-    assert.equal(body.tasks.length, 1);
-    assert.equal(body.tasks[0].id, 'T1');
+    assert.ok(planReq, 'expected a posted consultation result');
+    const body = planReq.body as { baseCommit: string; findingsMarkdown: string; files: Array<{ path: string; exists: boolean }> };
+    assert.equal(body.baseCommit, headSha);
+    assert.ok(body.findingsMarkdown.includes('README.md'));
+    const readme = body.files.find((f) => f.path === 'README.md');
+    const exportFile = body.files.find((f) => f.path === 'src/export.js');
+    assert.equal(readme?.exists, true);
+    assert.equal(exportFile?.exists, false);
     assert.equal(await worktreeCount(repoPath), 1, 'expected only the main worktree to remain');
   } finally {
     server.close();
@@ -237,6 +248,8 @@ test('runAssist (build): a launch failure (e.g. omp not on PATH) is reported as 
       const claimed: ClaimedTask = {
         id: 'claim-3',
         attempt: 1,
+        leaseToken: 'lease-claim-3',
+        claimCount: 1,
         payload: {
           kind: 'build',
           story: { profile: 'local', boardId: '4414' },
@@ -245,6 +258,7 @@ test('runAssist (build): a launch failure (e.g. omp not on PATH) is reported as 
             title: 'Add CSV export',
             description: 'brief',
             area: 'orders',
+            repo: 'main',
             scenario: 'export-csv',
             touches: ['src/export.js'],
             testPath: 'test/export.test.js',
@@ -254,7 +268,7 @@ test('runAssist (build): a launch failure (e.g. omp not on PATH) is reported as 
           branch: 'story/4414',
           baseBranch: 'main',
           feedback: [],
-          repo: { provider: 'local-git', url: 'unused', defaultBranch: 'main', specDir: 'openspec' },
+          repo: { id: 'main', provider: 'local-git', url: 'unused', defaultBranch: 'main', specDir: 'openspec', areas: [], primary: true },
         },
       };
       res.writeHead(200, { 'Content-Type': 'application/json' });

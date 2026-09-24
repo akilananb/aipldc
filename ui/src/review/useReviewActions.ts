@@ -2,21 +2,25 @@ import { useMutation, useQueryClient, type UseMutationResult } from '@tanstack/r
 import { toast } from 'sonner';
 import { api, errorMessage, type AddCommentBody } from '../api';
 import { useIdentity } from '../identity';
-import { GATE_ROLES } from '../gates';
+import { useProjectGates } from '../useProject';
 import type { Comment, GateState, ScenarioReview } from '../types';
 
 export interface ReviewActions {
   approve: UseMutationResult<unknown, Error, string>;
   requestChanges: UseMutationResult<unknown, Error, void>;
+  retryStep: UseMutationResult<unknown, Error, void>;
   approveAgentResult: UseMutationResult<void, Error, string>;
   addComment: UseMutationResult<Comment, Error, AddCommentBody>;
   reviewScenario: UseMutationResult<ScenarioReview, Error, { version: number; scenario: string; status: 'meets' | 'not-reviewed' }>;
   prApprove: UseMutationResult<unknown, Error, string>;
   prRequestChanges: UseMutationResult<unknown, Error, void>;
+  planApprove: UseMutationResult<unknown, Error, string>;
+  planRequestChanges: UseMutationResult<unknown, Error, void>;
   releaseRequestChanges: UseMutationResult<unknown, Error, void>;
   hasOpenBlocking: boolean;
   g1RoleAllowed: boolean;
   g2RoleAllowed: boolean;
+  planRoleAllowed: boolean;
   alreadyApproved: boolean;
   approveDisabled: boolean;
   disabledReason: string | null;
@@ -26,10 +30,12 @@ export function useReviewActions(
   storyId: string | null,
   comments: Comment[],
   gate: GateState | null,
+  profile: string | null | undefined,
   onApproveSuccess?: () => void,
 ): ReviewActions {
   const identity = useIdentity();
   const queryClient = useQueryClient();
+  const { roles: gateRoles, loading: gatesLoading } = useProjectGates(profile);
 
   function invalidateStory() {
     void queryClient.invalidateQueries({ queryKey: ['item', storyId] });
@@ -51,6 +57,15 @@ export function useReviewActions(
     onSuccess: () => {
       invalidateStory();
       toast.success('Changes requested');
+    },
+    onError: (e) => toast.error(errorMessage(e)),
+  });
+
+  const retryStep = useMutation({
+    mutationFn: () => api.retryStep(storyId!),
+    onSuccess: () => {
+      invalidateStory();
+      toast.success('Retrying');
     },
     onError: (e) => toast.error(errorMessage(e)),
   });
@@ -101,6 +116,24 @@ export function useReviewActions(
     onError: (e) => toast.error(errorMessage(e)),
   });
 
+  const planApprove = useMutation({
+    mutationFn: (note: string) => api.planApprove(storyId!, note),
+    onSuccess: () => {
+      invalidateStory();
+      toast.success('Plan approved');
+    },
+    onError: (e) => toast.error(errorMessage(e)),
+  });
+
+  const planRequestChanges = useMutation({
+    mutationFn: () => api.planRequestChanges(storyId!),
+    onSuccess: () => {
+      invalidateStory();
+      toast.success('Changes requested');
+    },
+    onError: (e) => toast.error(errorMessage(e)),
+  });
+
   const releaseRequestChanges = useMutation({
     mutationFn: () => api.releaseRequestChanges(storyId!),
     onSuccess: () => {
@@ -114,32 +147,39 @@ export function useReviewActions(
   const hasOpenBlocking = comments.some((c) => c.blocking && c.resolvedInVersion == null);
 
   const currentApprovals = gate?.approvals ?? {};
-  const g1RoleAllowed = GATE_ROLES.G1.includes(identity.role);
-  const g2RoleAllowed = GATE_ROLES.G2.includes(identity.role);
+  const g1RoleAllowed = (gateRoles.G1 ?? []).includes(identity.role);
+  const g2RoleAllowed = (gateRoles.G2 ?? []).includes(identity.role);
+  const planRoleAllowed = (gateRoles.PLAN ?? []).includes(identity.role);
   const alreadyApproved = Object.values(currentApprovals).some((a) => a.who === identity.user);
 
   const approveDisabled = !storyId || hasOpenBlocking || !g1RoleAllowed || alreadyApproved;
 
-  const disabledReason: string | null = hasOpenBlocking
-    ? 'Resolve the blocking comment first'
-    : !g1RoleAllowed
-      ? `Role ${identity.role} is not a gate 1 checker`
-      : alreadyApproved
-        ? 'You already approved this version'
-        : null;
+  const disabledReason: string | null = gatesLoading
+    ? 'Loading project gates'
+    : hasOpenBlocking
+      ? 'Resolve the blocking comment first'
+      : !g1RoleAllowed
+        ? `Role ${identity.role} is not a gate 1 checker`
+        : alreadyApproved
+          ? 'You already approved this version'
+          : null;
 
   return {
     approve,
     requestChanges,
+    retryStep,
     approveAgentResult,
     addComment,
     reviewScenario,
     prApprove,
     prRequestChanges,
+    planApprove,
+    planRequestChanges,
     releaseRequestChanges,
     hasOpenBlocking,
     g1RoleAllowed,
     g2RoleAllowed,
+    planRoleAllowed,
     alreadyApproved,
     approveDisabled,
     disabledReason,

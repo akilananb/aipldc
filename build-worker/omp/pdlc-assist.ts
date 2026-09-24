@@ -23,8 +23,8 @@ interface AssistBrief {
   round: number;
   feedback: string[];
   briefing: string;
-  planValidatorModule?: string;
-  scenarios?: string[];
+  consultationValidatorModule?: string;
+  consultationRound?: number;
   outputPath?: string;
   touches?: string[];
   testPath?: string;
@@ -32,9 +32,9 @@ interface AssistBrief {
 
 type AssistDecision = { decision: 'submit'; force: boolean } | { decision: 'cancel' };
 
-type PlanValidatorModule = {
-  validatePlan?: (tasks: unknown, scenarios: string[]) => { errors: string[] };
-  default?: { validatePlan?: (tasks: unknown, scenarios: string[]) => { errors: string[] } };
+type ConsultationValidatorModule = {
+  validateConsultationOutput?: (raw: unknown) => { output: { findingsMarkdown: string; paths: string[] } | null; errors: string[] };
+  default?: { validateConsultationOutput?: (raw: unknown) => { output: { findingsMarkdown: string; paths: string[] } | null; errors: string[] } };
 };
 
 export default function pdlcAssist(pi: ExtensionAPI): void {
@@ -55,8 +55,9 @@ export default function pdlcAssist(pi: ExtensionAPI): void {
   pi.on('session_start', async (_event, ctx: ExtensionContext) => {
     const brief = readBrief();
     await pi.setSessionName(`pdlc ${brief.kind} ${brief.story.boardId}/${brief.taskId}`);
+    const label = brief.kind === 'plan' ? `repository consultation round ${brief.consultationRound ?? '?'}` : brief.kind;
     ctx.ui.notify(
-      `PDLC assist round ${brief.round}: ${brief.kind} ${brief.taskId} — /pdlc status | submit [force] | cancel`,
+      `PDLC assist ${label} (launch ${brief.round}): ${brief.taskId} — /pdlc status | submit [force] | cancel`,
       'info',
     );
     const feedbackBlock = brief.feedback.length > 0
@@ -83,10 +84,10 @@ export default function pdlcAssist(pi: ExtensionAPI): void {
         const elapsedMin = Math.floor((now - new Date(brief.startedAt).getTime()) / 60_000);
         const remainingMin = Math.max(0, Math.floor((new Date(brief.deadlineAt).getTime() - now) / 60_000));
         const scopeLine = brief.kind === 'plan'
-          ? `outputPath=${brief.outputPath}`
+          ? `consultation round=${brief.consultationRound ?? '?'} outputPath=${brief.outputPath}`
           : `touches=${(brief.touches ?? []).join(', ')} testPath=${brief.testPath}`;
         ctx.ui.notify(
-          `${brief.kind} ${brief.taskId} round ${brief.round} — elapsed ${elapsedMin}m, ${remainingMin}m until deadline. ${scopeLine}`,
+          `${brief.kind} ${brief.taskId} launch ${brief.round} — elapsed ${elapsedMin}m, ${remainingMin}m until deadline. ${scopeLine}`,
           'info',
         );
         return;
@@ -95,28 +96,31 @@ export default function pdlcAssist(pi: ExtensionAPI): void {
       if (sub === 'submit') {
         const force = args[1] === 'force';
         if (brief.kind === 'plan') {
-          let raw: { tasks?: unknown };
+          let raw: unknown;
           try {
-            raw = JSON.parse(readFileSync(path.join(ctx.cwd, brief.outputPath ?? '.pdlc/plan.json'), 'utf8')) as { tasks?: unknown };
+            raw = JSON.parse(readFileSync(path.join(ctx.cwd, brief.outputPath ?? '.pdlc/consultation.json'), 'utf8'));
           } catch (err) {
             ctx.ui.notify(`cannot read ${brief.outputPath}: ${err instanceof Error ? err.message : String(err)}`, 'error');
             return;
           }
-          // Dynamic by necessity: `planValidatorModule` is an absolute path to build-worker's
-          // own compiled output, computed by the supervisor at claim time (see assist.ts) and
-          // passed through the brief - this extension has no static dependency on build-worker's
-          // package layout to import against.
-          const mod = (await import(pathToFileURL(brief.planValidatorModule as string).href)) as PlanValidatorModule;
-          const validatePlan = mod.validatePlan ?? mod.default?.validatePlan;
-          if (!validatePlan) {
-            ctx.ui.notify('pdlc-assist: could not load the plan validator module', 'error');
+          // Dynamic by necessity: `consultationValidatorModule` is an absolute path to
+          // build-worker's own compiled output, computed by the supervisor at claim time (see
+          // assist.ts) and passed through the brief - this extension has no static dependency on
+          // build-worker's package layout to import against.
+          const mod = (await import(pathToFileURL(brief.consultationValidatorModule as string).href)) as ConsultationValidatorModule;
+          const validateConsultationOutput = mod.validateConsultationOutput ?? mod.default?.validateConsultationOutput;
+          if (!validateConsultationOutput) {
+            ctx.ui.notify('pdlc-assist: could not load the consultation validator module', 'error');
             return;
           }
-          const { errors } = validatePlan(raw.tasks, brief.scenarios ?? []);
-          if (errors.length > 0 && !force) {
+          // `force` never bypasses consultation schema/path checks - the worker-side collector
+          // (assist.ts's `collectConsultationReport`) re-validates unconditionally regardless;
+          // this pre-check only saves a round trip for the agent.
+          const { errors } = validateConsultationOutput(raw);
+          if (errors.length > 0) {
             ctx.ui.notify(`${errors.length} validation error(s) — sent to the agent`, 'warning');
             pi.sendUserMessage(
-              `Plan validation failed; fix ${brief.outputPath}:\n${errors.map((line) => `- ${line}`).join('\n')}`,
+              `Consultation validation failed; fix ${brief.outputPath}:\n${errors.map((line) => `- ${line}`).join('\n')}`,
               { attribution: 'agent' },
             );
             return;

@@ -1,6 +1,7 @@
 package ai.pdlc.core.workflow;
 
 import ai.pdlc.core.config.GateConfig;
+import ai.pdlc.core.config.RepoConfig;
 import ai.pdlc.core.domain.GrillHandoff;
 import ai.pdlc.core.domain.MonitorHandoff;
 import ai.pdlc.core.domain.PRRef;
@@ -38,6 +39,12 @@ class FakeBoardSideEffects implements BoardSideEffects {
     @Override
     public GateConfig loadGate1Config(String profile) {
         return gate1;
+    }
+
+    @Override
+    public List<RepoConfig> loadRepos(String profile) {
+        return List.of(new RepoConfig("main", "local-git", "https://github.com/acme/orders-service",
+                "main", "openspec", List.of(), true));
     }
 
     @Override
@@ -106,8 +113,11 @@ class FakeBoardSideEffects implements BoardSideEffects {
     }
 
     GateConfig gate2 = new GateConfig(List.of("FSDeveloper", "QA"), true);
+    GateConfig planGate = new GateConfig(List.of("SquadLead"), true);
     String defaultBranch = "main";
     final List<PlanHandoff> tasksPublished = new CopyOnWriteArrayList<>();
+    final List<PlanHandoff> tasksRepublished = new CopyOnWriteArrayList<>();
+    final List<Integer> planApprovals = new CopyOnWriteArrayList<>();
     final List<WorkItemRef> inProgressCalls = new CopyOnWriteArrayList<>();
     final AtomicInteger prsOpened = new AtomicInteger();
 
@@ -117,13 +127,33 @@ class FakeBoardSideEffects implements BoardSideEffects {
     }
 
     @Override
+    public GateConfig loadPlanGateConfig(String profile) {
+        return planGate;
+    }
+
+    @Override
     public PublishTasksResult publishTasks(WorkItemRef story, PlanHandoff plan) {
         tasksPublished.add(plan);
         Map<String, String> taskBoardIds = new LinkedHashMap<>();
         for (Task t : plan.tasks()) {
             taskBoardIds.put(t.id(), "task-" + t.id());
         }
-        return new PublishTasksResult(defaultBranch, taskBoardIds);
+        return new PublishTasksResult(Map.of("main", defaultBranch), taskBoardIds);
+    }
+
+    @Override
+    public PublishTasksResult republishTasks(WorkItemRef story, PlanHandoff plan, Map<String, String> previousTaskBoardIds, int planVersion) {
+        tasksRepublished.add(plan);
+        Map<String, String> taskBoardIds = new LinkedHashMap<>();
+        for (Task t : plan.tasks()) {
+            taskBoardIds.put(t.id(), previousTaskBoardIds.getOrDefault(t.id(), "task-" + t.id()));
+        }
+        return new PublishTasksResult(Map.of("main", defaultBranch), taskBoardIds);
+    }
+
+    @Override
+    public void recordPlanApproved(WorkItemRef story, int planVersion) {
+        planApprovals.add(planVersion);
     }
 
     @Override
@@ -132,9 +162,9 @@ class FakeBoardSideEffects implements BoardSideEffects {
     }
 
     @Override
-    public PRRef openStoryPr(WorkItemRef story, String branch, List<Task> tasks, List<BuildResult> results, ReviewHandoff review) {
+    public List<PRRef> openStoryPr(WorkItemRef story, String branch, List<Task> tasks, List<BuildResult> results, ReviewHandoff review) {
         prsOpened.incrementAndGet();
-        return new PRRef("1", "local://prs/1");
+        return List.of(new PRRef("1", "local://prs/1"));
     }
 
     /** boardId of each task {@link #recordTaskResults} transitioned to done, in call order. */
@@ -203,5 +233,14 @@ class FakeBoardSideEffects implements BoardSideEffects {
     @Override
     public void saveAgentMentionResult(String commentId, String markdown, String status) {
         // Not exercised by FeatureWorkflowImplTest; the mention flow has its own workflow.
+    }
+
+    /** (ref.boardId(), step, message) tuples captured by {@link #recordStepFailure} — asserted by
+     * the retry-blocking test case in {@link FeatureWorkflowImplTest}. */
+    final List<String> stepFailuresRecorded = new CopyOnWriteArrayList<>();
+
+    @Override
+    public void recordStepFailure(WorkItemRef ref, String step, String message) {
+        stepFailuresRecorded.add(ref.boardId() + ":" + step + ":" + message);
     }
 }

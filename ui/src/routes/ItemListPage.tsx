@@ -2,7 +2,7 @@ import { Fragment, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ChevronDown, ChevronRight, Inbox, Search } from 'lucide-react';
-import { Badge, Box, Button, Flex, IconButton, Skeleton, Table, Tabs, Text, TextField } from '@radix-ui/themes';
+import { Badge, Box, Button, Flex, IconButton, Select, Skeleton, Table, Tabs, Text, TextField } from '@radix-ui/themes';
 import { toast } from 'sonner';
 import { api, errorMessage } from '../api';
 import type { ItemSummary } from '../types';
@@ -16,8 +16,10 @@ import DemoSnapshotBadge from '../components/DemoSnapshotBadge';
 import PageHeader from '../components/PageHeader';
 import Surface from '../components/Surface';
 import ViewHead from '../components/ViewHead';
-import { needsAttention, statePillVariant } from '../ui-utils';
+import { isChildOf, itemNeedsAttention, statePillVariant } from '../ui-utils';
+import { useGateRolesByProject, useProjects } from '../useProject';
 import QualityIcon from '../components/QualityIcon';
+import ProjectMetaLink from '../components/ProjectMetaLink';
 
 type KindFilter = 'all' | 'feature' | 'story';
 type View = 'items' | 'running' | 'attention';
@@ -37,8 +39,17 @@ export default function ItemListPage() {
   const identity = useIdentity();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const [params] = useSearchParams();
+  const [params, setSearchParams] = useSearchParams();
   const view: View = params.get('view') === 'running' ? 'running' : params.get('view') === 'attention' ? 'attention' : 'items';
+  const projectFilter = params.get('project');
+  const projects = useProjects().data ?? [];
+
+  function setProjectFilter(id: string | null) {
+    const next = new URLSearchParams(params);
+    if (id == null) next.delete('project');
+    else next.set('project', id);
+    setSearchParams(next);
+  }
 
   const itemsQuery = useQuery({
     queryKey: ['items'],
@@ -70,6 +81,7 @@ export default function ItemListPage() {
   const [kindFilter, setKindFilter] = useState<KindFilter>('all');
   const [activeStates, setActiveStates] = useState<Set<string>>(new Set());
   const [expandedStages, setExpandedStages] = useState<Set<string>>(new Set());
+  const rolesByProject = useGateRolesByProject();
 
   // Tasks are children of a story (see WorkItemEntity.parentId) - drill into a story's Tasks
   // section (ReviewPage) instead of cluttering the top-level list (ItemListPage filters kind
@@ -84,14 +96,15 @@ export default function ItemListPage() {
   const filteredItems = useMemo(() => {
     const needle = search.trim().toLowerCase();
     return topLevelItems.filter((item) => {
+      if (projectFilter && item.profile !== projectFilter) return false;
       if (kindFilter !== 'all' && item.kind !== kindFilter) return false;
       if (activeStates.size > 0 && !activeStates.has(item.canonicalState)) return false;
       if (needle && !item.title.toLowerCase().includes(needle) && !item.boardId.toLowerCase().includes(needle)) return false;
       if (view === 'running' && item.activeRun == null) return false;
-      if (view === 'attention' && !(item.snapshot == null && needsAttention(item.canonicalState, identity.role))) return false;
+      if (view === 'attention' && !itemNeedsAttention(item, identity.role, rolesByProject)) return false;
       return true;
     });
-  }, [topLevelItems, kindFilter, activeStates, search, view, identity.role]);
+  }, [topLevelItems, projectFilter, kindFilter, activeStates, search, view, identity.role, rolesByProject]);
 
   // The total stage count for "Step N of M" must come from the FULL unfiltered catalog, never
   // from the currently-filtered stageGroups.length - otherwise a state/search filter that hides
@@ -108,20 +121,21 @@ export default function ItemListPage() {
     const features = items.filter((i) => i.kind === 'feature');
     const stories = items.filter((i) => i.kind === 'story');
     const others = items.filter((i) => i.kind !== 'feature' && i.kind !== 'story');
-    const featureBoardIds = new Set(features.map((f) => f.boardId));
+    const featureKeys = new Set(features.map((f) => `${f.profile}:${f.boardId}`));
     const childrenByFeature = new Map<string, ItemSummary[]>();
     const orphanStories: ItemSummary[] = [];
     for (const story of stories) {
-      if (story.parentId && featureBoardIds.has(story.parentId)) {
-        const list = childrenByFeature.get(story.parentId) ?? [];
+      const key = story.parentId ? `${story.profile}:${story.parentId}` : null;
+      if (key && featureKeys.has(key)) {
+        const list = childrenByFeature.get(key) ?? [];
         list.push(story);
-        childrenByFeature.set(story.parentId, list);
+        childrenByFeature.set(key, list);
       } else {
         orphanStories.push(story);
       }
     }
     return [
-      ...features.map((f) => ({ item: f, children: childrenByFeature.get(f.boardId) ?? [] })),
+      ...features.map((f) => ({ item: f, children: childrenByFeature.get(`${f.profile}:${f.boardId}`) ?? [] })),
       ...orphanStories.map((s) => ({ item: s, children: [] as ItemSummary[] })),
       ...others.map((o) => ({ item: o, children: [] as ItemSummary[] })),
     ];
@@ -171,11 +185,11 @@ export default function ItemListPage() {
 
   const [collapsedFeatures, setCollapsedFeatures] = useState<Set<string>>(new Set());
 
-  function toggleFeatureCollapsed(boardId: string) {
+  function toggleFeatureCollapsed(id: string) {
     setCollapsedFeatures((prev) => {
       const next = new Set(prev);
-      if (next.has(boardId)) next.delete(boardId);
-      else next.add(boardId);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
   }
@@ -217,18 +231,37 @@ export default function ItemListPage() {
       <PageHeader
         title={title}
         subtitle={subtitle}
-        badges={<span className="pill">WORKSPACE</span>}
+        badges={
+          projectFilter ? (
+            <span className="pill info">{projects.find((p) => p.id === projectFilter)?.name ?? projectFilter}</span>
+          ) : (
+            <span className="pill">WORKSPACE</span>
+          )
+        }
         actions={
-          <TextField.Root
-            placeholder="Search by title…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            style={{ width: 260 }}
-          >
-            <TextField.Slot>
-              <Search size={14} />
-            </TextField.Slot>
-          </TextField.Root>
+          <Flex gap="2">
+            <Select.Root value={projectFilter ?? 'all'} onValueChange={(v) => setProjectFilter(v === 'all' ? null : v)}>
+              <Select.Trigger style={{ minWidth: 180 }} aria-label="Filter by project" />
+              <Select.Content>
+                <Select.Item value="all">All projects</Select.Item>
+                {projects.map((p) => (
+                  <Select.Item key={p.id} value={p.id}>
+                    {p.name}
+                  </Select.Item>
+                ))}
+              </Select.Content>
+            </Select.Root>
+            <TextField.Root
+              placeholder="Search by title…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              style={{ width: 260 }}
+            >
+              <TextField.Slot>
+                <Search size={14} />
+              </TextField.Slot>
+            </TextField.Root>
+          </Flex>
         }
       />
 
@@ -284,7 +317,11 @@ export default function ItemListPage() {
           <EmptyState
             icon={<Inbox size={28} />}
             title="No work items"
-            hint="Items appear here when a feature is created on the board."
+            hint={
+              projectFilter
+                ? `No work items for ${projects.find((p) => p.id === projectFilter)?.name ?? projectFilter} yet.`
+                : 'Items appear here when a feature is created on the board.'
+            }
           />
         )}
 
@@ -293,7 +330,7 @@ export default function ItemListPage() {
             <Table.Header>{tableHeader()}</Table.Header>
             <Table.Body>
               {flatRows.map(({ item, children }) => {
-                const collapsed = collapsedFeatures.has(item.boardId);
+                const collapsed = collapsedFeatures.has(item.id);
                 return (
                   <Fragment key={item.id}>
                     {renderRow(item, { hasChildren: children.length > 0, collapsed })}
@@ -339,7 +376,7 @@ export default function ItemListPage() {
                   <Table.Header>{tableHeader()}</Table.Header>
                   <Table.Body>
                     {liveRows.map(({ item, children }) => {
-                      const collapsed = collapsedFeatures.has(item.boardId);
+                      const collapsed = collapsedFeatures.has(item.id);
                       const isPinnedLive = item.id === liveItem?.id;
                       return (
                         <Fragment key={item.id}>
@@ -367,6 +404,7 @@ export default function ItemListPage() {
       <Table.Row>
         <Table.ColumnHeaderCell>Title</Table.ColumnHeaderCell>
         <Table.ColumnHeaderCell>Kind</Table.ColumnHeaderCell>
+        <Table.ColumnHeaderCell>Project</Table.ColumnHeaderCell>
         <Table.ColumnHeaderCell>State</Table.ColumnHeaderCell>
         <Table.ColumnHeaderCell>Quality</Table.ColumnHeaderCell>
         <Table.ColumnHeaderCell>Attention</Table.ColumnHeaderCell>
@@ -378,7 +416,7 @@ export default function ItemListPage() {
   function renderStageHeader(group: StageGroup) {
     return (
       <Table.Row style={{ background: 'var(--accent-a3)' }}>
-        <Table.Cell colSpan={6}>
+        <Table.Cell colSpan={7}>
           <Flex align="center" gap="2">
             <Badge size="2" variant="solid">
               Step {group.order} of {totalStageCount}
@@ -410,7 +448,7 @@ export default function ItemListPage() {
     const unavailable = item.title === '(unavailable)';
     const parentStory =
       (item.kind === 'release' || item.kind === 'bug') && item.parentId
-        ? (itemsQuery.data ?? []).find((i) => i.kind === 'story' && i.boardId === item.parentId)
+        ? (itemsQuery.data ?? []).find((i) => i.kind === 'story' && isChildOf(item, i))
         : undefined;
     const indentPx = opts.subIndent ? 40 : opts.indent ? 20 : 0;
     return (
@@ -430,7 +468,7 @@ export default function ItemListPage() {
                 onClick={(e) => {
                   e.stopPropagation();
                   if (opts.onToggle) opts.onToggle();
-                  else toggleFeatureCollapsed(item.boardId);
+                  else toggleFeatureCollapsed(item.id);
                 }}
               >
                 {opts.collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
@@ -501,6 +539,11 @@ export default function ItemListPage() {
         </Table.RowHeaderCell>
         <Table.Cell>{item.kind}</Table.Cell>
         <Table.Cell>
+          <span onClick={(e) => e.stopPropagation()}>
+            <ProjectMetaLink profile={item.profile} />
+          </span>
+        </Table.Cell>
+        <Table.Cell>
           <Flex gap="1" align="center" wrap="wrap">
             <StatusBadge state={item.canonicalState} />
             <AgentActivityBadge run={item.activeRun} />
@@ -509,7 +552,7 @@ export default function ItemListPage() {
         <Table.Cell>
           {item.kind === 'story' && <QualityIcon verdict={item.qualityVerdict} />}
         </Table.Cell>
-        <Table.Cell>{item.snapshot == null && needsAttention(item.canonicalState, identity.role) && <span className="pill review">needs your review</span>}</Table.Cell>
+        <Table.Cell>{itemNeedsAttention(item, identity.role, rolesByProject) && <span className="pill review">needs your review</span>}</Table.Cell>
         <Table.Cell>
           <RelativeTime iso={item.updatedAt} />
         </Table.Cell>

@@ -13,13 +13,14 @@ export const RANK = {
   approve1: 3,
   approved: 4,
   plan: 5,
-  wave: 6,
-  review: 7,
-  approve2: 8,
-  release: 9,
-  signers: 10,
-  deploy: 11,
-  monitor: 12,
+  approvePlan: 6,
+  wave: 7,
+  review: 8,
+  approve2: 9,
+  release: 10,
+  signers: 11,
+  deploy: 12,
+  monitor: 13,
 } as const;
 
 export function currentRank(item: ItemDetail): number {
@@ -31,9 +32,9 @@ export function currentRank(item: ItemDetail): number {
     case 'awaiting-G1':
       return item.qualityVerdict === 'passed' ? RANK.approve1 : RANK.evaluate;
     case 'approved':
-      return RANK.approved;
+      return item.agentWork?.kind === 'plan' ? RANK.plan : RANK.approved;
     case 'planned':
-      return RANK.plan;
+      return RANK.approvePlan;
     case 'in-progress':
       return RANK.wave;
     case 'awaiting-G2':
@@ -80,7 +81,7 @@ export const PHASE_LABEL: Record<Phase, string> = {
 export function phaseOf(rank: number): Phase {
   if (rank <= RANK.ask) return 'clarify';
   if (rank <= RANK.approved) return 'specify';
-  if (rank <= RANK.plan) return 'plan';
+  if (rank <= RANK.approvePlan) return 'plan';
   if (rank <= RANK.approve2) return 'build';
   return 'release';
 }
@@ -97,10 +98,17 @@ export function stageSubtitle(item: ItemDetail): string {
       return item.qualityVerdict === 'passed'
         ? 'Quality-checked story waiting for product and squad approval.'
         : 'Quality agent is evaluating the draft.';
-    case 'approved':
-      return 'Approved — plan agent is breaking the story into tasks.';
+    case 'approved': {
+      const work = item.agentWork;
+      if (!work) return 'Approved — plan agent is breaking the story into tasks.';
+      if (work.phase === 'reasoning') return 'Plan agent is reasoning about the task breakdown.';
+      if (work.phase === 'running') return `Build-worker ${work.claimedBy} is consulting the repository (round ${work.round}).`;
+      return work.workersOnline === 0
+        ? 'Waiting for a build-worker to consult the repository — none online.'
+        : 'Waiting for a build-worker to pick up the repository consultation.';
+    }
     case 'planned':
-      return 'Tasks planned; the build worker is picking them up.';
+      return 'Task plan waiting for SquadLead approval.';
     case 'in-progress':
       return 'Build loop running.';
     case 'awaiting-G2':

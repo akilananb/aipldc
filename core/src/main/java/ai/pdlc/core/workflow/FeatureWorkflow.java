@@ -40,6 +40,14 @@ public interface FeatureWorkflow {
     @SignalMethod
     void proceedToStory(String by);
 
+    /** Reviewer signal: retry the currently-blocked reasoning/LLM step (see {@link
+     * ReviewState#lastFailure}) — a bounded activity retry budget was exhausted, the workflow
+     * durably recorded the failure and blocked in place rather than dying, and this resumes it
+     * with every already-collected interview answer/approval/plan-consultation state fully
+     * intact. A no-op when nothing is currently blocked. */
+    @SignalMethod
+    void retryStep(String by);
+
     @QueryMethod
     ReviewState state();
 

@@ -8,9 +8,10 @@ interface Props {
   actions?: ReactNode;
 }
 
-/** Renders a list of plain-text meta facts, each as its own stamped `.meta-tag` chip — the
- * traveler-card idiom (routing-card facts sit in their own boxes, not run together as prose). */
-export function MetaItems({ items }: { items: string[] }) {
+/** Renders a list of meta facts, each as its own stamped `.meta-tag` chip — the traveler-card
+ * idiom (routing-card facts sit in their own boxes, not run together as prose). Entries are
+ * usually plain text but may be nodes (e.g. the project name as a link to its config page). */
+export function MetaItems({ items }: { items: ReactNode[] }) {
   return (
     <>
       {items.map((text, i) => (

@@ -106,7 +106,7 @@ mvn test                                                    # full reactor test 
 mvn -pl control-plane -am test                              # one module + its deps
 mvn -pl control-plane test -Dtest=AgentMentionsTest         # one test class
 mvn -pl control-plane test -Dtest=AgentMentionsTest#parsesEachSupportedAgentCaseInsensitively  # one method
-mvn -q -o test -pl core,control-plane,agents -Dtest='!BoardSideEffectsImplTest,!PersistenceIntegrationTest'  # skip Docker-dependent tests (see Testing & QA)
+mvn -q -o test -pl core,control-plane,agents -Dtest='!BoardSideEffectsImplTest,!PersistenceIntegrationTest,!BuildTaskLeaseTest'  # skip Docker-dependent tests (see Testing & QA)
 ```
 
 **UI (`ui/`, Node/Vite):**
@@ -212,6 +212,11 @@ scripts/e2e-demo-phase4.sh   # + release pack -> gate 3 -> deploy -> monitor
   vars. **Config-drift is tested**: `control-plane/src/test/java/ai/pdlc/controlplane/config/InfraPdlcYamlTest.java`
   loads this exact file (`../infra/pdlc.yaml`), not a fixture copy.
   If you add a new `agents.roles.<name>` entry, add it to both profiles.
+- **Project config is DB-backed.** A project's `board`/`repos`/`gates`/`docs`/`brief` now live in
+  the `projects` table (migration `V13__projects.sql`), seeded once from `pdlc.yaml` at startup by
+  `ProjectSeeder` and editable afterward only via the `/projects` UI as an Admin. `pdlc.yaml` edits
+  after first boot are ignored for existing projects; `pdlc.yaml` still owns deployment-level
+  `agents.gateway`/`agents.roles`/`agents.prompts_dir` and `notify` settings.
 - `Tiltfile` / `infra/k8s/*.yaml` — Kubernetes manifests + Tilt orchestration for the local stack (9 objects); see Development Commands.
 - `control-plane/src/main/resources/db/migration/V*.sql` — Flyway migrations, strictly additive
   (no DOWN scripts); add `V7__*.sql` for new schema, never edit an applied migration.
@@ -268,12 +273,14 @@ scripts/e2e-demo-phase4.sh   # + release pack -> gate 3 -> deploy -> monitor
      `@DataJdbcTest`). **Requires a live Docker daemon.** Reference:
      `control-plane/src/test/java/ai/pdlc/controlplane/persistence/PersistenceIntegrationTest.java`,
      `.../temporal/BoardSideEffectsImplTest.java`, `adapters/.../localmetrics/LocalMetricsAdapterTest.java`.
+     `.../temporal/BuildTaskLeaseTest.java` follows the same Testcontainers+Flyway setup but skips
+     the Spring context entirely (plain `JdbcTemplate` over the container's datasource).
   3. **Plain unit tests** — bare JUnit5 + AssertJ (`assertThat`/`assertThatThrownBy`) for
      validators, parsers, config loaders, exception mappers. Reference:
      `control-plane/src/test/java/ai/pdlc/controlplane/review/AgentMentionsTest.java`.
 - **Docker-unavailable environments:** exclude the Testcontainers-backed classes:
   ```bash
-  mvn -q -o test -pl core,control-plane,agents -Dtest='!BoardSideEffectsImplTest,!PersistenceIntegrationTest'
+  mvn -q -o test -pl core,control-plane,agents -Dtest='!BoardSideEffectsImplTest,!PersistenceIntegrationTest,!BuildTaskLeaseTest'
   ```
   (this is an informal, comment-documented convention — see
   `agents/src/test/java/ai/pdlc/agents/AgentSpringWiringTest.java:34-38` — not a pom-level

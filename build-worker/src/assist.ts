@@ -7,19 +7,21 @@ import path from 'node:path';
 import { ApiClient } from './client';
 import { loadConfig, type AgentConfig } from './config';
 import { resolveRepo, type RepoHandle } from './repo';
-import { withClaimLease } from './worker';
+import { describePresence, withClaimLease } from './worker';
 import { addDetachedWorktree, addWorktree, diffCached, removeWorktree } from './git';
 import { runVerifier } from './verifier';
 import { loadTemplate } from './promptTemplate';
-import { planTasksPrompt, buildTaskPrompt } from './acp';
-import { validatePlan, collectNewFiles } from './planTask';
+import { buildTaskPrompt, planConsultationPrompt } from './acp';
+import { collectConsultationReport, formatConsultationHistory, resolvePinnedCommit } from './planTask';
 import { assessBuildScope, finalizeBuild, prepareBuildScope, type BuildScope } from './buildTask';
 import { clearDecision, DECISION_FILE, readDecision, writeBrief, type AssistBrief, type AssistDecision } from './assistProtocol';
-import type { BuildPayload, ClaimedTask, PlanPayload, Task, WorkItemRef } from './types';
+import type { BuildPayload, ClaimedTask, Lease, PlanConsultationReport, PlanPayload, Task, WorkItemRef } from './types';
 
-const PLAN_OUTPUT_PATH = '.pdlc/plan.json';
+const PLAN_OUTPUT_PATH = '.pdlc/consultation.json';
 const DEFAULT_MAX_MINUTES = 25;
+const ASSISTED_PLAN_MAX_MINUTES = 15;
 const USAGE = 'usage: pdlc-assist <plan|build> --story <boardId> [--task <id>] [--max-minutes <n>]';
+
 
 export interface AssistArgs {
   kind: 'plan' | 'build';
@@ -191,38 +193,45 @@ async function savePatch(cfg: AgentConfig, worktreePath: string, story: WorkItem
 async function runAssistedPlan(
   cfg: AgentConfig,
   client: ApiClient,
-  claimId: string,
+  lease: Lease,
   payload: PlanPayload,
   repo: RepoHandle,
   deps: AssistDeps,
   maxMinutes: number,
   leaseSignal: AbortSignal,
 ): Promise<number> {
-  const { po, baseBranch, story } = payload;
+  const { po, baseBranch, story, consultation } = payload;
   await repo.sync(baseBranch, baseBranch);
+  const baseCommit = await resolvePinnedCommit(repo, baseBranch, consultation.baseCommit);
   const worktreePath = await mkdtemp(path.join(tmpdir(), `pdlc-assist-plan-${story.boardId}-`));
   const controlDir = await mkdtemp(path.join(tmpdir(), `pdlc-assist-ctl-${story.boardId}-`));
-  const template = loadTemplate('plan-tasks', cfg.promptTemplateDir);
+  const template = loadTemplate('plan-consultation', cfg.promptTemplateDir);
   const startedAt = Date.now();
-  const deadlineAt = startedAt + maxMinutes * 60_000;
+  // A single claimed consultation round is capped tighter than the general --max-minutes: the
+  // Plan Agent, not this CLI, owns the whole bounded conversation across claims.
+  const cappedMinutes = Math.min(maxMinutes, ASSISTED_PLAN_MAX_MINUTES);
+  const deadlineAt = startedAt + cappedMinutes * 60_000;
 
   try {
-    await addDetachedWorktree(repo.path, worktreePath, baseBranch);
+    await addDetachedWorktree(repo.path, worktreePath, baseCommit);
 
     let feedback: string[] = [];
     let round = 1;
     for (;;) {
-      const briefing = planTasksPrompt(template, {
+      const briefing = planConsultationPrompt(template, {
         change: po.change,
         scenarios: po.scenarios,
         areas: po.areas.join(', '),
         nfr: Object.entries(po.nfr).map(([k, v]) => `${k}: ${v}`),
+        questions: consultation.questions,
+        paths: consultation.paths,
+        history: formatConsultationHistory(consultation.history),
         outputPath: PLAN_OUTPUT_PATH,
-        feedback,
+        repo: consultation.repoId,
       });
       const brief: AssistBrief = {
         kind: 'plan',
-        claimId,
+        claimId: lease.id,
         story,
         taskId: 'plan',
         title: po.change,
@@ -231,8 +240,8 @@ async function runAssistedPlan(
         round,
         feedback,
         briefing,
-        planValidatorModule: path.join(__dirname, 'planValidator.js'),
-        scenarios: po.scenarios,
+        consultationValidatorModule: path.join(__dirname, 'planConsultationValidator.js'),
+        consultationRound: consultation.round,
         outputPath: PLAN_OUTPUT_PATH,
       };
 
@@ -243,13 +252,13 @@ async function runAssistedPlan(
         return 3;
       }
       if (outcome === 'deadline') {
-        await client.postFail(claimId, `pdlc-assist: exceeded --max-minutes ${maxMinutes}`);
-        console.log(`[pdlc-assist] exceeded --max-minutes ${maxMinutes}; failed the claim`);
+        await client.postFail(lease, `pdlc-assist: exceeded --max-minutes ${cappedMinutes}`);
+        console.log(`[pdlc-assist] exceeded --max-minutes ${cappedMinutes}; failed the claim`);
         return 0;
       }
       if (outcome.decision === 'cancel') {
-        await client.postFail(claimId, `pdlc-assist: plan cancelled by ${cfg.agentName}`);
-        console.log('[pdlc-assist] plan cancelled');
+        await client.postFail(lease, `pdlc-assist: plan consultation cancelled by ${cfg.agentName}`);
+        console.log('[pdlc-assist] plan consultation cancelled');
         return 0;
       }
 
@@ -257,21 +266,25 @@ async function runAssistedPlan(
       try {
         raw = JSON.parse(await readFile(path.join(worktreePath, PLAN_OUTPUT_PATH), 'utf8'));
       } catch {
-        feedback = ['plan.json missing or not valid JSON'];
-        round++;
-        continue;
-      }
-      const { tasks, errors } = validatePlan((raw as { tasks?: unknown }).tasks, po.scenarios);
-      if (errors.length > 0 && !outcome.force) {
-        feedback = errors;
+        feedback = [`${PLAN_OUTPUT_PATH} missing or not valid JSON`];
         round++;
         continue;
       }
 
-      const newFiles = collectNewFiles(worktreePath, tasks);
+      // `force` never bypasses consultation schema/path/snapshot checks - unlike the build path,
+      // these are required-for-progress correctness gates, not developer-overridable heuristics.
+      let report: PlanConsultationReport;
+      try {
+        report = await collectConsultationReport(worktreePath, baseCommit, consultation.paths, raw);
+      } catch (err) {
+        feedback = [err instanceof Error ? err.message : String(err)];
+        round++;
+        continue;
+      }
+
       let status: 'ok' | 'gone';
       try {
-        status = await client.postPlanResult(claimId, { tasks, newFiles });
+        status = await client.postPlanResult(lease, report);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         feedback = [message.replace(/^request failed: \d+ /, '')];
@@ -282,7 +295,7 @@ async function runAssistedPlan(
         console.log('[pdlc-assist] lease lost while submitting - task reassigned');
         return 3;
       }
-      console.log('[pdlc-assist] plan submitted');
+      console.log('[pdlc-assist] plan consultation submitted');
       return 0;
     }
   } finally {
@@ -294,7 +307,7 @@ async function runAssistedPlan(
 async function runAssistedBuild(
   cfg: AgentConfig,
   client: ApiClient,
-  claimId: string,
+  lease: Lease,
   payload: BuildPayload,
   repo: RepoHandle,
   deps: AssistDeps,
@@ -323,7 +336,7 @@ async function runAssistedBuild(
       );
       const brief: AssistBrief = {
         kind: 'build',
-        claimId,
+        claimId: lease.id,
         story,
         taskId: task.id,
         title: task.title,
@@ -345,13 +358,13 @@ async function runAssistedBuild(
       }
       if (outcome === 'deadline') {
         const patchPath = await savePatch(cfg, worktreePath, story, task, scope.startSha);
-        await client.postFail(claimId, `pdlc-assist: exceeded --max-minutes ${maxMinutes}`);
+        await client.postFail(lease, `pdlc-assist: exceeded --max-minutes ${maxMinutes}`);
         console.log(`[pdlc-assist] exceeded --max-minutes ${maxMinutes}; work saved at ${patchPath ?? '(no changes)'}`);
         return 0;
       }
       if (outcome.decision === 'cancel') {
         const patchPath = await savePatch(cfg, worktreePath, story, task, scope.startSha);
-        await client.postFail(claimId, `pdlc-assist: build cancelled by ${cfg.agentName}`);
+        await client.postFail(lease, `pdlc-assist: build cancelled by ${cfg.agentName}`);
         console.log(`[pdlc-assist] build cancelled; work saved at ${patchPath ?? '(no changes)'}`);
         return 0;
       }
@@ -373,7 +386,7 @@ async function runAssistedBuild(
         traceSummary: `assisted by ${cfg.agentName}, ${round} session round(s)`,
         escalation: null,
       });
-      const status = await client.postResult(claimId, result);
+      const status = await client.postResult(lease, result);
       if (status === 'gone') {
         const patchPath = await savePatch(cfg, worktreePath, story, task, scope.startSha);
         console.log(`[pdlc-assist] lease lost while submitting - task reassigned; work saved at ${patchPath ?? '(no changes)'}`);
@@ -404,36 +417,36 @@ async function runAssistedBuild(
  */
 export async function runAssist(cfg: AgentConfig, client: ApiClient, args: AssistArgs, deps: AssistDeps = defaultDeps()): Promise<number> {
   console.log(`[pdlc-assist] waiting for pending ${args.kind} task story=${args.story} task=${args.kind === 'plan' ? 'plan' : args.task} ...`);
-  let claimed: ClaimedTask | null = await client.claim();
+  let claimed: ClaimedTask | null = await client.claim(await describePresence(cfg));
   while (!claimed) {
     const { promise, resolve } = Promise.withResolvers<void>();
     setTimeout(resolve, cfg.pollIntervalMs);
     await promise;
-    claimed = await client.claim();
+    claimed = await client.claim(await describePresence(cfg));
   }
 
   if (claimed.payload.kind !== args.kind) {
-    await client.postFail(claimed.id, 'pdlc-assist: claimed unexpected kind');
+    await client.postFail(claimed, 'pdlc-assist: claimed unexpected kind');
     return 1;
   }
 
-  const claimId = claimed.id;
+  const lease: Lease = claimed;
   const repo = await resolveRepo(cfg, claimed.payload.repo);
   let exitCode = 1;
   try {
     if (claimed.payload.kind === 'plan') {
       const payload = claimed.payload;
-      await withClaimLease(client, claimId, async (leaseSignal) => {
-        exitCode = await runAssistedPlan(cfg, client, claimId, payload, repo, deps, args.maxMinutes, leaseSignal);
+      await withClaimLease(client, lease, async (leaseSignal) => {
+        exitCode = await runAssistedPlan(cfg, client, lease, payload, repo, deps, args.maxMinutes, leaseSignal);
       });
     } else {
       const payload = claimed.payload;
-      await withClaimLease(client, claimId, async (leaseSignal) => {
-        exitCode = await runAssistedBuild(cfg, client, claimId, payload, repo, deps, args.maxMinutes, leaseSignal);
+      await withClaimLease(client, lease, async (leaseSignal) => {
+        exitCode = await runAssistedBuild(cfg, client, lease, payload, repo, deps, args.maxMinutes, leaseSignal);
       });
     }
   } catch (err) {
-    await client.postFail(claimId, String(err));
+    await client.postFail(lease, String(err));
     exitCode = 1;
   }
   return exitCode;

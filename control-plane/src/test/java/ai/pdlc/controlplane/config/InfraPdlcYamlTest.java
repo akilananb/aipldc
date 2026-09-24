@@ -21,14 +21,21 @@ class InfraPdlcYamlTest {
 
         assertThat(local.board().provider()).isEqualTo("local-jdbc");
         assertThat(local.repo().provider()).isEqualTo("local-git");
+        assertThat(local.repo().url()).isEqualTo("/Users/work/Documents/restaurant-runtime");
         assertThat(local.repo().defaultBranch()).isEqualTo("restaurant-base");
+        assertThat(local.repos()).hasSize(1);
+        assertThat(local.repos().get(0).id()).isEqualTo("restaurant-runtime");
+        assertThat(local.repos().get(0).primary()).isTrue();
+        assertThat(local.project().name()).isEqualTo("Restaurant runtime");
         assertThat(local.gate("G1").roles()).containsExactly("PO", "SquadLead");
         assertThat(local.gate("G1").sod()).isTrue();
         assertThat(local.gate("G2").roles()).containsExactly("FSDeveloper", "QA");
         assertThat(local.gate("G2").sod()).isTrue();
         assertThat(local.gate("G3").roles()).containsExactly("PO", "SquadLead", "QA");
         assertThat(local.gate("G3").sod()).isTrue();
-        assertThat(local.agents().roles()).containsKeys("grill", "po", "review", "release", "quality");
+        assertThat(local.gate("PLAN").roles()).containsExactly("SquadLead");
+        assertThat(local.gate("PLAN").sod()).isTrue();
+        assertThat(local.agents().roles()).containsKeys("grill", "po", "review", "release", "quality", "plan");
     }
 
     @Test

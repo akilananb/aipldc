@@ -1,8 +1,11 @@
 package ai.pdlc.agents.grill;
 
 import ai.pdlc.agents.activities.AgentContext;
+import ai.pdlc.agents.activities.ProjectContext;
+import ai.pdlc.agents.config.PortRegistry;
 import ai.pdlc.agents.templates.PromptTemplates;
 import ai.pdlc.core.config.Profile;
+import ai.pdlc.core.config.ProjectDirectory;
 import ai.pdlc.core.domain.CanonicalState;
 import ai.pdlc.core.domain.Comment;
 import ai.pdlc.core.domain.GrillHandoff;
@@ -73,8 +76,8 @@ public class GrillAgent {
     }
 
     private final Ai ai;
-    private final BoardPort board;
-    private final RepoPort repo;
+    private final PortRegistry ports;
+    private final ProjectDirectory projects;
     private final PromptTemplates templates;
     private final Profile activeProfile;
     private final GrillSkills skills;
@@ -85,10 +88,11 @@ public class GrillAgent {
      * is still parsed but unapplied — out of scope for this change. */
     private final Integer grillMaxTokens;
 
-    public GrillAgent(Ai ai, BoardPort board, RepoPort repo, PromptTemplates templates, Profile activeProfile, GrillSkills skills) {
+    public GrillAgent(Ai ai, PortRegistry ports, ProjectDirectory projects, PromptTemplates templates,
+                       Profile activeProfile, GrillSkills skills) {
         this.ai = ai;
-        this.board = board;
-        this.repo = repo;
+        this.ports = ports;
+        this.projects = projects;
         this.templates = templates;
         this.activeProfile = activeProfile;
         this.skills = skills;
@@ -96,6 +100,7 @@ public class GrillAgent {
         this.grillModel = role != null ? role.model() : null;
         this.grillMaxTokens = role != null && role.budgetTokens() != null ? role.budgetTokens().intValue() : null;
     }
+
 
     public GrillHandoff evaluate(WorkItemRef item, GrillHandoff previous, List<BoardCommentEvent> newComments) {
         if (previous == null) {
@@ -262,15 +267,18 @@ public class GrillAgent {
             throw new IllegalStateException("Cannot start a new grill round while questions remain open: " + item);
         }
 
+        Profile project = projects.project(item.profile());
+        BoardPort board = ports.board(item.profile());
+        RepoPort repo = ports.primaryRepo(item.profile());
         WorkItem workItem = AgentContext.readWorkItem(board, item);
         List<Comment> boardComments = AgentContext.readComments(board, item);
         String title = workItem == null ? item.boardId() : safe(workItem.title());
         String description = workItem == null ? "" : safe(workItem.description());
 
-        String defaultBranch = activeProfile.repo().defaultBranch();
+        String defaultBranch = project.repo().defaultBranch();
         String readme = AgentContext.readFile(repo, defaultBranch, "README.md");
         String constraints = AgentContext.readFile(repo, defaultBranch, "docs/constraints.md");
-        String specConfig = AgentContext.readFile(repo, defaultBranch, activeProfile.repo().specDir() + "/config.yaml");
+        String specConfig = AgentContext.readFile(repo, defaultBranch, project.repo().specDir() + "/config.yaml");
 
         List<GrillQuestion> history = previous == null ? List.of() : previous.questions();
         String nextId = GrillQuestion.nextGrillId(history);
@@ -285,6 +293,7 @@ public class GrillAgent {
         view.put("specConfig", specConfig == null ? "(unavailable)" : specConfig);
         view.put("history", formatHistory(history));
         view.put("nextId", nextId);
+        view.put("project", ProjectContext.view(project));
         String prompt = templates.render("grill-questions", view);
 
         String raw = stripCodeFence(promptRunner().generateText(prompt));

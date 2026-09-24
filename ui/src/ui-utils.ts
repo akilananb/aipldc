@@ -1,5 +1,4 @@
 // Small shared UI helpers.
-import { GATE_ROLES } from './gates';
 
 export type BadgeColor = 'gray' | 'green' | 'amber' | 'red' | 'blue' | 'violet';
 
@@ -149,9 +148,29 @@ export const ATTENTION_GATE: Record<string, 'G1' | 'G2' | 'G3'> = {
 /** Mirrors ItemListPage's original inline check: does `role` currently sit on the gate blocking
  * `canonicalState`? Used both by ItemListPage's Attention column and by AppShell's "Needs review"
  * nav badge/filter, so the two always agree on what counts as needing attention. */
-export function needsAttention(canonicalState: string, role: string): boolean {
+export function needsAttention(canonicalState: string, role: string, gateRoles?: Record<string, string[]>): boolean {
   const gate = ATTENTION_GATE[canonicalState];
-  return gate != null && GATE_ROLES[gate].includes(role);
+  if (gate == null || !gateRoles) return false;
+  return (gateRoles[gate] ?? []).includes(role);
+}
+
+/** Parent/child work-item link: work_items is unique on (profile, board_id), so a bare
+ * parentId === boardId match can cross projects whose board ids collide. */
+export function isChildOf(
+  child: { profile: string; parentId: string | null },
+  parent: { profile: string; boardId: string },
+): boolean {
+  return child.parentId != null && child.parentId === parent.boardId && child.profile === parent.profile;
+}
+
+/** Attention check for a list row: the row's OWN project's gate roles (never a cross-project
+ * merge), and frozen demo snapshots never need review. */
+export function itemNeedsAttention(
+  item: { profile: string; canonicalState: string; snapshot: unknown | null },
+  role: string,
+  rolesByProject: Record<string, Record<string, string[]>>,
+): boolean {
+  return item.snapshot == null && needsAttention(item.canonicalState, role, rolesByProject[item.profile]);
 }
 
 export interface ScenarioStep {
@@ -484,4 +503,15 @@ export const GRILL_CATEGORY_LABEL: Record<string, string> = {
 
 export function grillCategoryLabel(c: string): string {
   return GRILL_CATEGORY_LABEL[c] ?? c;
+}
+
+/** Human-readable repo locations for an agent presence row/tooltip — one line per configured
+ * override (`id: location @ branch`), or a single `payload` line when the ACP worker takes its
+ * repo from each claim with no fixed location. */
+export function agentRepoLabel(a: { repos: { id: string; mode: string; location: string | null; branch: string | null }[] }): string {
+  const repos = a.repos ?? [];
+  if (repos.length === 0) return '—';
+  return repos
+    .map((r) => (r.mode === 'payload' ? `${r.id}: repo from claim payload` : `${r.id}: ${r.location ?? '—'}${r.branch ? ` @ ${r.branch}` : ''}`))
+    .join('\n');
 }

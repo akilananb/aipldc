@@ -8,18 +8,21 @@ import ai.pdlc.controlplane.persistence.QualityReportRepository;
 import ai.pdlc.controlplane.persistence.ReviewEventRepository;
 import ai.pdlc.controlplane.persistence.WorkItemEntity;
 import ai.pdlc.controlplane.persistence.WorkItemRepository;
+import ai.pdlc.controlplane.config.PortRegistry;
 import ai.pdlc.controlplane.review.ReviewTrailService;
+import ai.pdlc.core.config.AgentsConfig;
 import ai.pdlc.core.config.BoardConfig;
-import ai.pdlc.core.config.PdlcConfig;
+import ai.pdlc.core.config.NotifyConfig;
 import ai.pdlc.core.config.Profile;
+import ai.pdlc.core.config.ProjectDirectory;
+import ai.pdlc.core.config.ProjectMeta;
+import ai.pdlc.core.config.RepoConfig;
 import ai.pdlc.core.domain.CanonicalState;
 import ai.pdlc.core.domain.Handoff;
 import ai.pdlc.core.domain.MonitorHandoff;
 import ai.pdlc.core.domain.WorkItem;
 import ai.pdlc.core.domain.WorkItemRef;
 import ai.pdlc.core.port.BoardPort;
-import ai.pdlc.core.port.CiPort;
-import ai.pdlc.core.port.RepoPort;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
@@ -105,15 +108,21 @@ class BoardSideEffectsImplTest {
                 .thenReturn(new WorkItem("9001", "bug", "Monitor trip: export-error-rate", "evidence",
                         CanonicalState.NEW, "4412", null, List.of()));
 
-        PdlcConfig pdlcConfig = Mockito.mock(PdlcConfig.class);
+        ProjectDirectory projects = Mockito.mock(ProjectDirectory.class);
+        PortRegistry ports = Mockito.mock(PortRegistry.class);
         BoardConfig boardConfig = new BoardConfig("in-memory", "local", "PDLC", Map.of(), Map.of(), null);
-        Profile profile = new Profile("local", boardConfig, null, null, null, Map.of());
-        when(pdlcConfig.profile("local")).thenReturn(profile);
-        RepoPort repo = Mockito.mock(RepoPort.class);
-        CiPort ci = Mockito.mock(CiPort.class);
-        ReviewTrailService reviewTrail = new ReviewTrailService(pdlcConfig, repo, reviewEvents);
+        Profile profile = new Profile("local",
+                new ProjectMeta("local", "local", null, List.of(), "", null),
+                boardConfig,
+                List.of(new RepoConfig("main", "local-git", "/tmp/x", "main", "openspec", List.of(), true)),
+                new NotifyConfig("none", "none"),
+                new AgentsConfig("http://stub", null, Map.of()),
+                Map.of());
+        when(projects.project("local")).thenReturn(profile);
+        when(ports.board("local")).thenReturn(board);
+        ReviewTrailService reviewTrail = new ReviewTrailService(projects, ports, reviewEvents);
 
-        BoardSideEffectsImpl impl = new BoardSideEffectsImpl(pdlcConfig, board, repo, ci,
+        BoardSideEffectsImpl impl = new BoardSideEffectsImpl(projects, ports,
                 workItems, artifacts, comments, reviewTrail, prs, releaseDocuments, qualityReports, jdbc);
 
         Handoff envelope = new Handoff("monitor-agent", "grill-agent", "4412", CanonicalState.DONE,

@@ -1,13 +1,33 @@
 #!/usr/bin/env node
 import { ApiClient } from './client';
-import { loadConfig } from './config';
+import { loadConfig, type AgentConfig } from './config';
+import { currentBranch } from './git';
 import { resolveRepo, type RepoHandle } from './repo';
 import { runBuildTask } from './buildTask';
 import { runPlanTask } from './planTask';
-import type { BuildPayload, BuildResult, ClaimedTask, PlanPayload, PlanResult } from './types';
+import type { AgentPresenceReport, BuildPayload, BuildResult, ClaimedTask, Lease, PlanConsultationReport, PlanPayload } from './types';
 
 export type BuildRunner = (payload: BuildPayload, repo: RepoHandle, opts: { acpAgent: string; promptTemplateDir?: string }, signal: AbortSignal) => Promise<BuildResult>;
-export type PlanRunner = (payload: PlanPayload, repo: RepoHandle, opts: { acpAgent: string; promptTemplateDir?: string }, signal: AbortSignal) => Promise<PlanResult>;
+export type PlanRunner = (payload: PlanPayload, repo: RepoHandle, opts: { acpAgent: string; promptTemplateDir?: string }, signal: AbortSignal) => Promise<PlanConsultationReport>;
+
+/** What to attach to every claim poll so the control plane can show this agent's liveness,
+ * per-repo presence, and branch (`GET /api/agents`) - see `AgentPresenceService#touchAcpOnClaim`.
+ * A `local` override's branch is read fresh each poll (cheap `git rev-parse`), so a developer
+ * switching branches in the shared checkout shows up within one poll interval; unresolvable (e.g.
+ * detached worktree mid-op) degrades to `null` rather than failing the claim. */
+export async function describePresence(cfg: AgentConfig): Promise<AgentPresenceReport> {
+  const repos: AgentPresenceReport['repos'] =
+    cfg.repoOverrides.size === 0
+      ? [{ id: '*', mode: 'payload', location: null, branch: null }]
+      : await Promise.all(
+          [...cfg.repoOverrides.entries()].map(async ([id, override]) =>
+            override.mode === 'local'
+              ? { id, mode: 'local' as const, location: override.path, branch: await currentBranch(override.path).catch(() => null) }
+              : { id, mode: 'remote' as const, location: override.url, branch: null },
+          ),
+        );
+  return { acpAgent: cfg.acpAgent, pollIntervalMs: cfg.pollIntervalMs, repos };
+}
 
 /**
  * Owns the claim's lease while `run` works: heartbeats every {@link AgentConfig.heartbeatIntervalMs}
@@ -19,7 +39,7 @@ export type PlanRunner = (payload: PlanPayload, repo: RepoHandle, opts: { acpAge
  */
 export async function withClaimLease(
   client: ApiClient,
-  claimedId: string,
+  lease: Lease,
   run: (signal: AbortSignal) => Promise<void>,
   onController?: (controller: AbortController) => void,
 ): Promise<void> {
@@ -28,7 +48,7 @@ export async function withClaimLease(
   onController?.(controller);
 
   const interval = setInterval(() => {
-    client.heartbeat(claimedId).then((status) => {
+    client.heartbeat(lease).then((status) => {
       if (status === 'gone') {
         controller.abort();
       }
@@ -61,15 +81,15 @@ export async function handleClaim(
   try {
     await withClaimLease(
       client,
-      claimed.id,
+      claimed,
       async (signal) => {
         const opts = { acpAgent: cfg.acpAgent, promptTemplateDir: cfg.promptTemplateDir };
         if (claimed.payload.kind === 'plan') {
           const result = await runners.plan(claimed.payload, repo, opts, signal);
-          await client.postPlanResult(claimed.id, result);
+          await client.postPlanResult(claimed, result);
         } else {
           const result = await runners.build(claimed.payload, repo, opts, signal);
-          await client.postResult(claimed.id, result);
+          await client.postResult(claimed, result);
         }
       },
       (controller) => {
@@ -79,7 +99,7 @@ export async function handleClaim(
     );
   } catch (err) {
     if (!capturedController?.signal.aborted) {
-      await client.postFail(claimed.id, String(err));
+      await client.postFail(claimed, String(err));
     }
   }
 }
@@ -108,13 +128,18 @@ async function main(): Promise<void> {
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
 
-  // One task at a time - wave tasks share one story branch (FeatureWorkflowImpl.java:144,156)
-  // and `git worktree add` refuses a branch checked out elsewhere, so single-flight is correct.
+  // One task at a time (per process) - wave tasks share one story branch (FeatureWorkflowImpl.java:144,156)
+  // and `git worktree add` refuses a branch checked out elsewhere, so single-flight per process is
+  // correct; the server serializes per story across processes (one live claim per story_board_id),
+  // so a pool of workers only parallelizes across different stories.
   while (!shuttingDown) {
-    const claimed = await client.claim();
+    const claimed = await client.claim(await describePresence(cfg));
     if (!claimed) {
       await sleep(cfg.pollIntervalMs);
       continue;
+    }
+    if (claimed.claimCount > 1) {
+      console.log(`[build-agent] reclaimed ${claimed.id} (claim #${claimed.claimCount}) - a previous worker lost its lease`);
     }
     // Plan and build tasks both run single-flight through this same claim loop - a plan step
     // also uses a worktree of the repo, so two in-flight claims per agent process is unsafe.

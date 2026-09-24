@@ -53,11 +53,18 @@ export interface Approval {
   at: string;
 }
 
+export interface StepFailure {
+  step: string;
+  message: string;
+  atEpochMilli: number;
+}
+
 export interface GateState {
   version: number;
   approvals: Record<string, Approval>;
   openBlockingComments: number;
   stage: string;
+  lastFailure: StepFailure | null;
 }
 
 export type AgentRunStatus = 'running' | 'abandoned' | 'finished';
@@ -88,6 +95,19 @@ export interface DemoStatus {
   liveItemId: string | null;
 }
 
+export type AgentWorkPhase = 'reasoning' | 'waiting-for-worker' | 'running';
+export type AgentWorkKind = 'plan' | 'build';
+
+export interface AgentWork {
+  phase: AgentWorkPhase;
+  kind: AgentWorkKind;
+  taskId: string | null;
+  round: number | null;
+  claimedBy: string | null;
+  since: string | null;
+  workersOnline: number;
+}
+
 export interface ItemDetail {
   id: string;
   profile: string;
@@ -103,10 +123,12 @@ export interface ItemDetail {
   qualityVerdict: string | null;
   activeRun: AgentRun | null;
   snapshot: DemoSnapshot | null;
+  agentWork: AgentWork | null;
 }
 
 export interface ItemSummary {
   id: string;
+  profile: string;
   boardId: string;
   kind: string;
   title: string;
@@ -181,3 +203,104 @@ export interface GrillQuestions {
   questions: GrillQuestion[];
 }
 
+
+export type AgentKind = 'acp' | 'reasoning';
+
+export interface AgentRepo {
+  id: string;
+  mode: string;
+  location: string | null;
+  branch: string | null;
+}
+
+export interface AgentCurrentTask {
+  claimId: string;
+  kind: string;
+  storyBoardId: string | null;
+  taskId: string | null;
+  branch: string | null;
+  round: number | null;
+  since: string;
+}
+
+export interface AgentPresence {
+  name: string;
+  kind: AgentKind;
+  profile: string;
+  online: boolean;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  acpAgent: string | null;
+  repos: AgentRepo[];
+  repoMismatch: boolean;
+  pollIntervalMs: number | null;
+  current: AgentCurrentTask | null;
+}
+
+export interface AgentsStatus {
+  generatedAt: string;
+  onlineWindowSeconds: number;
+  agents: AgentPresence[];
+}
+
+
+// Admin-managed project config (`GET/PUT/DELETE /api/projects[/{id}]`).
+
+export interface DocLink {
+  title: string;
+  url: string;
+}
+
+export interface ProjectBoard {
+  provider: string;
+  org: string;
+  project: string;
+  authKind: string;
+  authSecretRef: string;
+  types: Record<string, string>;
+  states: Record<string, string>;
+}
+
+export interface ProjectRepo {
+  id: string;
+  provider: string;
+  url: string;
+  defaultBranch: string;
+  specDir: string;
+  areas: string[];
+  primary: boolean;
+}
+
+export interface GateRoles {
+  roles: string[];
+  sod: boolean;
+}
+
+export interface ProjectBuild {
+  acpAgent: string;
+}
+
+export interface Project {
+  id: string;
+  name: string;
+  board: ProjectBoard;
+  repos: ProjectRepo[];
+  confluenceUrl: string;
+  docs: DocLink[];
+  brief: string;
+  gates: Record<string, GateRoles>;
+  build: ProjectBuild;
+  updatedAt: string;
+  updatedBy: string | null;
+}
+
+export interface ProjectRequest {
+  name: string;
+  board: ProjectBoard;
+  repos: ProjectRepo[];
+  confluenceUrl: string;
+  docs: DocLink[];
+  brief: string;
+  gates: Record<string, GateRoles>;
+  build: ProjectBuild;
+}

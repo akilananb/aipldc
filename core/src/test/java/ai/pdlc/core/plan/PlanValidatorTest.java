@@ -18,7 +18,7 @@ class PlanValidatorTest {
     private static final Task.TaskBudget BUDGET = new Task.TaskBudget(6, 100_000L, Duration.ofMinutes(10));
 
     private static Task task(String id, String scenario, List<String> touches, List<String> blockedBy) {
-        return new Task(id, "Implement " + scenario, "brief", "orders", scenario, touches, "test/export.test.js", BUDGET, blockedBy);
+        return new Task(id, "Implement " + scenario, "brief", "orders", "main", scenario, touches, "test/export.test.js", BUDGET, blockedBy);
     }
 
     @Test

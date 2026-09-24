@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
@@ -35,15 +35,19 @@ test('resolveRepo remote mode clones a bare cache, syncs with the story branch a
     filters: { profile: 'local' },
     pollIntervalMs: 5000,
     heartbeatIntervalMs: 30_000,
+    repoOverrides: new Map([['api', { mode: 'remote', url: 'https://unused.test/api.git' }]]),
     cacheDir,
     acpAgent: 'omp acp',
   };
 
   const repo = await resolveRepo(cfg, {
+    id: 'web',
     provider: 'git',
     url: `file://${originDir}`,
     defaultBranch: 'main',
     specDir: 'openspec',
+    areas: [],
+    primary: true,
   });
 
   assert.ok(repo.path.startsWith(path.join(cacheDir, 'repos')), 'expected a bare cache under cacheDir/repos');
@@ -61,4 +65,32 @@ test('resolveRepo remote mode clones a bare cache, syncs with the story branch a
 
   const originSha = (await git(originDir, ['rev-parse', 'story/1'])).trim();
   assert.equal(originSha, sha);
+});
+
+test('resolveRepo prefers the override keyed by the payload repo id', async () => {
+  const repoPath = await mkdtemp(path.join(tmpdir(), 'pdlc-repo-override-'));
+  await mkdir(path.join(repoPath, '.git'));
+  const cacheDir = await mkdtemp(path.join(tmpdir(), 'pdlc-repo-cache-'));
+  const cfg: AgentConfig = {
+    apiUrl: 'http://unused',
+    agentName: 'test-agent',
+    filters: { profile: 'local' },
+    pollIntervalMs: 5000,
+    heartbeatIntervalMs: 30_000,
+    repoOverrides: new Map([['api', { mode: 'local', path: repoPath }]]),
+    cacheDir,
+    acpAgent: 'omp acp',
+  };
+
+  const repo = await resolveRepo(cfg, {
+    id: 'api',
+    provider: 'git',
+    url: 'https://unused.test/api.git',
+    defaultBranch: 'main',
+    specDir: 'openspec',
+    areas: [],
+    primary: true,
+  });
+
+  assert.equal(repo.path, repoPath);
 });

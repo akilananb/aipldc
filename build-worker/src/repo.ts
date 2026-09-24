@@ -17,15 +17,17 @@ export interface RepoHandle {
 const remoteHandles = new Map<string, Promise<RepoHandle>>();
 
 /** Resolves the repo a claimed task's build loop should run against. Precedence: {@link
- * AgentConfig.repoOverride} (host-level env) wins over the claim payload's repo; otherwise a
- * `local-git` payload provider means control-plane and this agent share a filesystem (the e2e
- * `local` profile), and anything else is a real remote to clone/fetch/push over HTTP(S). */
+ * AgentConfig.repoOverrides} (host-level env, keyed by the payload repo's `id`) wins over the
+ * claim payload's repo; otherwise a `local-git` payload provider means control-plane and this
+ * agent share a filesystem (the e2e `local` profile), and anything else is a real remote to
+ * clone/fetch/push over HTTP(S). */
 export async function resolveRepo(cfg: AgentConfig, payloadRepo: ClaimedRepo): Promise<RepoHandle> {
-  if (cfg.repoOverride?.mode === 'local') {
-    return localHandle(cfg.repoOverride.path);
+  const override = cfg.repoOverrides.get(payloadRepo.id);
+  if (override?.mode === 'local') {
+    return localHandle(override.path);
   }
-  if (cfg.repoOverride?.mode === 'remote') {
-    return remoteHandle(cfg, cfg.repoOverride.url);
+  if (override?.mode === 'remote') {
+    return remoteHandle(cfg, override.url);
   }
   if (payloadRepo.provider === 'local-git') {
     return localHandle(payloadRepo.url);

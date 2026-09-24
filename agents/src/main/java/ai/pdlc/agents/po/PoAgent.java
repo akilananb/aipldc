@@ -1,8 +1,11 @@
 package ai.pdlc.agents.po;
 
 import ai.pdlc.agents.activities.AgentContext;
+import ai.pdlc.agents.activities.ProjectContext;
+import ai.pdlc.agents.config.PortRegistry;
 import ai.pdlc.agents.templates.PromptTemplates;
 import ai.pdlc.core.config.Profile;
+import ai.pdlc.core.config.ProjectDirectory;
 import ai.pdlc.core.domain.CanonicalState;
 import ai.pdlc.core.domain.Comment;
 import ai.pdlc.core.domain.GrillHandoff;
@@ -58,16 +61,16 @@ public class PoAgent {
     }
 
     private final Ai ai;
-    private final BoardPort board;
-    private final RepoPort repo;
+    private final PortRegistry ports;
+    private final ProjectDirectory projects;
     private final PromptTemplates templates;
     private final Profile activeProfile;
     private final String poModel;
 
-    public PoAgent(Ai ai, BoardPort board, RepoPort repo, PromptTemplates templates, Profile activeProfile) {
+    public PoAgent(Ai ai, PortRegistry ports, ProjectDirectory projects, PromptTemplates templates, Profile activeProfile) {
         this.ai = ai;
-        this.board = board;
-        this.repo = repo;
+        this.ports = ports;
+        this.projects = projects;
         this.templates = templates;
         this.activeProfile = activeProfile;
         var role = activeProfile.agents().roles().get("po");
@@ -75,6 +78,8 @@ public class PoAgent {
     }
 
     public PoDraftResult draft(WorkItemRef item, GrillHandoff grill, boolean allowFollowUps) {
+        Profile project = projects.project(item.profile());
+        BoardPort board = ports.board(item.profile());
         WorkItem workItem = AgentContext.readWorkItem(board, item);
         String title = workItem == null ? item.boardId() : safe(workItem.title());
         String description = workItem == null ? "" : safe(workItem.description());
@@ -84,6 +89,7 @@ public class PoAgent {
         view.put("title", title);
         view.put("description", description);
         view.put("allowFollowUps", allowFollowUps);
+        view.put("project", ProjectContext.view(project));
         if (grill != null) {
             view.put("grill", grillView(grill));
         }
@@ -126,6 +132,9 @@ public class PoAgent {
     }
 
     public StoryDraft revise(WorkItemRef item, PoHandoff previous, List<Comment> comments, GrillHandoff grill) {
+        Profile project = projects.project(item.profile());
+        BoardPort board = ports.board(item.profile());
+        RepoPort repo = ports.primaryRepo(item.profile());
         List<Map<String, Object>> commentViews = new ArrayList<>();
         for (Comment c : comments) {
             commentViews.add(Map.of("target", c.target(), "text", c.text(), "intent", c.intent().wireValue()));
@@ -139,7 +148,7 @@ public class PoAgent {
         WorkItem storyItem = null;
         String previousStory = null;
         if (previous.change() != null && !previous.change().isBlank()) {
-            previousStory = AgentContext.readFile(repo, activeProfile.repo().defaultBranch(), previous.change() + "/proposal.md");
+            previousStory = AgentContext.readFile(repo, project.repo().defaultBranch(), previous.change() + "/proposal.md");
         }
         if (previousStory == null || previousStory.isBlank()) {
             storyItem = AgentContext.readWorkItem(board, item);
@@ -153,6 +162,7 @@ public class PoAgent {
         Map<String, Object> view = new HashMap<>();
         view.put("comments", commentViews);
         view.put("previousStory", Map.of("story", previousStory));
+        view.put("project", ProjectContext.view(project));
 
         // Best-effort supplemental context: the original feature and the resolved intake grill -
         // supporting context for the model, never a substitute for the current-story baseline above.
@@ -181,6 +191,7 @@ public class PoAgent {
         }
         return assemble(revised, item, previous.change(), previous.parent(), grill, areaPath, featureTitle);
     }
+
 
     // -- deterministic ---------------------------------------------------------------------------
 

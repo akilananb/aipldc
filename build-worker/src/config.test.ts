@@ -16,11 +16,16 @@ test('loadConfig throws when BUILD_FILTER_PROFILE is missing', () => {
   });
 });
 
-test('loadConfig throws when both TARGET_REPO_PATH and TARGET_REPO_URL are set', () => {
-  assert.throws(
-    () => loadConfig({ ...BASE_ENV, TARGET_REPO_PATH: '/tmp/repo', TARGET_REPO_URL: 'https://example.test/repo.git' }),
-    { message: 'set at most one of TARGET_REPO_PATH or TARGET_REPO_URL' },
-  );
+test('loadConfig throws when TARGET_REPO_PATH is set (replaced by TARGET_REPO_OVERRIDES)', () => {
+  assert.throws(() => loadConfig({ ...BASE_ENV, TARGET_REPO_PATH: '/tmp/repo' }), {
+    message: 'TARGET_REPO_PATH/TARGET_REPO_URL were replaced by TARGET_REPO_OVERRIDES=repoId=<path-or-url>[,...]',
+  });
+});
+
+test('loadConfig throws when TARGET_REPO_URL is set (replaced by TARGET_REPO_OVERRIDES)', () => {
+  assert.throws(() => loadConfig({ ...BASE_ENV, TARGET_REPO_URL: 'https://example.test/repo.git' }), {
+    message: 'TARGET_REPO_PATH/TARGET_REPO_URL were replaced by TARGET_REPO_OVERRIDES=repoId=<path-or-url>[,...]',
+  });
 });
 
 test('loadConfig applies defaults when optional env vars are unset', () => {
@@ -31,11 +36,25 @@ test('loadConfig applies defaults when optional env vars are unset', () => {
   assert.deepEqual(cfg.filters, { profile: 'local', story: undefined, task: undefined });
   assert.equal(cfg.pollIntervalMs, 5000);
   assert.equal(cfg.heartbeatIntervalMs, 30_000);
-  assert.equal(cfg.repoOverride, undefined);
+  assert.deepEqual(cfg.repoOverrides, new Map());
   assert.equal(cfg.repoToken, undefined);
   assert.equal(cfg.cacheDir, path.join(os.homedir(), '.pdlc-build-worker'));
   assert.equal(cfg.acpAgent, 'omp acp');
   assert.equal(cfg.promptTemplateDir, undefined);
+});
+
+test('loadConfig parses TARGET_REPO_OVERRIDES into a per-repo map (local path and remote url)', () => {
+  const cfg = loadConfig({
+    ...BASE_ENV,
+    TARGET_REPO_OVERRIDES: 'api=/tmp/api,web=https://example.test/web.git',
+  });
+  assert.deepEqual(
+    cfg.repoOverrides,
+    new Map([
+      ['api', { mode: 'local', path: '/tmp/api' }],
+      ['web', { mode: 'remote', url: 'https://example.test/web.git' }],
+    ]),
+  );
 });
 
 test('loadConfig overrides every optional env var', () => {
@@ -47,7 +66,7 @@ test('loadConfig overrides every optional env var', () => {
     BUILD_FILTER_TASK: 'T1',
     POLL_INTERVAL_MS: '1000',
     HEARTBEAT_INTERVAL_MS: '15000',
-    TARGET_REPO_PATH: '/tmp/orders-service',
+    TARGET_REPO_OVERRIDES: 'orders-service=/tmp/orders-service',
     TARGET_REPO_TOKEN: 'ghp_x',
     BUILD_WORKER_HOME: '/tmp/cache',
     ACP_AGENT_CMD: 'claude-code-acp',
@@ -58,14 +77,9 @@ test('loadConfig overrides every optional env var', () => {
   assert.deepEqual(cfg.filters, { profile: 'local', story: '4414', task: 'T1' });
   assert.equal(cfg.pollIntervalMs, 1000);
   assert.equal(cfg.heartbeatIntervalMs, 15_000);
-  assert.deepEqual(cfg.repoOverride, { mode: 'local', path: '/tmp/orders-service' });
+  assert.deepEqual(cfg.repoOverrides, new Map([['orders-service', { mode: 'local', path: '/tmp/orders-service' }]]));
   assert.equal(cfg.repoToken, 'ghp_x');
   assert.equal(cfg.cacheDir, '/tmp/cache');
   assert.equal(cfg.acpAgent, 'claude-code-acp');
   assert.equal(cfg.promptTemplateDir, '/tmp/prompts');
-});
-
-test('loadConfig resolves TARGET_REPO_URL as a remote override', () => {
-  const cfg = loadConfig({ ...BASE_ENV, TARGET_REPO_URL: 'https://example.test/orders-service.git' });
-  assert.deepEqual(cfg.repoOverride, { mode: 'remote', url: 'https://example.test/orders-service.git' });
 });

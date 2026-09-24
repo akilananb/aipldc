@@ -100,8 +100,16 @@ export function buildTaskPrompt(template: string, taskId: string, title: string,
   return Mustache.render(template, view);
 }
 
-/** Renders the planning agent's prompt - see templates/plan-tasks.mustache for the full contract
- * (JSON shape, field rules) the agent must satisfy in `outputPath`. */
-export function planTasksPrompt(template: string, view: { change: string; scenarios: string[]; areas: string; nfr: string[]; outputPath: string; feedback: string[] }): string {
-  return Mustache.render(template, { ...view, hasNfr: view.nfr.length > 0, hasFeedback: view.feedback.length > 0 });
+/** Renders the repository consultant's prompt - see templates/plan-consultation.mustache for the
+ * full contract (JSON shape, field rules) the consultant must satisfy in `outputPath`. */
+export function planConsultationPrompt(template: string, view: {
+  change: string; scenarios: string[]; areas: string; nfr: string[];
+  questions: string[]; paths: string[]; history: string; outputPath: string; repo: string;
+}): string {
+  return Mustache.render(template, {
+    ...view,
+    hasNfr: view.nfr.length > 0,
+    hasPaths: view.paths.length > 0,
+    hasHistory: view.history.trim().length > 0,
+  });
 }

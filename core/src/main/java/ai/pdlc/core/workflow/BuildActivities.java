@@ -1,6 +1,6 @@
 package ai.pdlc.core.workflow;
 
-import ai.pdlc.core.domain.PlanResult;
+import ai.pdlc.core.domain.PlanConsultation;
 import ai.pdlc.core.domain.PoHandoff;
 import ai.pdlc.core.domain.Task;
 import ai.pdlc.core.domain.WorkItemRef;
@@ -29,9 +29,10 @@ public interface BuildActivities {
     @ActivityMethod(name = "runTask")
     BuildResult runTask(WorkItemRef story, Task task, String branch, String baseBranch, List<String> feedback);
 
-    /** Plan step: parks like runTask; the build-worker runs the coding agent read-only in a
-     * detached worktree of the default branch and posts back {@code .pdlc/plan.json} (see
-     * build-worker/src/planTask.ts). */
-    @ActivityMethod(name = "planTasks")
-    PlanResult planTasks(WorkItemRef story, PoHandoff po);
+    /** One repository-consultation round: parks like {@code runTask}; the build-worker runs the
+     * coding agent read-only in a detached worktree pinned to {@code consultation.baseCommit()}
+     * (or resolves the default branch itself on the first round) and posts back evidence — never
+     * a task list (see build-worker/src/planTask.ts). */
+    @ActivityMethod(name = "consultPlan")
+    PlanConsultation.Report consultPlan(WorkItemRef story, PoHandoff po, PlanConsultation consultation);
 }

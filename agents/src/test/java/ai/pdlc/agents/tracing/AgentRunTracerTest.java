@@ -4,6 +4,7 @@ import ai.pdlc.core.config.AgentsConfig;
 import ai.pdlc.core.config.BoardConfig;
 import ai.pdlc.core.config.NotifyConfig;
 import ai.pdlc.core.config.Profile;
+import ai.pdlc.core.config.ProjectMeta;
 import ai.pdlc.core.config.RepoConfig;
 import ai.pdlc.core.domain.WorkItemRef;
 import io.micrometer.common.KeyValue;
@@ -16,6 +17,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.support.DefaultListableBeanFactory;
 
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -32,8 +34,9 @@ class AgentRunTracerTest {
     @BeforeEach
     void setUp() {
         profile = new Profile("local",
+                new ProjectMeta("local", "local", null, List.of(), "", null),
                 new BoardConfig("in-memory", null, null, Map.of(), Map.of(), null),
-                new RepoConfig("in-memory", "local://x", "main", "openspec"),
+                List.of(new RepoConfig("main", "in-memory", "local://x", "main", "openspec", List.of(), true)),
                 new NotifyConfig("none", "none"),
                 new AgentsConfig("http://stub", null, Map.of()),
                 Map.of());

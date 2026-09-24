@@ -78,6 +78,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * activity and is unnecessary ceremony for a one-time, already-validated import.
  */
 @Component
+@org.springframework.core.annotation.Order(2)
 @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(name = "pdlc.demo.enabled", havingValue = "true")
 public class DemoInitializer implements ApplicationRunner {
 
@@ -96,15 +97,19 @@ public class DemoInitializer implements ApplicationRunner {
     private final QualityReportRepository qualityReports;
     private final ReleaseDocumentRepository releaseDocuments;
     private final ReviewEventRepository reviewEvents;
-    private final RepoPort repo;
-    private final Profile activeProfile;
+    private RepoPort repo;
+    private Profile activeProfile;
+    private final ai.pdlc.controlplane.config.PortRegistry ports;
+    private final ai.pdlc.core.config.ProjectDirectory projects;
+    private final String defaultProjectId;
     private final ObjectMapper mapper = new ObjectMapper().registerModule(new JavaTimeModule());
 
     public DemoInitializer(javax.sql.DataSource dataSource, PlatformTransactionManager txManager, JdbcTemplate jdbc,
                             JdbcAggregateTemplate aggregateTemplate, WorkItemRepository workItems, ArtifactRepository artifacts,
                             CommentRepository comments, ApprovalRepository approvals, QualityReportRepository qualityReports,
                             ReleaseDocumentRepository releaseDocuments, ReviewEventRepository reviewEvents,
-                            RepoPort repo, Profile activeProfile) {
+                            ai.pdlc.controlplane.config.PortRegistry ports, ai.pdlc.core.config.ProjectDirectory projects,
+                            @org.springframework.beans.factory.annotation.Value("${pdlc.active-profile}") String defaultProjectId) {
         this.dataSource = dataSource;
         this.txManager = txManager;
         this.jdbc = jdbc;
@@ -116,12 +121,14 @@ public class DemoInitializer implements ApplicationRunner {
         this.qualityReports = qualityReports;
         this.releaseDocuments = releaseDocuments;
         this.reviewEvents = reviewEvents;
-        this.repo = repo;
-        this.activeProfile = activeProfile;
+        this.ports = ports;
+        this.projects = projects;
+        this.defaultProjectId = defaultProjectId;
     }
 
     @Override
     public void run(ApplicationArguments args) throws Exception {
+        resolvePorts();
         if (!"local-jdbc".equals(activeProfile.board().provider())) {
             throw new IllegalStateException("pdlc.demo.enabled=true requires board.provider: local-jdbc for profile '"
                     + activeProfile.name() + "' (found '" + activeProfile.board().provider() + "')");
@@ -135,6 +142,15 @@ public class DemoInitializer implements ApplicationRunner {
         seed(manifestRaw, mapper.readValue(manifestRaw, DemoManifest.class));
     }
 
+    /** Resolves {@link #repo}/{@link #activeProfile} from the default project's current DB config
+     * — idempotent, called by {@link #run} and again defensively at the top of {@link #seed} so a
+     * direct test call (bypassing {@code run}) still has both populated. */
+    private void resolvePorts() {
+        this.activeProfile = projects.project(defaultProjectId);
+        this.repo = ports.primaryRepo(defaultProjectId);
+    }
+
+
     /**
      * Seeds an already-loaded, already-parsed manifest. Extracted from {@link
      * #run(ApplicationArguments)} as a package-private seam so the integration test can drive the real
@@ -145,6 +161,7 @@ public class DemoInitializer implements ApplicationRunner {
      * delegates to this method.
      */
     void seed(String manifestRaw, DemoManifest manifest) throws Exception {
+        resolvePorts();
         String manifestHash = Anchor.hash(manifestRaw);
 
         long lockKey = stableLockKey(activeProfile.name());
@@ -540,7 +557,7 @@ public class DemoInitializer implements ApplicationRunner {
             approvalDtos.put(key, new ReviewStateDto.ApprovalDto(a.who(), a.role(), gate.version(), contentHash,
                     a.at().toString()));
         }
-        return new ReviewStateDto(gate.version(), approvalDtos, gate.openBlockingComments(), item.state().wireValue());
+        return new ReviewStateDto(gate.version(), approvalDtos, gate.openBlockingComments(), item.state().wireValue(), null);
     }
 
     private GrillQuestionsDto grillDtoFor(DemoGrillFixture grill) {

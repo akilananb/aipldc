@@ -20,6 +20,7 @@ import ai.pdlc.core.domain.Task;
 import ai.pdlc.core.domain.WorkItemRef;
 import io.temporal.activity.ActivityOptions;
 import io.temporal.common.RetryOptions;
+import io.temporal.failure.ActivityFailure;
 import io.temporal.workflow.Async;
 import io.temporal.workflow.Promise;
 import io.temporal.workflow.Workflow;
@@ -32,6 +33,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 /**
  * {@link FeatureWorkflow} implementation — orchestration-decision §6 Java sketch, truncated after
@@ -82,15 +84,29 @@ public class FeatureWorkflowImpl implements FeatureWorkflow {
      * behavior), so a stuck task can never block the story forever. */
     static final int MAX_HUMAN_INPUT_ROUNDS_PER_TASK = 3;
 
-    /** Bounded retries (like {@link #PLAN_ACTIVITY_OPTIONS}): a persistently failing agent/LLM
+    /** Shared exponential backoff for LLM-backed agent calls: 2s, 4s, 8s, 16s, then capped at
+     * 30s, up to {@link #AGENT_ACTIVITY_OPTIONS}' 5 attempts (~60s total) - long enough to ride
+     * out a transient gateway rate limit ({@code 429 Too many concurrent requests}, seen in
+     * practice against a real OpenAI-compatible gateway) without silently retrying forever. */
+    private static RetryOptions.Builder agentBackoff() {
+        return RetryOptions.newBuilder()
+                .setInitialInterval(Duration.ofSeconds(2))
+                .setBackoffCoefficient(2.0)
+                .setMaximumInterval(Duration.ofSeconds(30));
+    }
+
+    /** Bounded retries (like {@link #PLAN_CONSULTATION_ACTIVITY_OPTIONS}): a persistently failing agent/LLM
      * call (bad gateway auth, model outage, malformed response) fails the workflow visibly in
      * Temporal UI instead of retrying forever against the LLM gateway — an unbounded default here
      * previously let a handful of stuck workflows burn real OpenRouter tokens for 30+ minutes
-     * with no operator signal. */
+     * with no operator signal. Once these 5 attempts (~60s of backoff) are exhausted, {@link
+     * #reasoningStep} blocks the workflow in place and a reviewer resumes it via {@link
+     * #retryStep} - the manual fallback for a rate limit that outlasts the automatic backoff, or
+     * any other persistent failure. */
     private static final ActivityOptions AGENT_ACTIVITY_OPTIONS = ActivityOptions.newBuilder()
             .setTaskQueue(TaskQueues.REASONING)
             .setStartToCloseTimeout(Duration.ofMinutes(10))
-            .setRetryOptions(RetryOptions.newBuilder().setMaximumAttempts(3).build())
+            .setRetryOptions(agentBackoff().setMaximumAttempts(5).build())
             .build();
 
     private static final ActivityOptions BOARD_ACTIVITY_OPTIONS = ActivityOptions.newBuilder()
@@ -106,17 +122,29 @@ public class FeatureWorkflowImpl implements FeatureWorkflow {
             .setHeartbeatTimeout(Duration.ofMinutes(2))
             .build();
 
-    /** Plan step: bounded retries so a persistently invalid plan fails the workflow (visible in
-     * Temporal UI, story stays {@code approved}) rather than looping forever. */
-    private static final ActivityOptions PLAN_ACTIVITY_OPTIONS = ActivityOptions.newBuilder(BUILD_ACTIVITY_OPTIONS)
-            .setRetryOptions(RetryOptions.newBuilder().setMaximumAttempts(3).build())
-            .setSummary("plan")
+    /** One reasoning decision in the bounded plan consultation ({@link PlanningLoop}) - bounded
+     * retries so a persistent LLM/parse failure fails the workflow visibly rather than silently
+     * resetting {@link PlanningLoop}'s successful-round/decision counters. Same {@link
+     * #agentBackoff} shape as {@link #AGENT_ACTIVITY_OPTIONS}, just fewer attempts. */
+    private static final ActivityOptions PLAN_REASONING_ACTIVITY_OPTIONS = ActivityOptions.newBuilder(AGENT_ACTIVITY_OPTIONS)
+            .setRetryOptions(agentBackoff().setMaximumAttempts(2).build())
+            .setSummary("plan-next-step")
+            .build();
+
+    /** One repository-consultation round ({@link PlanningLoop}): same shape as {@link
+     * #BUILD_ACTIVITY_OPTIONS} (the consultant is an ACP session against a real worktree, same as
+     * the build loop) but bounded retries so a persistently failing consultation fails the
+     * workflow (story stays {@code approved}) rather than looping forever. */
+    private static final ActivityOptions PLAN_CONSULTATION_ACTIVITY_OPTIONS = ActivityOptions.newBuilder(BUILD_ACTIVITY_OPTIONS)
+            .setRetryOptions(RetryOptions.newBuilder().setMaximumAttempts(2).build())
+            .setSummary("plan-consultation")
             .build();
 
     private final AgentActivities agents = Workflow.newActivityStub(AgentActivities.class, AGENT_ACTIVITY_OPTIONS);
+    private final AgentActivities planReasoning = Workflow.newActivityStub(AgentActivities.class, PLAN_REASONING_ACTIVITY_OPTIONS);
     private final BoardSideEffects board = Workflow.newActivityStub(BoardSideEffects.class, BOARD_ACTIVITY_OPTIONS);
     private final BuildActivities build = Workflow.newActivityStub(BuildActivities.class, BUILD_ACTIVITY_OPTIONS);
-    private final BuildActivities planner = Workflow.newActivityStub(BuildActivities.class, PLAN_ACTIVITY_OPTIONS);
+    private final BuildActivities planConsultant = Workflow.newActivityStub(BuildActivities.class, PLAN_CONSULTATION_ACTIVITY_OPTIONS);
 
     private int version = 1;
     private final Map<String, Approval> approvals = new LinkedHashMap<>();
@@ -142,10 +170,17 @@ public class FeatureWorkflowImpl implements FeatureWorkflow {
 
     private WorkItemRef storyRef;
     private PoHandoff currentPoHandoff;
+    /** The exact approved story markdown for the current story - kept in lockstep with {@link
+     * #currentPoHandoff} at every draft/revision site (initial draft, quality auto-revise, human
+     * request-changes) so {@link PlanningLoop} always plans against the precise approved version,
+     * never a pre-revision draft. */
+    private String currentStoryMarkdown;
     private ReleaseHandoff currentRelease;
     private GateConfig gate1;
     private GateConfig gate2;
     private GateConfig gate3;
+    private GateConfig planGate;
+    private List<ai.pdlc.core.config.RepoConfig> repos;
     /** The gate currently governing {@link #sodAllows}/{@link #gateSatisfied} — gate 1 (story
      * review) until it passes, then gate 2 (PR review), then gate 3 (release pack); the same 4
      * signals drive every episode sequentially (tech-stack §3.1: every gate reuses this shape). */
@@ -161,6 +196,10 @@ public class FeatureWorkflowImpl implements FeatureWorkflow {
     }
 
     private FixRequest pendingFixRequest;
+    /** Plan gate only: a human "Request changes" while {@code PLANNED}, captured by {@link
+     * #requestChanges} (as the story's open comment texts) and consumed by {@link #run}'s plan-gate
+     * loop to drive a re-plan; {@code null} means no re-plan is pending. */
+    private List<String> pendingPlanFeedback;
     /** Gate 3 only: set by {@link #requestChanges} while {@code AWAITING_G3}; consumed by {@link
      * #run}'s gate-3 loop to re-draft and republish the release pack. */
     private boolean pendingReleaseRedraft;
@@ -174,11 +213,19 @@ public class FeatureWorkflowImpl implements FeatureWorkflow {
      * {@link #MAX_HUMAN_INPUT_ROUNDS_PER_TASK}. */
     private final Map<String, Integer> humanRoundsByTask = new LinkedHashMap<>();
 
+    /** Set when a bounded-retry LLM/agent activity call (see {@link #reasoningStep}) exhausts its
+     * retry budget; the workflow blocks in {@link Workflow#await} until {@link #retryStep} clears
+     * it, never restarting from scratch — every other field here stays exactly as it was while
+     * blocked. Exposed via {@link #state()}. */
+    private StepFailure lastFailure;
+    private boolean retryRequested;
+
     @Override
     public void run(WorkItemRef item) {
         gate1 = board.loadGate1Config(item.profile());
         gate2 = board.loadGate2Config(item.profile());
         gate3 = board.loadGate3Config(item.profile());
+        repos = board.loadRepos(item.profile());
         activeGate = gate1;
 
         // 1. Grill: loop until every question is answered/parked, escalating stale at the 5-day timer.
@@ -187,7 +234,7 @@ public class FeatureWorkflowImpl implements FeatureWorkflow {
         // keeps the historical three-command sequence; only a new execution takes version 1's
         // adaptive rounds.
         if (Workflow.getVersion("adaptive-grill-rounds", Workflow.DEFAULT_VERSION, 1) == Workflow.DEFAULT_VERSION) {
-            grill = agents.grillEvaluate(item, null, List.of());
+            grill = reasoningStep(item, "grill-evaluate", () -> agents.grillEvaluate(item, null, List.of()));
             board.postGrillQuestions(item, grill);
             awaitClarification(item);
         } else {
@@ -202,7 +249,8 @@ public class FeatureWorkflowImpl implements FeatureWorkflow {
         while (true) {
             board.transitionReadyForStory(item, grill); // re-attaches grill.md with the new answers each round
             stage = CanonicalState.READY_FOR_STORY;
-            drafted = agents.poDraft(item, grill, followUpRounds < MAX_PO_FOLLOW_UP_ROUNDS);
+            boolean allowFollowUps = followUpRounds < MAX_PO_FOLLOW_UP_ROUNDS;
+            drafted = reasoningStep(item, "po-draft", () -> agents.poDraft(item, grill, allowFollowUps));
             if (!drafted.needsClarification()) {
                 break;
             }
@@ -237,7 +285,9 @@ public class FeatureWorkflowImpl implements FeatureWorkflow {
             // Quality gate (hard-blocks G1): evaluate, auto-revise up to 2 rounds on FAIL, then
             // fall through to the human requestChanges cycle (which re-evaluates - see below).
             String storyMd = drafts.get(i).storyMarkdown();
-            QualityReport q = agents.evaluateQuality(storyRef, "story", storyMd);
+            currentStoryMarkdown = storyMd;
+            final String storyMdForQuality = storyMd;
+            QualityReport q = reasoningStep(storyRef, "evaluate-quality", () -> agents.evaluateQuality(storyRef, "story", storyMdForQuality));
             board.saveQualityReport(storyRef, version, q);
             int rounds = 0;
             while (!q.passed() && rounds < 2) {
@@ -250,11 +300,13 @@ public class FeatureWorkflowImpl implements FeatureWorkflow {
                             "quality-agent", "story", "quality", q.findings().get(fi), Comment.Intent.CHANGE,
                             false, version));
                 }
-                StoryDraft revised = agents.poRevise(storyRef, currentPoHandoff, qualityComments, grill);
+                StoryDraft revised = reasoningStep(storyRef, "po-revise", () -> agents.poRevise(storyRef, currentPoHandoff, qualityComments, grill));
                 board.publishRevision(storyRef, version, revised, List.of());
                 currentPoHandoff = revised.handoff();
                 storyMd = revised.storyMarkdown();
-                q = agents.evaluateQuality(storyRef, "story", storyMd);
+                currentStoryMarkdown = storyMd;
+                String storyMdForRevisedQuality = storyMd;
+                q = reasoningStep(storyRef, "evaluate-quality", () -> agents.evaluateQuality(storyRef, "story", storyMdForRevisedQuality));
                 board.saveQualityReport(storyRef, version, q);
             }
             qualityPassed = q.passed();
@@ -266,23 +318,33 @@ public class FeatureWorkflowImpl implements FeatureWorkflow {
             board.transitionApproved(storyRef, version, 1);
             stage = CanonicalState.APPROVED;
 
-            // 6. Plan: the build-worker's coding agent analyzes the repo and breaks the story into tasks.
-            PlanResult planned = planner.planTasks(storyRef, currentPoHandoff);
-            PlanHandoff plan = planned.plan();
-            PublishTasksResult publishedTasks = board.publishTasks(storyRef, plan);
-            String defaultBranch = publishedTasks.defaultBranch();
+            // 6. Plan: the Plan Agent breaks the story into tasks, consulting the repository via
+            // the build-worker's ACP-driven consultant zero or more bounded rounds first.
+            PlanResult planned = PlanningLoop.run(storyRef, currentPoHandoff, currentStoryMarkdown, List.of(), repos, planReasoning, planConsultant,
+                    (step, call) -> reasoningStep(storyRef, step, call), (step, call) -> reasoningStep(storyRef, step, call));
+            PublishTasksResult publishedTasks = board.publishTasks(storyRef, planned.plan());
             stage = CanonicalState.PLANNED;
 
             // Deterministic per-task plan checks (coverage/wave/touches) - advisory, shown on the
             // task page; computed by the build-worker's plan step, not the quality agent.
-            for (Task t : plan.tasks()) {
-                String taskBoardId = publishedTasks.taskBoardIds().get(t.id());
-                QualityReport checks = planned.checksByTaskId().get(t.id());
-                if (taskBoardId == null || checks == null) {
-                    continue;
-                }
-                board.saveQualityReport(new WorkItemRef(item.profile(), taskBoardId), 1, checks);
+            saveTaskPlanChecks(item, planned, publishedTasks);
+
+            // Plan gate: hold at `planned` until a SquadLead approves the task plan, or sends it
+            // back with "Request changes" - consumed as re-plan feedback (requestChanges captures
+            // pendingPlanFeedback and bumps version before this block wakes). Guarded by
+            // getVersion: an execution already past this point when the patch deployed (replay)
+            // takes DEFAULT_VERSION and skips straight to the build loop, exactly as it did before.
+            // `planned`/`publishedTasks` below are reassigned exactly once (from the gate's final
+            // outcome) so `plan`/`defaultBranch` - captured by lambdas further down (review,
+            // release draft) - can be declared once, staying effectively final.
+            if (Workflow.getVersion("plan-approval-gate", Workflow.DEFAULT_VERSION, 1) == 1) {
+                PlanGateResult gateResult = runPlanGate(item, planned, publishedTasks);
+                planned = gateResult.planned();
+                publishedTasks = gateResult.publishedTasks();
             }
+
+            PlanHandoff plan = planned.plan();
+            Map<String, String> defaultBranchByRepo = publishedTasks.defaultBranchByRepo();
 
             // 7. Build loop: omp over ACP, one shared story branch, wave by wave (a wave only starts
             // once every earlier wave's tasks have returned). A build-task escalation (budget
@@ -297,15 +359,16 @@ public class FeatureWorkflowImpl implements FeatureWorkflow {
             }
             List<BuildResult> results = new ArrayList<>();
             for (List<String> wave : plan.waves()) {
-                List<BuildResult> waveResults = runWave(wave, tasksById, taskId -> List.of(), branch, defaultBranch);
-                waveResults = resolveEscalations(waveResults, tasksById, branch, defaultBranch);
+                List<BuildResult> waveResults = runWave(wave, tasksById, taskId -> List.of(), branch, defaultBranchByRepo);
+                waveResults = resolveEscalations(waveResults, tasksById, branch, defaultBranchByRepo);
                 results.addAll(waveResults);
             }
 
             board.recordTaskResults(storyRef, publishedTasks.taskBoardIds(), results);
 
             // 8. Review the accumulated diff once, open the PR, post findings; awaiting-G2.
-            ReviewHandoff review = agents.reviewStory(storyRef, currentPoHandoff, plan.tasks(), results);
+            List<BuildResult> resultsForReview = results;
+            ReviewHandoff review = reasoningStep(storyRef, "review-story", () -> agents.reviewStory(storyRef, currentPoHandoff, plan.tasks(), resultsForReview));
             board.openStoryPr(storyRef, branch, plan.tasks(), results, review);
             stage = CanonicalState.AWAITING_G2;
 
@@ -334,7 +397,7 @@ public class FeatureWorkflowImpl implements FeatureWorkflow {
                     approvals.clear();
                     comments.clear();
                     List<BuildResult> beforeRound = results;
-                    results = fixRound(plan, tasksById, results, failing, branch, defaultBranch,
+                    results = fixRound(plan, tasksById, results, failing, branch, defaultBranchByRepo,
                             taskId -> verifierFeedback(resultOf(beforeRound, taskId)), publishedTasks, fixRoundNumber);
                     review = lastReview;
                     seedBlockerComments(review);
@@ -361,7 +424,7 @@ public class FeatureWorkflowImpl implements FeatureWorkflow {
                 List<Comment> roundFeedback = feedbackComments;
                 List<String> targets = tasksTargetedBy(roundFeedback, plan.tasks());
                 fixRoundNumber++;
-                results = fixRound(plan, tasksById, results, targets, branch, defaultBranch,
+                results = fixRound(plan, tasksById, results, targets, branch, defaultBranchByRepo,
                         taskId -> commentFeedback(roundFeedback, taskId, tasksById), publishedTasks, fixRoundNumber);
                 review = lastReview;
                 seedBlockerComments(review);
@@ -371,7 +434,9 @@ public class FeatureWorkflowImpl implements FeatureWorkflow {
             stage = CanonicalState.APPROVED;
 
             // 10. Release agent drafts the pack (playbook §7); publish it, awaiting-G3.
-            ReleaseHandoff release = agents.draftReleasePack(storyRef, currentPoHandoff, plan.tasks(), results, review, List.of());
+            List<BuildResult> resultsForRelease = results;
+            ReviewHandoff reviewForRelease = review;
+            ReleaseHandoff release = reasoningStep(storyRef, "release-draft", () -> agents.draftReleasePack(storyRef, currentPoHandoff, plan.tasks(), resultsForRelease, reviewForRelease, List.of()));
             board.publishReleasePack(storyRef, release);
             currentRelease = release;
             stage = CanonicalState.AWAITING_G3;
@@ -392,7 +457,9 @@ public class FeatureWorkflowImpl implements FeatureWorkflow {
                     break;
                 }
                 pendingReleaseRedraft = false; // consume now: a signal during the redraft below re-arms it
-                ReleaseHandoff redrafted = agents.draftReleasePack(storyRef, currentPoHandoff, plan.tasks(), results, review, releaseFeedback);
+                List<BuildResult> resultsForRedraft = results;
+                ReviewHandoff reviewForRedraft = review;
+                ReleaseHandoff redrafted = reasoningStep(storyRef, "release-draft", () -> agents.draftReleasePack(storyRef, currentPoHandoff, plan.tasks(), resultsForRedraft, reviewForRedraft, releaseFeedback));
                 // Keep the original releaseId stable across every redraft (the agent mints a fresh
                 // one from today's date, which would otherwise orphan the release board item/folder
                 // a redraft on a later day than the first publish would create a second one).
@@ -411,8 +478,12 @@ public class FeatureWorkflowImpl implements FeatureWorkflow {
             // ending the workflow (or, for a multi-story feature, moving on to the next story).
             board.deployRelease(storyRef, release, branch);
             stage = CanonicalState.DONE;
-            MonitorHandoff monitorResult = agents.evaluateMonitorRules(storyRef, release.monitorRules());
-            board.fileMonitorCards(storyRef, monitorResult);
+            try {
+                MonitorHandoff monitorResult = agents.evaluateMonitorRules(storyRef, release.monitorRules());
+                board.fileMonitorCards(storyRef, monitorResult);
+            } catch (ActivityFailure e) {
+                board.recordStepFailure(storyRef, "monitor-evaluate", rootMessage(e));
+            }
         }
     }
 
@@ -450,7 +521,8 @@ public class FeatureWorkflowImpl implements FeatureWorkflow {
             }
             List<BoardCommentEvent> newComments = List.copyOf(pendingBoardComments);
             pendingBoardComments.clear();
-            current = agents.grillEvaluate(item, current, newComments);
+            GrillHandoff currentSnapshot = current;
+            current = reasoningStep(item, "grill-evaluate", () -> agents.grillEvaluate(item, currentSnapshot, newComments));
             grill = current;
         }
         return current;
@@ -465,7 +537,7 @@ public class FeatureWorkflowImpl implements FeatureWorkflow {
      * automatic round-count cap forces completion — every additional round requires a human. */
     private void adaptiveIntake(WorkItemRef item) {
         stage = CanonicalState.NEEDS_CLARIFICATION;
-        grill = applyRound(agents.grillNextRound(item, null));
+        grill = applyRound(reasoningStep(item, "grill-next-round", () -> agents.grillNextRound(item, null)));
         board.postGrillRound(item, grill);
         countGrillRound(grill);
         while (true) {
@@ -480,7 +552,7 @@ public class FeatureWorkflowImpl implements FeatureWorkflow {
                 grill = resolved;
                 return;
             }
-            grill = applyRound(agents.grillNextRound(item, resolved));
+            grill = applyRound(reasoningStep(item, "grill-next-round", () -> agents.grillNextRound(item, resolved)));
             board.postGrillRound(item, grill);
             countGrillRound(grill);
         }
@@ -575,7 +647,7 @@ public class FeatureWorkflowImpl implements FeatureWorkflow {
      * own {@code feedback} lines (empty on a first attempt). Shared by the first build and every
      * fix round. */
     private List<BuildResult> runWave(List<String> taskIds, Map<String, Task> tasksById,
-                                       Function<String, List<String>> feedback, String branch, String defaultBranch) {
+                                       Function<String, List<String>> feedback, String branch, Map<String, String> defaultBranchByRepo) {
         List<Promise<BuildResult>> pending = new ArrayList<>();
         for (String taskId : taskIds) {
             Task task = tasksById.get(taskId);
@@ -586,7 +658,7 @@ public class FeatureWorkflowImpl implements FeatureWorkflow {
                     ActivityOptions.newBuilder(BUILD_ACTIVITY_OPTIONS)
                             .setSummary(task.id() + ": " + task.scenario())
                             .build());
-            pending.add(Async.function(taskBuild::runTask, storyRef, task, branch, defaultBranch, feedback.apply(taskId)));
+            pending.add(Async.function(taskBuild::runTask, storyRef, task, branch, defaultBranchByRepo.get(task.repo()), feedback.apply(taskId)));
         }
         List<BuildResult> waveResults = new ArrayList<>();
         for (Promise<BuildResult> p : pending) {
@@ -602,7 +674,7 @@ public class FeatureWorkflowImpl implements FeatureWorkflow {
      * keeps the escalated result as-is (it flows into review as a SHOULD finding, today's
      * behavior). A retry that escalates again asks again, up to the per-task cap. */
     private List<BuildResult> resolveEscalations(List<BuildResult> waveResults, Map<String, Task> tasksById,
-                                                  String branch, String defaultBranch) {
+                                                  String branch, Map<String, String> defaultBranchByRepo) {
         List<BuildResult> current = new ArrayList<>(waveResults);
         java.util.Set<String> decided = new java.util.LinkedHashSet<>();
         while (true) {
@@ -649,7 +721,7 @@ public class FeatureWorkflowImpl implements FeatureWorkflow {
                 humanRoundsByTask.merge(r.taskId(), 1, Integer::sum);
                 String answeredBy = answered.answeredBy() == null ? "human" : answered.answeredBy();
                 List<String> feedback = List.of("[escalation] " + r.escalation(), "[human/" + answeredBy + "] " + text);
-                List<BuildResult> retried = runWave(List.of(r.taskId()), tasksById, taskId -> feedback, branch, defaultBranch);
+                List<BuildResult> retried = runWave(List.of(r.taskId()), tasksById, taskId -> feedback, branch, defaultBranchByRepo);
                 byTaskId.put(r.taskId(), retried.get(0));
             }
             current = new ArrayList<>(byTaskId.values());
@@ -662,7 +734,7 @@ public class FeatureWorkflowImpl implements FeatureWorkflow {
      * version/approvals/comments bump around this call - uniform for both the automatic
      * (blocker-triggered) and human-requested paths. */
     private List<BuildResult> fixRound(PlanHandoff plan, Map<String, Task> tasksById, List<BuildResult> results,
-                                        List<String> targets, String branch, String defaultBranch,
+                                        List<String> targets, String branch, Map<String, String> defaultBranchByRepo,
                                         Function<String, List<String>> feedback, PublishTasksResult publishedTasks, int round) {
         board.transitionInProgress(storyRef);
         stage = CanonicalState.IN_PROGRESS;
@@ -672,8 +744,8 @@ public class FeatureWorkflowImpl implements FeatureWorkflow {
             if (waveTargets.isEmpty()) {
                 continue;
             }
-            List<BuildResult> waveResults = runWave(waveTargets, tasksById, feedback, branch, defaultBranch);
-            waveResults = resolveEscalations(waveResults, tasksById, branch, defaultBranch);
+            List<BuildResult> waveResults = runWave(waveTargets, tasksById, feedback, branch, defaultBranchByRepo);
+            waveResults = resolveEscalations(waveResults, tasksById, branch, defaultBranchByRepo);
             rerunResults.addAll(waveResults);
         }
 
@@ -687,7 +759,7 @@ public class FeatureWorkflowImpl implements FeatureWorkflow {
         List<BuildResult> mergedResults = List.copyOf(merged.values());
 
         board.recordTaskResults(storyRef, publishedTasks.taskBoardIds(), rerunResults);
-        lastReview = agents.reviewStory(storyRef, currentPoHandoff, plan.tasks(), mergedResults);
+        lastReview = reasoningStep(storyRef, "review-story", () -> agents.reviewStory(storyRef, currentPoHandoff, plan.tasks(), mergedResults));
         board.postFixRound(storyRef, branch, plan.tasks(), rerunResults, lastReview, round);
         stage = CanonicalState.AWAITING_G2;
         return mergedResults;
@@ -837,6 +909,61 @@ public class FeatureWorkflowImpl implements FeatureWorkflow {
         }
     }
 
+    /** Outcome of {@link #runPlanGate}: the plan (possibly re-planned one or more times) and the
+     * task-board-id mapping the build loop and later per-task activities must use. */
+    private record PlanGateResult(PlanResult planned, PublishTasksResult publishedTasks) {
+    }
+
+    /** Saves each task's deterministic plan check (coverage/wave/touches - advisory, shown on the
+     * task page) computed by the build-worker's plan step, not the quality agent. Shared by the
+     * initial planning pass and every re-plan inside {@link #runPlanGate}. */
+    private void saveTaskPlanChecks(WorkItemRef item, PlanResult planned, PublishTasksResult publishedTasks) {
+        for (Task t : planned.plan().tasks()) {
+            String taskBoardId = publishedTasks.taskBoardIds().get(t.id());
+            QualityReport checks = planned.checksByTaskId().get(t.id());
+            if (taskBoardId == null || checks == null) {
+                continue;
+            }
+            board.saveQualityReport(new WorkItemRef(item.profile(), taskBoardId), 1, checks);
+        }
+    }
+
+    /** Holds the story at {@code planned} until a SquadLead approves the task plan, or sends it
+     * back with "Request changes" - consumed as re-plan feedback ({@link #requestChanges} captures
+     * {@link #pendingPlanFeedback} and bumps {@link #version} before this method's {@code
+     * Workflow.await} wakes). Loops on its own {@code currentPlanned}/{@code currentPublished}
+     * locals (never the caller's {@code planned}/{@code publishedTasks}) so the caller's copies -
+     * captured by lambdas further down {@link #run} (review, release draft) - stay effectively
+     * final, assigned exactly once from this method's return value. Loads {@link #planGate} here
+     * (not in {@link #run}'s prologue with gate1-3) so the config-load activity itself is only
+     * ever scheduled behind the {@code "plan-approval-gate"} {@code getVersion} guard - an extra
+     * unconditional activity call at the top of {@code run} would append a command a pre-patch
+     * execution's history never recorded, breaking replay determinism for every in-flight run. */
+    private PlanGateResult runPlanGate(WorkItemRef item, PlanResult initialPlanned, PublishTasksResult initialPublished) {
+        planGate = board.loadPlanGateConfig(item.profile());
+        activeGate = planGate;
+        version = 1;
+        approvals.clear();
+        comments.clear();
+        PlanResult currentPlanned = initialPlanned;
+        PublishTasksResult currentPublished = initialPublished;
+        while (true) {
+            Workflow.await(() -> gateSatisfied() || pendingPlanFeedback != null);
+            if (pendingPlanFeedback == null) {
+                break;
+            }
+            List<String> planFeedback = pendingPlanFeedback;
+            pendingPlanFeedback = null;
+            currentPlanned = PlanningLoop.run(storyRef, currentPoHandoff, currentStoryMarkdown, planFeedback, repos,
+                    planReasoning, planConsultant,
+                    (step, call) -> reasoningStep(storyRef, step, call), (step, call) -> reasoningStep(storyRef, step, call));
+            currentPublished = board.republishTasks(storyRef, currentPlanned.plan(), currentPublished.taskBoardIds(), version);
+            saveTaskPlanChecks(item, currentPlanned, currentPublished);
+        }
+        board.recordPlanApproved(storyRef, version);
+        return new PlanGateResult(currentPlanned, currentPublished);
+    }
+
     // -- gate signal surface ------------------------------------------------------------------
 
     private boolean gateSatisfied() {
@@ -929,10 +1056,11 @@ public class FeatureWorkflowImpl implements FeatureWorkflow {
             // evaluateQuality are in flight is never silently included or silently dropped.
             List<Comment> feedback = List.copyOf(comments);
             List<String> resolvedIds = feedback.stream().map(Comment::id).toList();
-            StoryDraft revised = agents.poRevise(storyRef, currentPoHandoff, feedback, grill);
+            StoryDraft revised = reasoningStep(storyRef, "po-revise", () -> agents.poRevise(storyRef, currentPoHandoff, feedback, grill));
             board.publishRevision(storyRef, version, revised, resolvedIds);
             currentPoHandoff = revised.handoff();
-            QualityReport q = agents.evaluateQuality(storyRef, "story", revised.storyMarkdown());
+            currentStoryMarkdown = revised.storyMarkdown();
+            QualityReport q = reasoningStep(storyRef, "evaluate-quality", () -> agents.evaluateQuality(storyRef, "story", revised.storyMarkdown()));
             board.saveQualityReport(storyRef, version, q);
             qualityPassed = q.passed();
             // Remove only the snapshot this revision resolved - never the shared comments.clear()
@@ -941,6 +1069,9 @@ public class FeatureWorkflowImpl implements FeatureWorkflow {
             java.util.Set<String> resolved = java.util.Set.copyOf(resolvedIds);
             comments.removeIf(c -> resolved.contains(c.id()));
             return;
+        }
+        if (stage == CanonicalState.PLANNED) {
+            pendingPlanFeedback = comments.stream().map(Comment::text).toList();
         }
         version++;
         approvals.clear();
@@ -968,10 +1099,17 @@ public class FeatureWorkflowImpl implements FeatureWorkflow {
     }
 
     @Override
+    public void retryStep(String by) {
+        if (lastFailure != null) {
+            retryRequested = true;
+        }
+    }
+
+    @Override
     public ReviewState state() {
         Map<String, Approval> currentApprovals = stage == CanonicalState.AWAITING_G3 ? documentSignatures : approvals;
         return new ReviewState(version, Map.copyOf(currentApprovals), openBlockingComments(), stage,
-                storyRef == null ? null : storyRef.boardId());
+                storyRef == null ? null : storyRef.boardId(), lastFailure);
     }
 
     @Override
@@ -997,5 +1135,31 @@ public class FeatureWorkflowImpl implements FeatureWorkflow {
             }
         }
         return true;
+    }
+
+    /** Wraps one named reasoning/LLM activity call: on a bounded-retry-exhausted {@link
+     * ActivityFailure}, durably records the failure (mirrors {@code AgentMentionWorkflowImpl}'s
+     * catch-and-record precedent) and blocks in {@link Workflow#await} until a reviewer sends
+     * {@link #retryStep} — every other workflow-local field stays completely untouched while
+     * blocked, so a retry resumes exactly where it left off rather than restarting the pipeline.
+     * {@code ref} is the work item whose {@code review_events}/{@code review.md} the failure is
+     * recorded against — the feature itself before a story exists, the active story afterward. */
+    private <T> T reasoningStep(WorkItemRef ref, String step, Supplier<T> call) {
+        while (true) {
+            try {
+                return call.get();
+            } catch (ActivityFailure e) {
+                String message = rootMessage(e);
+                board.recordStepFailure(ref, step, message);
+                lastFailure = new StepFailure(step, message, Workflow.currentTimeMillis());
+                retryRequested = false;
+                Workflow.await(() -> retryRequested);
+                lastFailure = null;
+            }
+        }
+    }
+
+    private static String rootMessage(ActivityFailure e) {
+        return e.getCause() != null ? e.getCause().getMessage() : e.getMessage();
     }
 }

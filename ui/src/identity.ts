@@ -13,6 +13,7 @@ export const DEMO_IDENTITIES: Identity[] = [
   { user: 'lead@acme', role: 'SquadLead', label: 'Squad Lead' },
   { user: 'fsdev@acme', role: 'FSDeveloper', label: 'FS Developer' },
   { user: 'qa@acme', role: 'QA', label: 'QA' },
+  { user: 'admin@acme', role: 'Admin', label: 'Admin' },
 ];
 
 const STORAGE_KEY = 'pdlc.identity';

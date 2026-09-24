@@ -58,12 +58,27 @@ public class AgentRunTracer {
         try (Observation.Scope ignored = observation.openScope()) {
             String traceId = currentTraceId();
             return body.apply(new Run(traceId, traceUrl(publicUrl, projectId, traceId)));
-        } catch (RuntimeException e) {
+        } catch (Throwable e) {
             observation.error(e);
-            throw e;
+            throw sneaky(e);
         } finally {
             observation.stop();
         }
+    }
+
+    /** Rethrows {@code t} unchecked without wrapping when it already is; an {@link Error} is
+     * rethrown as-is; anything else (unreachable today — {@code body} declares no checked
+     * exceptions) is wrapped so {@link Observation#error} still observes it before propagating
+     * (plan step 1: widen from {@code catch (RuntimeException)} so a worker-shutdown {@link
+     * Error} still closes the trace). */
+    private static RuntimeException sneaky(Throwable t) {
+        if (t instanceof RuntimeException r) {
+            return r;
+        }
+        if (t instanceof Error err) {
+            throw err;
+        }
+        return new IllegalStateException(t);
     }
 
     private String currentTraceId() {

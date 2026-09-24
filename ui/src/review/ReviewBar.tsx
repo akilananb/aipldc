@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { Button, TextField, Tooltip } from '@radix-ui/themes';
-import { Check, Clock, GitPullRequest, Rocket, ShieldCheck } from 'lucide-react';
+import { Check, Clock, GitPullRequest, ListChecks, Rocket, ShieldCheck } from 'lucide-react';
 import { useIdentity } from '../identity';
-import { GATE_ROLES } from '../gates';
+import { useProjectGates } from '../useProject';
 import type { ItemDetail } from '../types';
 import type { ReviewActions } from './useReviewActions';
 import { stageSubtitle } from './pipeline';
@@ -15,6 +15,7 @@ interface Props {
 
 export default function ReviewBar({ item, actions, onOpenRelease }: Props) {
   const identity = useIdentity();
+  const { roles: gateRoles, loading: gatesLoading } = useProjectGates(item.profile);
   const [note, setNote] = useState('');
   const gate = item.gate;
   const approvals = Object.values(gate?.approvals ?? {});
@@ -22,10 +23,12 @@ export default function ReviewBar({ item, actions, onOpenRelease }: Props) {
   const qualityBlocked = item.qualityVerdict === 'failed';
   const readOnly = item.snapshot != null;
 
-  const g2Allowed = GATE_ROLES.G2.includes(identity.role);
-  const g2DisabledReason = !g2Allowed ? `Role ${identity.role} is not a Gate 2 checker` : null;
-  const g3Allowed = GATE_ROLES.G3.includes(identity.role);
-  const g3DisabledReason = !g3Allowed ? `Role ${identity.role} is not a Gate 3 checker` : null;
+  const g2Allowed = (gateRoles.G2 ?? []).includes(identity.role);
+  const g2DisabledReason = gatesLoading ? 'Loading project gates' : !g2Allowed ? `Role ${identity.role} is not a Gate 2 checker` : null;
+  const g3Allowed = (gateRoles.G3 ?? []).includes(identity.role);
+  const g3DisabledReason = gatesLoading ? 'Loading project gates' : !g3Allowed ? `Role ${identity.role} is not a Gate 3 checker` : null;
+  const planAllowed = (gateRoles.PLAN ?? []).includes(identity.role);
+  const planDisabledReason = gatesLoading ? 'Loading project gates' : !planAllowed ? `Role ${identity.role} is not a plan checker` : null;
 
   const readOnlySuffix = readOnly ? ' Read-only demo snapshot — gate actions are disabled.' : '';
 
@@ -83,6 +86,46 @@ export default function ReviewBar({ item, actions, onOpenRelease }: Props) {
               loading={actions.approve.isPending}
             >
               Approve story
+            </Button>
+          </Tooltip>
+        </div>
+      </section>
+    );
+  }
+
+  if (stage === 'planned') {
+    const copy = 'Approve the task plan in the Tasks tab, or request changes to re-plan with your comments.' + readOnlySuffix;
+    return (
+      <section className="reviewbar">
+        <div className="reviewcopy">
+          <span className="gate-icon">
+            <ListChecks size={16} />
+          </span>
+          <span>
+            <strong>Plan gate · Task plan review</strong>
+            <span>{copy}</span>
+          </span>
+        </div>
+        <div className="review-actions">
+          <Tooltip content={readOnly ? 'Read-only demo snapshot' : (planDisabledReason ?? '')}>
+            <Button
+              variant="outline"
+              color="red"
+              disabled={readOnly || !planAllowed}
+              onClick={() => actions.planRequestChanges.mutate()}
+              loading={actions.planRequestChanges.isPending}
+            >
+              Request changes
+            </Button>
+          </Tooltip>
+          <Tooltip content={readOnly ? 'Read-only demo snapshot' : (planDisabledReason ?? '')}>
+            <Button
+              color="green"
+              disabled={readOnly || !planAllowed}
+              onClick={() => actions.planApprove.mutate('')}
+              loading={actions.planApprove.isPending}
+            >
+              Approve plan
             </Button>
           </Tooltip>
         </div>

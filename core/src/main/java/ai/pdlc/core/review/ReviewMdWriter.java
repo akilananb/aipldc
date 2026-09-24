@@ -70,6 +70,13 @@ public final class ReviewMdWriter {
         return "\n→ gate %d passed on v%d · state: Approved\n".formatted(gate, version);
     }
 
+    /** {@code → task plan approved on v<version>} — the plan gate's equivalent of {@link
+     * #gatePassedBlock}, no {@code state:} suffix since the plan gate has no distinct board state
+     * of its own (the story stays {@code planned} until the build loop starts it {@code in-progress}). */
+    public static String planApprovedBlock(int version) {
+        return "\n→ task plan approved on v%d\n".formatted(version);
+    }
+
     /** {@code ### quality · vN · <verdict> · score <score> · <hh:mm>} — quality agent verdict on a
      * story draft version (playbook: quality agent hard-blocks gate 1). */
     public static String qualityBlock(int version, String verdict, int score, OffsetDateTime at) {
@@ -161,6 +168,13 @@ public final class ReviewMdWriter {
             }
         }
         return sb.toString();
+    }
+
+    /** {@code ## Step failed · <step> · <ts>} — a bounded-retry LLM/agent activity exhausted its
+     * retry budget; the workflow blocked awaiting a reviewer {@code retryStep} signal rather than
+     * dying (see {@code FeatureWorkflowImpl#reasoningStep}). */
+    public static String stepFailureBlock(String step, String message, OffsetDateTime at) {
+        return "\n## Step failed · %s · %s\n%s\n".formatted(step, TS.format(at), message);
     }
 
     public static String append(String existing, String block) {

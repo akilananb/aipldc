@@ -175,6 +175,27 @@ class PromptTemplatesTest {
     }
 
     @Test
+    void poDraftIncludesProjectBriefWhenPresent() {
+        Map<String, Object> view = new HashMap<>();
+        view.put("title", "Export orders CSV");
+        view.put("description", "Let SquadLead export orders as PII-safe CSV.");
+        Map<String, Object> project = new HashMap<>();
+        project.put("name", "Restaurant runtime");
+        project.put("brief", "Kitchen ticket fidelity pilot.");
+        project.put("hasBrief", true);
+        project.put("confluenceUrl", "");
+        project.put("hasConfluence", false);
+        project.put("docs", List.of());
+        project.put("hasDocs", false);
+        view.put("project", project);
+
+        String rendered = DEFAULTS.render("po-draft", view);
+
+        assertThat(rendered).containsOnlyOnce("Kitchen ticket fidelity pilot.");
+        assertThat(rendered).containsOnlyOnce("Project context (Restaurant runtime):");
+    }
+
+    @Test
     void poDraftWithAnsweredAndParkedGrillRendersByteExact() {
         StringBuilder expected = new StringBuilder("[agent:po]").append('\n')
                 .append("Write the story for feature: Export orders CSV\n")

@@ -19,9 +19,9 @@ import {
   Users,
   type LucideIcon,
 } from 'lucide-react';
-import { GATE_ROLES } from '../gates';
+import { useProjectGates } from '../useProject';
 import type { ItemDetail } from '../types';
-import { currentRank, PHASE_LABEL, phaseOf, RANK, signerStatus, SIGNER_DOCS, statusOf, type LaneStatus } from './pipeline';
+import { currentRank, PHASE_LABEL, phaseOf, RANK, signerStatus, SIGNER_DOCS, stageSubtitle, statusOf, type LaneStatus } from './pipeline';
 
 interface Props {
   item: ItemDetail;
@@ -72,14 +72,14 @@ const GATE_PILL: Record<LaneStatus, { icon: LucideIcon; label: string }> = {
   pending: { icon: Lock, label: 'Pending' },
 };
 
-function GateRow({ status }: { status: LaneStatus }) {
+function GateRow({ status, title = 'Gate 1', subtitle = 'Release readiness check' }: { status: LaneStatus; title?: string; subtitle?: string }) {
   const { icon: Icon, label } = GATE_PILL[status];
   return (
     <div className="gate-row">
       <Flag size={20} strokeWidth={1.75} />
       <div className="gate-text">
-        <b>Gate 1</b>
-        <span>Release readiness check</span>
+        <b>{title}</b>
+        <span>{subtitle}</span>
       </div>
       <span className={`gate-pill ${status}`}>
         <Icon size={13} /> {label}
@@ -110,8 +110,9 @@ export default function DeliveryMap({ item }: Props) {
   const current = currentRank(item);
   const st = (rank: number): LaneStatus => statusOf(rank, current);
 
-  const g1Roles = GATE_ROLES.G1.join(' + ');
-  const g2Roles = GATE_ROLES.G2.join(' + ');
+  const { roles: gateRoles } = useProjectGates(item.profile);
+  const g1Roles = (gateRoles.G1 ?? []).join(' + ') || '—';
+  const g2Roles = (gateRoles.G2 ?? []).join(' + ') || '—';
 
   const askStatus = st(RANK.ask);
   const draftStatus = st(RANK.draft);
@@ -119,6 +120,7 @@ export default function DeliveryMap({ item }: Props) {
   const approve1Status = st(RANK.approve1);
   const approvedStatus = st(RANK.approved);
   const planStatus = st(RANK.plan);
+  const approvePlanStatus = st(RANK.approvePlan);
   const waveStatus = st(RANK.wave);
   const reviewStatus = st(RANK.review);
   const approve2Status = st(RANK.approve2);
@@ -196,7 +198,7 @@ export default function DeliveryMap({ item }: Props) {
             </div>
           </div>
 
-          <div className={phaseClass(3, [planStatus])}>
+          <div className={phaseClass(3, [planStatus, approvePlanStatus])}>
             <div className="phase-frame">
               <div className="phase-title">
                 <h3>Plan</h3>
@@ -208,8 +210,21 @@ export default function DeliveryMap({ item }: Props) {
               </div>
               <div className="phase-body">
                 <div className="steps-row tree">
-                  <Card icon={ListChecks} title="Break into tasks" subtitle="Plan agent" current={planStatus === 'current'} />
+                  <Card
+                    icon={ListChecks}
+                    title="Break into tasks"
+                    subtitle={planStatus === 'current' && item.agentWork ? `Plan agent · ${stageSubtitle(item)}` : 'Plan agent'}
+                    current={planStatus === 'current'}
+                  />
+                  <Arrow />
+                  <Card
+                    icon={CheckCircle2}
+                    title="Approve plan"
+                    subtitle={(gateRoles.PLAN ?? []).join(' + ') || '—'}
+                    current={approvePlanStatus === 'current'}
+                  />
                 </div>
+                <GateRow status={approvePlanStatus} title="Plan gate" subtitle="Task plan review" />
               </div>
             </div>
           </div>

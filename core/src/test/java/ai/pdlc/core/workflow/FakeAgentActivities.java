@@ -1,5 +1,6 @@
 package ai.pdlc.core.workflow;
 
+import ai.pdlc.core.config.RepoConfig;
 import ai.pdlc.core.domain.AgentMentionRequest;
 import ai.pdlc.core.domain.Comment;
 import ai.pdlc.core.domain.GrillHandoff;
@@ -8,6 +9,8 @@ import ai.pdlc.core.domain.GrillRound;
 import ai.pdlc.core.domain.Handoff;
 import ai.pdlc.core.domain.MonitorHandoff;
 import ai.pdlc.core.domain.MonitorRule;
+import ai.pdlc.core.domain.PlanConsultation;
+import ai.pdlc.core.domain.PlanDecision;
 import ai.pdlc.core.domain.PoHandoff;
 import ai.pdlc.core.domain.QualityReport;
 import ai.pdlc.core.domain.ReleaseDocument;
@@ -57,6 +60,11 @@ class FakeAgentActivities implements AgentActivities {
      * {@code previous} (i.e. every round after the first) open until counted down — lets a test
      * observe {@code grill()} between the last fold and the next posted round. */
     java.util.concurrent.CountDownLatch nextRoundRelease;
+    /** When {@code > 0}, the first this-many {@link #grillNextRound} calls throw instead of
+     * returning — exercises {@link FeatureWorkflowImpl#reasoningStep}'s bounded-retry-exhausted
+     * block-and-retry path ({@code AGENT_ACTIVITY_OPTIONS} caps real retries at 5 attempts). */
+    int failFirstNRounds = 0;
+    private int nextRoundFailuresConsumed = 0;
     private boolean storyQualityFailedOnce = false;
 
     @Override
@@ -103,6 +111,10 @@ class FakeAgentActivities implements AgentActivities {
     @Override
     public GrillRound grillNextRound(WorkItemRef item, GrillHandoff previous) {
         nextRoundCalls.add(item);
+        if (nextRoundFailuresConsumed < failFirstNRounds) {
+            nextRoundFailuresConsumed++;
+            throw new RuntimeException("simulated grillNextRound failure " + nextRoundFailuresConsumed);
+        }
         if (previous != null && !previous.allQuestionsResolved()) {
             throw new IllegalStateException("grillNextRound called with unresolved previous for " + item);
         }
@@ -157,7 +169,7 @@ class FakeAgentActivities implements AgentActivities {
             Handoff envelope = new Handoff("po-agent", "plan-agent", item.boardId(),
                     ai.pdlc.core.domain.CanonicalState.AWAITING_G1, List.of(), 0.9, List.of(), List.of());
             PoHandoff handoff = new PoHandoff(envelope, item.boardId(), "openspec/changes/export-orders-csv" + suffix,
-                    List.of("export-current-view", "rate-limit"), java.util.Map.of(), List.of("orders-service/export"),
+                    List.of("rate-limit"), java.util.Map.of(), List.of("orders-service/export"),
                     java.util.Map.of("I", "pass", "N", "pass", "V", "pass", "E", "pass", "S", "pass", "T", "pass"),
                     List.of(), java.util.Map.of());
             String story = "# Export the filtered orders view to CSV" + suffix
@@ -239,5 +251,28 @@ class FakeAgentActivities implements AgentActivities {
     @Override
     public String mentionAnalyze(AgentMentionRequest request) {
         return "fake mention result for " + request.agentName();
+    }
+
+    final List<WorkItemRef> planNextStepCalls = new CopyOnWriteArrayList<>();
+    final List<List<String>> planNextStepFeedback = new CopyOnWriteArrayList<>();
+
+    /** First call (empty history) always CONSULTs once; every later call FINALIZEs with a single
+     * task covering the fake story's one scenario ("rate-limit"), touching the same files the
+     * paired {@link FakeBuildActivities#consultPlan} reports as existing - matches {@link
+     * ai.pdlc.core.plan.PlanAssembler}'s real coverage/catalog validation. */
+    @Override
+    public PlanDecision planNextStep(WorkItemRef story, PoHandoff po, String storyMarkdown,
+                                      List<RepoConfig> repos, List<PlanConsultation.Exchange> history, List<String> feedback,
+                                      boolean canConsult) {
+        planNextStepCalls.add(story);
+        planNextStepFeedback.add(feedback);
+        if (history.isEmpty()) {
+            return new PlanDecision(PlanDecision.Action.CONSULT, "need repository evidence before drafting tasks",
+                    "main", List.of("Where is the rate-limit check implemented, and what test proves it?"), List.of(), List.of());
+        }
+        PlanDecision.PlannedTask t1 = new PlanDecision.PlannedTask("T1", "Rate limit on /export",
+                "Add the 11th-export 429 path in src/export.js; assert in test/export.test.js.",
+                "orders-service/export", "main", "rate-limit", List.of("src/export.js"), "test/export.test.js", List.of());
+        return new PlanDecision(PlanDecision.Action.FINALIZE, "evidence is sufficient", null, List.of(), List.of(), List.of(t1));
     }
 }

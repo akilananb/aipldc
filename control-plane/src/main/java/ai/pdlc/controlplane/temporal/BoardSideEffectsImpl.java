@@ -1,5 +1,6 @@
 package ai.pdlc.controlplane.temporal;
 
+import ai.pdlc.controlplane.config.PortRegistry;
 import ai.pdlc.controlplane.persistence.ArtifactEntity;
 import ai.pdlc.controlplane.persistence.ArtifactRepository;
 import ai.pdlc.controlplane.persistence.CommentEntity;
@@ -14,7 +15,9 @@ import ai.pdlc.controlplane.persistence.WorkItemEntity;
 import ai.pdlc.controlplane.persistence.WorkItemRepository;
 import ai.pdlc.controlplane.review.ReviewTrailService;
 import ai.pdlc.core.config.GateConfig;
-import ai.pdlc.core.config.PdlcConfig;
+import ai.pdlc.core.config.Profile;
+import ai.pdlc.core.config.ProjectDirectory;
+import ai.pdlc.core.config.RepoConfig;
 import ai.pdlc.core.domain.Anchor;
 import ai.pdlc.core.domain.CanonicalState;
 import ai.pdlc.core.domain.GrillHandoff;
@@ -44,13 +47,13 @@ import ai.pdlc.core.workflow.PublishTasksResult;
 import ai.pdlc.core.workflow.StoryDraft;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -61,7 +64,9 @@ import java.util.regex.Pattern;
 /**
  * {@link BoardSideEffects} activity implementation, hosted by control-plane's own Temporal worker
  * (task queue {@code reasoning}) so every board/repo/DB write uses control-plane's adapters and
- * datasource (orchestration-decision §6).
+ * datasource (orchestration-decision §6). Board/repo/CI ports are resolved per project id at call
+ * time via {@link PortRegistry} (project config is DB-backed and Admin-editable at runtime), never
+ * held as process-startup singletons.
  */
 @Component
 public class BoardSideEffectsImpl implements BoardSideEffects {
@@ -72,6 +77,7 @@ public class BoardSideEffectsImpl implements BoardSideEffects {
     private static final String GRILL_BOT_IDENTITY = "grill-agent-bot";
     private static final String RELEASE_BOT_IDENTITY = "release-agent-bot";
     private static final String BUILD_BOT_IDENTITY = "build-agent-bot";
+    private static final String PLAN_BOT_IDENTITY = "plan-agent-bot";
 
     private static final String GRILL_INSTRUCTION =
             "Reply with \"<id>: <answer>\" or \"<id>: park\" (one per line, several per comment is fine).";
@@ -79,10 +85,8 @@ public class BoardSideEffectsImpl implements BoardSideEffects {
             "A build task stopped and needs your decision. Reply with \"<id>: <guidance>\" to retry the "
                     + "task with that guidance, or \"<id>: skip\" to continue to review as-is.";
 
-    private final PdlcConfig pdlcConfig;
-    private final BoardPort board;
-    private final RepoPort repo;
-    private final CiPort ci;
+    private final ProjectDirectory projects;
+    private final PortRegistry ports;
     private final WorkItemRepository workItems;
     private final ArtifactRepository artifacts;
     private final CommentRepository comments;
@@ -92,15 +96,13 @@ public class BoardSideEffectsImpl implements BoardSideEffects {
     private final QualityReportRepository qualityReports;
     private final JdbcTemplate jdbc;
 
-    public BoardSideEffectsImpl(PdlcConfig pdlcConfig, BoardPort board, RepoPort repo, CiPort ci,
+    public BoardSideEffectsImpl(ProjectDirectory projects, PortRegistry ports,
                                  WorkItemRepository workItems, ArtifactRepository artifacts,
                                  CommentRepository comments, ReviewTrailService reviewTrail,
                                  PrRepository prs, ReleaseDocumentRepository releaseDocuments,
                                  QualityReportRepository qualityReports, JdbcTemplate jdbc) {
-        this.pdlcConfig = pdlcConfig;
-        this.board = board;
-        this.repo = repo;
-        this.ci = ci;
+        this.projects = projects;
+        this.ports = ports;
         this.workItems = workItems;
         this.artifacts = artifacts;
         this.comments = comments;
@@ -113,11 +115,17 @@ public class BoardSideEffectsImpl implements BoardSideEffects {
 
     @Override
     public GateConfig loadGate1Config(String profile) {
-        return pdlcConfig.profile(profile).gate("G1");
+        return projects.project(profile).gate("G1");
+    }
+
+    @Override
+    public List<RepoConfig> loadRepos(String profile) {
+        return projects.project(profile).repos();
     }
 
     @Override
     public void postGrillQuestions(WorkItemRef item, GrillHandoff grill) {
+        BoardPort board = ports.board(item.profile());
         WorkItemEntity feature = ensureWorkItem(item, "feature", null);
         board.addComment(item, formatGrillQuestions(GRILL_INSTRUCTION, grill, q -> true), GRILL_BOT_IDENTITY);
         board.transition(item, CanonicalState.NEEDS_CLARIFICATION);
@@ -126,6 +134,7 @@ public class BoardSideEffectsImpl implements BoardSideEffects {
 
     @Override
     public void postFollowUpQuestions(WorkItemRef item, GrillHandoff grill) {
+        BoardPort board = ports.board(item.profile());
         WorkItemEntity feature = ensureWorkItem(item, "feature", null);
         board.addComment(item, formatGrillQuestions(GRILL_INSTRUCTION, grill,
                 q -> q.askedByPoAgent() && q.status() == GrillQuestion.Status.OPEN), MAKER_BOT_IDENTITY);
@@ -141,6 +150,7 @@ public class BoardSideEffectsImpl implements BoardSideEffects {
 
     @Override
     public void postGrillRound(WorkItemRef item, GrillHandoff grill) {
+        BoardPort board = ports.board(item.profile());
         WorkItemEntity feature = ensureWorkItem(item, "feature", null);
         String openIds = grill.questions().stream()
                 .filter(q -> !q.askedByPoAgent() && !q.askedByBuildLoop() && q.status() == GrillQuestion.Status.OPEN)
@@ -156,6 +166,7 @@ public class BoardSideEffectsImpl implements BoardSideEffects {
 
     @Override
     public void transitionReadyForStory(WorkItemRef item, GrillHandoff grill) {
+        BoardPort board = ports.board(item.profile());
         WorkItemEntity feature = ensureWorkItem(item, "feature", null);
         board.transition(item, CanonicalState.READY_FOR_STORY);
         board.attach(item, "grill.md", GrillMdSerializer.render(grill));
@@ -164,10 +175,12 @@ public class BoardSideEffectsImpl implements BoardSideEffects {
 
     @Override
     public PublishResult publishStory(WorkItemRef feature, StoryDraft draft, int storyIndex, boolean queued) {
+        BoardPort board = ports.board(feature.profile());
+        RepoPort repo = ports.primaryRepo(feature.profile());
         ensureWorkItem(feature, "feature", null);
 
         String idempotencyKey = feature.workflowId() + ":publishStory:" + storyIndex;
-        String title = firstHeadingOrDefault(draft.storyMarkdown(), featureTitleOrDefault(feature, storyIndex));
+        String title = firstHeadingOrDefault(draft.storyMarkdown(), featureTitleOrDefault(board, feature, storyIndex));
         var created = board.createItem(feature.profile(), "story", Map.of(
                 "title", title,
                 "description", draft.storyMarkdown(),
@@ -178,7 +191,7 @@ public class BoardSideEffectsImpl implements BoardSideEffects {
 
         String slug = draft.handoff().change();
         Map<String, String> files = changeFolderFiles(slug, draft);
-        String defaultBranch = pdlcConfig.profile(feature.profile()).repo().defaultBranch();
+        String defaultBranch = projects.project(feature.profile()).repo().defaultBranch();
         var commit = repo.writeFiles(defaultBranch, files, "story drafted: " + title, MAKER_BOT_IDENTITY);
 
         String contentHash = Anchor.hash(draft.storyMarkdown());
@@ -196,12 +209,14 @@ public class BoardSideEffectsImpl implements BoardSideEffects {
 
     @Override
     public PublishResult publishRevision(WorkItemRef story, int newVersion, StoryDraft draft, List<String> resolvedCommentIds) {
+        BoardPort board = ports.board(story.profile());
+        RepoPort repo = ports.primaryRepo(story.profile());
         WorkItemEntity storyRow = workItems.findByProfileAndBoardId(story.profile(), story.boardId())
                 .orElseThrow(() -> new IllegalStateException("No work_items row for story " + story));
 
         String slug = draft.handoff().change();
         Map<String, String> files = changeFolderFiles(slug, draft);
-        String defaultBranch = pdlcConfig.profile(story.profile()).repo().defaultBranch();
+        String defaultBranch = projects.project(story.profile()).repo().defaultBranch();
         var commit = repo.writeFiles(defaultBranch, files, "story revised (v" + newVersion + ")", MAKER_BOT_IDENTITY);
 
         String contentHash = Anchor.hash(draft.storyMarkdown());
@@ -232,6 +247,7 @@ public class BoardSideEffectsImpl implements BoardSideEffects {
 
     @Override
     public void transitionApproved(WorkItemRef story, int version, int gate) {
+        BoardPort board = ports.board(story.profile());
         WorkItemEntity storyRow = workItems.findByProfileAndBoardId(story.profile(), story.boardId())
                 .orElseThrow(() -> new IllegalStateException("No work_items row for story " + story));
         board.transition(story, CanonicalState.APPROVED);
@@ -243,6 +259,7 @@ public class BoardSideEffectsImpl implements BoardSideEffects {
 
     @Override
     public void escalateStale(WorkItemRef item) {
+        BoardPort board = ports.board(item.profile());
         WorkItemEntity feature = ensureWorkItem(item, "feature", null);
         board.addComment(item, "@SquadLead — 5 working days with open questions; please answer, park, or skip.", GRILL_BOT_IDENTITY);
         board.transition(item, CanonicalState.STALE);
@@ -252,6 +269,7 @@ public class BoardSideEffectsImpl implements BoardSideEffects {
 
     @Override
     public void postHumanInputRequest(WorkItemRef story, GrillHandoff grill) {
+        BoardPort board = ports.board(story.profile());
         WorkItemEntity storyRow = workItems.findByProfileAndBoardId(story.profile(), story.boardId())
                 .orElseThrow(() -> new IllegalStateException("No work_items row for story " + story));
         board.addComment(story, formatGrillQuestions(HUMAN_INPUT_INSTRUCTION, grill,
@@ -274,11 +292,19 @@ public class BoardSideEffectsImpl implements BoardSideEffects {
 
     @Override
     public GateConfig loadGate2Config(String profile) {
-        return pdlcConfig.profile(profile).gate("G2");
+        return projects.project(profile).gate("G2");
+    }
+
+    @Override
+    public GateConfig loadPlanGateConfig(String profile) {
+        return projects.project(profile).gate("PLAN");
     }
 
     @Override
     public PublishTasksResult publishTasks(WorkItemRef story, PlanHandoff plan) {
+        BoardPort board = ports.board(story.profile());
+        RepoPort repo = ports.primaryRepo(story.profile());
+        Profile project = projects.project(story.profile());
         WorkItemEntity storyRow = workItems.findByProfileAndBoardId(story.profile(), story.boardId())
                 .orElseThrow(() -> new IllegalStateException("No work_items row for story " + story));
 
@@ -292,10 +318,10 @@ public class BoardSideEffectsImpl implements BoardSideEffects {
             taskBoardIds.put(task.id(), created.id());
         }
 
-        String defaultBranch = pdlcConfig.profile(story.profile()).repo().defaultBranch();
+        Map<String, String> defaultBranchByRepo = defaultBranchByRepo(project);
         if (storyRow.specChangePath() != null) {
-            repo.writeFiles(defaultBranch, Map.of(storyRow.specChangePath() + "/tasks.md", tasksMd(plan)),
-                    "tasks planned", "plan-agent-bot");
+            repo.writeFiles(project.repo().defaultBranch(), Map.of(storyRow.specChangePath() + "/tasks.md", tasksMd(plan)),
+                    "tasks planned", PLAN_BOT_IDENTITY);
         }
 
         board.transition(story, CanonicalState.PLANNED);
@@ -303,11 +329,77 @@ public class BoardSideEffectsImpl implements BoardSideEffects {
         reviewTrail.appendReviewEvent(storyRow.id(), "planned",
                 Map.of("tasks", plan.tasks().size(), "waves", plan.waves().size()));
 
-        return new PublishTasksResult(defaultBranch, taskBoardIds);
+        return new PublishTasksResult(defaultBranchByRepo, taskBoardIds);
+    }
+
+    @Override
+    public PublishTasksResult republishTasks(WorkItemRef story, PlanHandoff plan, Map<String, String> previousTaskBoardIds, int planVersion) {
+        BoardPort board = ports.board(story.profile());
+        RepoPort repo = ports.primaryRepo(story.profile());
+        Profile project = projects.project(story.profile());
+        WorkItemEntity storyRow = workItems.findByProfileAndBoardId(story.profile(), story.boardId())
+                .orElseThrow(() -> new IllegalStateException("No work_items row for story " + story));
+
+        Map<String, String> taskBoardIds = new LinkedHashMap<>();
+        for (Task task : plan.tasks()) {
+            var created = board.createItem(story.profile(), "task", Map.of(
+                    "title", taskTitleOrDefault(task),
+                    "description", taskDescription(task),
+                    "_idempotencyKey", story.workflowId() + ":task:" + task.id()), story.boardId());
+            WorkItemRef taskRef = new WorkItemRef(story.profile(), created.id());
+            board.updateFields(taskRef, Map.of("title", taskTitleOrDefault(task), "description", taskDescription(task)));
+            ensureWorkItem(taskRef, "task", story.boardId());
+            taskBoardIds.put(task.id(), created.id());
+        }
+
+        for (Map.Entry<String, String> previous : previousTaskBoardIds.entrySet()) {
+            if (taskBoardIds.containsKey(previous.getKey())) {
+                continue;
+            }
+            WorkItemRef supersededRef = new WorkItemRef(story.profile(), previous.getValue());
+            String currentTitle;
+            try {
+                currentTitle = board.getItem(supersededRef).title();
+            } catch (RuntimeException unreadable) {
+                currentTitle = previous.getKey();
+            }
+            board.updateFields(supersededRef, Map.of("title", "[superseded] " + currentTitle));
+            board.addComment(supersededRef, "Superseded by task plan v" + planVersion + ".", PLAN_BOT_IDENTITY);
+        }
+
+        Map<String, String> defaultBranchByRepo = defaultBranchByRepo(project);
+        if (storyRow.specChangePath() != null) {
+            repo.writeFiles(project.repo().defaultBranch(), Map.of(storyRow.specChangePath() + "/tasks.md", tasksMd(plan)),
+                    "tasks re-planned v" + planVersion, PLAN_BOT_IDENTITY);
+        }
+
+        reviewTrail.appendReviewEvent(storyRow.id(), "re-planned",
+                Map.of("version", planVersion, "tasks", plan.tasks().size(), "waves", plan.waves().size()));
+
+        return new PublishTasksResult(defaultBranchByRepo, taskBoardIds);
+    }
+
+    private static Map<String, String> defaultBranchByRepo(Profile project) {
+        Map<String, String> result = new LinkedHashMap<>();
+        for (RepoConfig r : project.repos()) {
+            result.put(r.id(), r.defaultBranch());
+        }
+        return result;
+    }
+
+    @Override
+    public void recordPlanApproved(WorkItemRef story, int planVersion) {
+        WorkItemEntity storyRow = workItems.findByProfileAndBoardId(story.profile(), story.boardId())
+                .orElseThrow(() -> new IllegalStateException("No work_items row for story " + story));
+        reviewTrail.appendReviewEvent(storyRow.id(), "plan-approved", Map.of("version", planVersion));
+        if (storyRow.specChangePath() != null) {
+            reviewTrail.appendReviewMd(story, storyRow.specChangePath(), ReviewMdWriter.planApprovedBlock(planVersion));
+        }
     }
 
     @Override
     public void transitionInProgress(WorkItemRef story) {
+        BoardPort board = ports.board(story.profile());
         WorkItemEntity storyRow = workItems.findByProfileAndBoardId(story.profile(), story.boardId())
                 .orElseThrow(() -> new IllegalStateException("No work_items row for story " + story));
         board.transition(story, CanonicalState.IN_PROGRESS);
@@ -315,14 +407,51 @@ public class BoardSideEffectsImpl implements BoardSideEffects {
     }
 
     @Override
-    public PRRef openStoryPr(WorkItemRef story, String branch, List<Task> tasks, List<BuildResult> results, ReviewHandoff review) {
+    public List<PRRef> openStoryPr(WorkItemRef story, String branch, List<Task> tasks, List<BuildResult> results, ReviewHandoff review) {
+        BoardPort board = ports.board(story.profile());
+        String profile = story.profile();
+        Profile project = projects.project(profile);
         WorkItemEntity storyRow = workItems.findByProfileAndBoardId(story.profile(), story.boardId())
                 .orElseThrow(() -> new IllegalStateException("No work_items row for story " + story));
-        String defaultBranch = pdlcConfig.profile(story.profile()).repo().defaultBranch();
         String storyTitle = board.getItem(story).title();
 
-        PRRef pr = repo.openPR(branch, defaultBranch, "Build: " + storyTitle, prBody(review));
-        prs.save(PrEntity.newRow(storyRow.id(), pr.id(), branch, defaultBranch));
+        Map<String, List<Task>> tasksByRepo = new LinkedHashMap<>();
+        for (Task t : tasks) {
+            tasksByRepo.computeIfAbsent(t.repo(), k -> new ArrayList<>()).add(t);
+        }
+
+        List<PRRef> opened = new ArrayList<>();
+        List<String> prIds = new ArrayList<>();
+        for (Map.Entry<String, List<Task>> entry : tasksByRepo.entrySet()) {
+            String repoId = entry.getKey();
+            List<Task> repoTasks = entry.getValue();
+            RepoConfig repoConfig = project.repo(repoId);
+            RepoPort repoPort = ports.repo(profile, repoId);
+            String defaultBranch = repoConfig.defaultBranch();
+
+            PRRef pr = repoPort.openPR(branch, defaultBranch, "Build: " + storyTitle + " [" + repoId + "]", prBody(review));
+            prs.save(PrEntity.newRow(storyRow.id(), pr.id(), branch, defaultBranch, repoId));
+            opened.add(pr);
+            prIds.add(pr.id());
+
+            for (ReviewFinding f : review.findings()) {
+                repoPort.commentOnPR(pr.id(), "[" + f.severity().wireValue() + "/" + f.category() + "] " + f.message(), null);
+            }
+
+            if (storyRow.specChangePath() != null) {
+                Set<String> repoTaskIds = repoTasks.stream().map(Task::id).collect(java.util.stream.Collectors.toSet());
+                List<String> taskLines = results.stream().filter(r -> repoTaskIds.contains(r.taskId())).map(r -> {
+                    Task task = repoTasks.stream().filter(t -> t.id().equals(r.taskId())).findFirst()
+                            .orElseThrow(() -> new IllegalStateException("No such task: " + r.taskId()));
+                    return task.id() + " " + task.scenario() + ": " + r.verifier().result()
+                            + " (iterations=" + r.iterations() + (r.escalation() != null ? ", escalation: " + r.escalation() : "") + ")";
+                }).toList();
+                List<String> findingLines = review.findings().stream()
+                        .map(f -> "[" + f.severity().wireValue() + "] " + f.category() + ": " + f.message()).toList();
+                reviewTrail.appendReviewMd(story, storyRow.specChangePath(),
+                        ReviewMdWriter.prOpenedBlock(repoTasks.size(), branch, defaultBranch, pr.url(), taskLines, findingLines));
+            }
+        }
 
         for (BuildResult r : results) {
             jdbc.update("""
@@ -331,33 +460,18 @@ public class BoardSideEffectsImpl implements BoardSideEffects {
                     """, storyRow.id(), r.taskId(), story.workflowId(), r.tokens(), r.iterations(), r.verifier().result());
         }
 
-        for (ReviewFinding f : review.findings()) {
-            repo.commentOnPR(pr.id(), "[" + f.severity().wireValue() + "/" + f.category() + "] " + f.message(), null);
-        }
-
-        if (storyRow.specChangePath() != null) {
-            List<String> taskLines = results.stream().map(r -> {
-                Task task = tasks.stream().filter(t -> t.id().equals(r.taskId())).findFirst()
-                        .orElseThrow(() -> new IllegalStateException("No such task: " + r.taskId()));
-                return task.id() + " " + task.scenario() + ": " + r.verifier().result()
-                        + " (iterations=" + r.iterations() + (r.escalation() != null ? ", escalation: " + r.escalation() : "") + ")";
-            }).toList();
-            List<String> findingLines = review.findings().stream()
-                    .map(f -> "[" + f.severity().wireValue() + "] " + f.category() + ": " + f.message()).toList();
-            reviewTrail.appendReviewMd(story, storyRow.specChangePath(),
-                    ReviewMdWriter.prOpenedBlock(tasks.size(), branch, defaultBranch, pr.url(), taskLines, findingLines));
-        }
         reviewTrail.appendReviewEvent(storyRow.id(), "pr-opened",
-                Map.of("branch", branch, "prId", pr.id(), "findings", review.findings().size()));
+                Map.of("branch", branch, "prIds", String.join(",", prIds), "findings", review.findings().size()));
 
         board.transition(story, CanonicalState.AWAITING_G2);
         workItems.save(storyRow.withCanonicalState(CanonicalState.AWAITING_G2.wireValue()));
 
-        return pr;
+        return opened;
     }
 
     @Override
     public void recordTaskResults(WorkItemRef story, Map<String, String> taskBoardIds, List<BuildResult> results) {
+        BoardPort board = ports.board(story.profile());
         for (BuildResult r : results) {
             String taskBoardId = taskBoardIds.get(r.taskId());
             if (taskBoardId == null) {
@@ -391,17 +505,28 @@ public class BoardSideEffectsImpl implements BoardSideEffects {
     @Override
     public void postFixRound(WorkItemRef story, String branch, List<Task> tasks, List<BuildResult> rerunResults,
                               ReviewHandoff review, int round) {
+        BoardPort board = ports.board(story.profile());
+        String profile = story.profile();
         WorkItemEntity storyRow = workItems.findByProfileAndBoardId(story.profile(), story.boardId())
                 .orElseThrow(() -> new IllegalStateException("No work_items row for story " + story));
 
-        java.util.Optional<PrEntity> pr = prs.findByWorkItemId(storyRow.id());
-        if (pr.isPresent()) {
-            for (ReviewFinding f : review.findings()) {
-                repo.commentOnPR(pr.get().prId(),
-                        "[fix round " + round + "][" + f.severity().wireValue() + "/" + f.category() + "] " + f.message(), null);
+        Set<String> rerunTaskIds = rerunResults.stream().map(BuildResult::taskId).collect(java.util.stream.Collectors.toSet());
+        Set<String> targetRepoIds = tasks.stream().filter(t -> rerunTaskIds.contains(t.id())).map(Task::repo)
+                .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+
+        List<PrEntity> storyPrs = prs.findAllByWorkItemId(storyRow.id());
+        List<PrEntity> targetPrs = storyPrs.stream().filter(p -> targetRepoIds.contains(p.repoId())).toList();
+        if (!targetPrs.isEmpty()) {
+            for (PrEntity pr : targetPrs) {
+                RepoPort repoPort = ports.repo(profile, pr.repoId());
+                for (ReviewFinding f : review.findings()) {
+                    repoPort.commentOnPR(pr.prId(),
+                            "[fix round " + round + "][" + f.severity().wireValue() + "/" + f.category() + "] " + f.message(), null);
+                }
             }
         } else {
-            log.warn("[postFixRound] no PR row for story {}; skipping PR comments for fix round {}", story, round);
+            log.warn("[postFixRound] no PR row for story {} matching repos {}; skipping PR comments for fix round {}",
+                    story, targetRepoIds, round);
         }
 
         for (BuildResult r : rerunResults) {
@@ -431,14 +556,16 @@ public class BoardSideEffectsImpl implements BoardSideEffects {
 
     @Override
     public GateConfig loadGate3Config(String profile) {
-        return pdlcConfig.profile(profile).gate("G3");
+        return projects.project(profile).gate("G3");
     }
 
     @Override
     public void publishReleasePack(WorkItemRef story, ReleaseHandoff release) {
+        BoardPort board = ports.board(story.profile());
+        RepoPort repo = ports.primaryRepo(story.profile());
         WorkItemEntity storyRow = workItems.findByProfileAndBoardId(story.profile(), story.boardId())
                 .orElseThrow(() -> new IllegalStateException("No work_items row for story " + story));
-        String defaultBranch = pdlcConfig.profile(story.profile()).repo().defaultBranch();
+        String defaultBranch = projects.project(story.profile()).repo().defaultBranch();
         String storyTitle = board.getItem(story).title();
 
         String idempotencyKey = story.workflowId() + ":release:" + release.releaseId();
@@ -477,9 +604,10 @@ public class BoardSideEffectsImpl implements BoardSideEffects {
 
     @Override
     public void publishReleaseRevision(WorkItemRef story, ReleaseHandoff release, int packVersion) {
+        RepoPort repo = ports.primaryRepo(story.profile());
         WorkItemEntity storyRow = workItems.findByProfileAndBoardId(story.profile(), story.boardId())
                 .orElseThrow(() -> new IllegalStateException("No work_items row for story " + story));
-        String defaultBranch = pdlcConfig.profile(story.profile()).repo().defaultBranch();
+        String defaultBranch = projects.project(story.profile()).repo().defaultBranch();
 
         Map<String, String> files = new LinkedHashMap<>();
         for (ReleaseDocument doc : release.documents()) {
@@ -506,6 +634,7 @@ public class BoardSideEffectsImpl implements BoardSideEffects {
 
     @Override
     public void transitionAwaitingG2(WorkItemRef story) {
+        BoardPort board = ports.board(story.profile());
         WorkItemEntity storyRow = workItems.findByProfileAndBoardId(story.profile(), story.boardId())
                 .orElseThrow(() -> new IllegalStateException("No work_items row for story " + story));
         board.transition(story, CanonicalState.AWAITING_G2);
@@ -514,6 +643,8 @@ public class BoardSideEffectsImpl implements BoardSideEffects {
 
     @Override
     public void deployRelease(WorkItemRef story, ReleaseHandoff release, String branch) {
+        BoardPort board = ports.board(story.profile());
+        CiPort ci = ports.ci(story.profile());
         WorkItemEntity storyRow = workItems.findByProfileAndBoardId(story.profile(), story.boardId())
                 .orElseThrow(() -> new IllegalStateException("No work_items row for story " + story));
 
@@ -540,6 +671,7 @@ public class BoardSideEffectsImpl implements BoardSideEffects {
 
     @Override
     public void fileMonitorCards(WorkItemRef story, MonitorHandoff monitor) {
+        BoardPort board = ports.board(story.profile());
         WorkItemEntity storyRow = workItems.findByProfileAndBoardId(story.profile(), story.boardId())
                 .orElseThrow(() -> new IllegalStateException("No work_items row for story " + story));
 
@@ -567,7 +699,7 @@ public class BoardSideEffectsImpl implements BoardSideEffects {
     private WorkItemEntity ensureWorkItem(WorkItemRef ref, String kind, String parentId) {
         return workItems.findByProfileAndBoardId(ref.profile(), ref.boardId())
                 .orElseGet(() -> {
-                    String provider = pdlcConfig.profile(ref.profile()).board().provider();
+                    String provider = projects.project(ref.profile()).board().provider();
                     return workItems.save(WorkItemEntity.newRow(ref.profile(), provider, ref.boardId(), kind, parentId, CanonicalState.NEW.wireValue(), null));
                 });
     }
@@ -630,7 +762,7 @@ public class BoardSideEffectsImpl implements BoardSideEffects {
      * the LLM wraps the narrative under a bare {@code ## Story} container, not a descriptive
      * heading) - far more useful than a generic literal, and disambiguated per split index for a
      * multi-story feature. Best-effort: an unreadable feature item falls back to the literal. */
-    private String featureTitleOrDefault(WorkItemRef feature, int storyIndex) {
+    private static String featureTitleOrDefault(BoardPort board, WorkItemRef feature, int storyIndex) {
         String featureTitle;
         try {
             featureTitle = board.getItem(feature).title();
@@ -656,6 +788,7 @@ public class BoardSideEffectsImpl implements BoardSideEffects {
         }
         sb.append("- **Scenario:** ").append(task.scenario()).append('\n');
         sb.append("- **Area:** ").append(task.area()).append('\n');
+        sb.append("- **Repo:** ").append(task.repo()).append('\n');
         sb.append("- **Touches:** ").append(String.join(", ", task.touches())).append('\n');
         sb.append("- **Test:** ").append(task.testPath()).append('\n');
         if (!task.blockedBy().isEmpty()) {
@@ -673,7 +806,8 @@ public class BoardSideEffectsImpl implements BoardSideEffects {
                 sb.append("- ").append(task.id()).append(' ').append(task.title())
                         .append(" — proves \"").append(task.scenario()).append('"')
                         .append("; touches: ").append(String.join(", ", task.touches()))
-                        .append("; test: ").append(task.testPath()).append('\n');
+                        .append("; test: ").append(task.testPath())
+                        .append("; repo: ").append(task.repo()).append('\n');
             }
         }
         return sb.toString();
@@ -708,6 +842,7 @@ public class BoardSideEffectsImpl implements BoardSideEffects {
 
     @Override
     public void activateStory(WorkItemRef story) {
+        BoardPort board = ports.board(story.profile());
         WorkItemEntity storyRow = workItems.findByProfileAndBoardId(story.profile(), story.boardId())
                 .orElseThrow(() -> new IllegalStateException("No work_items row for story " + story));
         board.transition(story, CanonicalState.AWAITING_G1);
@@ -726,6 +861,17 @@ public class BoardSideEffectsImpl implements BoardSideEffects {
         if (row.specChangePath() != null) {
             reviewTrail.appendReviewMd(item, row.specChangePath(),
                     ReviewMdWriter.qualityBlock(version, verdict, report.score(), OffsetDateTime.now()));
+        }
+    }
+
+    @Override
+    public void recordStepFailure(WorkItemRef ref, String step, String message) {
+        WorkItemEntity row = workItems.findByProfileAndBoardId(ref.profile(), ref.boardId())
+                .orElseThrow(() -> new IllegalStateException("No work_items row for " + ref));
+        reviewTrail.appendReviewEvent(row.id(), "step-failed", Map.of("step", step, "message", message));
+        if (row.specChangePath() != null) {
+            reviewTrail.appendReviewMd(ref, row.specChangePath(),
+                    ReviewMdWriter.stepFailureBlock(step, message, OffsetDateTime.now()));
         }
     }
 }

@@ -1,4 +1,11 @@
 [agent:po]
+{{#project}}
+Project context ({{{name}}}):
+{{#hasBrief}}{{{brief}}}{{/hasBrief}}
+{{#hasConfluence}}Confluence: {{{confluenceUrl}}}{{/hasConfluence}}
+{{#hasDocs}}Reference docs (titles/links only — you cannot fetch them; treat as pointers, not authority):{{#docs}}
+- {{{title}}}: {{{url}}}{{/docs}}{{/hasDocs}}
+{{/project}}
 Write the story for feature: {{{title}}}
 Feature description: {{{description}}}
 When your reply is a story (not a "===QUESTIONS===" follow-up below), its first line must be a single "# <short descriptive title for this story>" heading (a concise title for this specific story, not necessarily the literal feature title), followed by a blank line, before any other content.

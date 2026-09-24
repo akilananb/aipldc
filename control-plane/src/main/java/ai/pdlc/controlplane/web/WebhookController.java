@@ -1,8 +1,8 @@
 package ai.pdlc.controlplane.web;
 
+import ai.pdlc.controlplane.config.PortRegistry;
 import ai.pdlc.controlplane.persistence.IngestedEventStore;
 import ai.pdlc.controlplane.temporal.FeatureWorkflowStarter;
-import ai.pdlc.core.config.Profile;
 import ai.pdlc.core.domain.CanonicalEvent;
 import ai.pdlc.core.domain.WorkItem;
 import ai.pdlc.core.domain.WorkItemRef;
@@ -10,6 +10,7 @@ import ai.pdlc.core.port.BoardPort;
 import ai.pdlc.core.workflow.BoardCommentEvent;
 import ai.pdlc.core.workflow.FeatureWorkflow;
 import io.temporal.client.WorkflowClient;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -23,26 +24,29 @@ import java.util.Map;
  * {@code POST /webhooks/local} accepts the same shape for the in-memory profile (tests/seed
  * script). Idempotent by {@code item+rev} (orchestration-decision §5): {@code item.created} with
  * kind=feature starts {@link FeatureWorkflow} with {@code WorkflowIdReusePolicy.REJECT_DUPLICATE}
- * so replays no-op; {@code comment.added} signals {@code commentAdded}.
+ * so replays no-op; {@code comment.added} signals {@code commentAdded}. Targets the deployment's
+ * default project id ({@code PDLC_ACTIVE_PROFILE}) — one ADO org/project per control-plane
+ * ingress; a multi-project webhook ingress would need a {@code projectId} path segment instead.
  */
 @RestController
 @RequestMapping("/webhooks")
 public class WebhookController {
 
-    private final BoardPort board;
+    private final PortRegistry ports;
     private final IngestedEventStore ingestedEvents;
     private final FeatureWorkflowStarter featureWorkflowStarter;
     private final WorkflowClient workflowClient;
-    private final Profile activeProfile;
+    private final String defaultProjectId;
     private final ai.pdlc.controlplane.demo.DemoSnapshotService demoSnapshots;
 
-    public WebhookController(BoardPort board, IngestedEventStore ingestedEvents, FeatureWorkflowStarter featureWorkflowStarter,
-                              WorkflowClient workflowClient, Profile activeProfile, ai.pdlc.controlplane.demo.DemoSnapshotService demoSnapshots) {
-        this.board = board;
+    public WebhookController(PortRegistry ports, IngestedEventStore ingestedEvents, FeatureWorkflowStarter featureWorkflowStarter,
+                              WorkflowClient workflowClient, @Value("${pdlc.active-profile}") String defaultProjectId,
+                              ai.pdlc.controlplane.demo.DemoSnapshotService demoSnapshots) {
+        this.ports = ports;
         this.ingestedEvents = ingestedEvents;
         this.featureWorkflowStarter = featureWorkflowStarter;
         this.workflowClient = workflowClient;
-        this.activeProfile = activeProfile;
+        this.defaultProjectId = defaultProjectId;
         this.demoSnapshots = demoSnapshots;
     }
 
@@ -59,9 +63,10 @@ public class WebhookController {
     private ResponseEntity<Map<String, String>> handle(Map<String, Object> payload) {
         Object rawBoardId = payload.get("boardId");
         if (rawBoardId != null) {
-            demoSnapshots.requireWritable(activeProfile.name(), String.valueOf(rawBoardId));
+            demoSnapshots.requireWritable(defaultProjectId, String.valueOf(rawBoardId));
         }
-        CanonicalEvent event = board.onWebhook(activeProfile.name(), payload);
+        BoardPort board = ports.board(defaultProjectId);
+        CanonicalEvent event = board.onWebhook(defaultProjectId, payload);
         boolean isNew = ingestedEvents.recordIfNew(
                 event.itemRef().profile(), event.itemRef().boardId(), event.rev(), event.kind().wireValue());
         if (!isNew) {

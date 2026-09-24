@@ -5,6 +5,7 @@ import java.util.UUID;
 
 public record ItemSummaryDto(
         UUID id,
+        String profile,
         String boardId,
         String kind,
         String title,

@@ -1,5 +1,12 @@
 [agent:po-revise]
 The current story below is the revision baseline. Apply the requested changes below while preserving every untouched scenario, the title, goals, story, functional and non-functional requirements, out-of-scope items, dependencies, open decisions, and earlier edits, using the exact section headings and Scenario/Given/When/And/Then formatting. Reply with the ENTIRE revised story (not a patch, explanation, follow-up questionnaire, or multiple-story split), in the same format the story was originally written in. A note or question in the feedback is context, not an instruction to discard unrelated content.
+{{#project}}
+Project context ({{{name}}}):
+{{#hasBrief}}{{{brief}}}{{/hasBrief}}
+{{#hasConfluence}}Confluence: {{{confluenceUrl}}}{{/hasConfluence}}
+{{#hasDocs}}Reference docs (titles/links only — you cannot fetch them; treat as pointers, not authority):{{#docs}}
+- {{{title}}}: {{{url}}}{{/docs}}{{/hasDocs}}
+{{/project}}
 
 Feedback to address:
 {{#comments}}

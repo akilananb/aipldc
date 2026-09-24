@@ -9,6 +9,7 @@ import { api, errorMessage } from '../api';
 import type { CommentIntent, DocApproval, ItemDetail } from '../types';
 import { extendLineTarget, formatLineTarget, parseLineTarget, parseStoryDoc } from '../ui-utils';
 import PageHeader, { MetaItems } from '../components/PageHeader';
+import ProjectMetaLink from '../components/ProjectMetaLink';
 import StatusBadge from '../components/StatusBadge';
 import AgentActivityBadge from '../components/AgentActivityBadge';
 import DemoSnapshotBadge from '../components/DemoSnapshotBadge';
@@ -92,7 +93,7 @@ export default function TaskDetailPage({ item }: Props) {
 
   const currentComments = storyArtifactQuery.data?.comments ?? [];
   const queryClient = useQueryClient();
-  const actions = useReviewActions(storyId, currentComments, story?.gate ?? null, () =>
+  const actions = useReviewActions(storyId, currentComments, story?.gate ?? null, story?.profile, () =>
     queryClient.invalidateQueries({ queryKey: ['spec-docs', item.id] }),
   );
 
@@ -129,7 +130,7 @@ export default function TaskDetailPage({ item }: Props) {
             {docs ? <ApprovalPills approvals={docs.approvals} /> : <span className="pill review">awaiting gate-1 approval</span>}
           </>
         }
-        meta={<MetaItems items={[`board ${item.boardId}`, `profile ${item.profile}`]} />}
+        meta={<MetaItems items={[`board ${item.boardId}`, <ProjectMetaLink profile={item.profile} />]} />}
         subtitle={
           docs ? (
             <>

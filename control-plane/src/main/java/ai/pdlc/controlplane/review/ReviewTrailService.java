@@ -1,8 +1,9 @@
 package ai.pdlc.controlplane.review;
 
+import ai.pdlc.controlplane.config.PortRegistry;
 import ai.pdlc.controlplane.persistence.ReviewEventEntity;
 import ai.pdlc.controlplane.persistence.ReviewEventRepository;
-import ai.pdlc.core.config.PdlcConfig;
+import ai.pdlc.core.config.ProjectDirectory;
 import ai.pdlc.core.domain.WorkItemRef;
 import ai.pdlc.core.port.RepoPort;
 import ai.pdlc.core.review.ReviewMdWriter;
@@ -16,22 +17,22 @@ import java.util.UUID;
 /**
  * Shared by {@link ai.pdlc.controlplane.temporal.BoardSideEffectsImpl} (workflow-triggered writes)
  * and the REST comment/approve endpoints (human-triggered writes): appends a {@code review.md}
- * block via {@link RepoPort} and inserts the matching {@code review_events} row - the two trails
- * that must agree (tech-stack §3.3).
+ * block via the story's project's primary {@link RepoPort} and inserts the matching {@code
+ * review_events} row - the two trails that must agree (tech-stack §3.3).
  */
 @Service
 public class ReviewTrailService {
 
     private static final String REVIEW_MD_FILE = "review.md";
 
-    private final PdlcConfig pdlcConfig;
-    private final RepoPort repo;
+    private final ProjectDirectory projects;
+    private final PortRegistry ports;
     private final ReviewEventRepository reviewEvents;
     private final ObjectMapper mapper = new ObjectMapper();
 
-    public ReviewTrailService(PdlcConfig pdlcConfig, RepoPort repo, ReviewEventRepository reviewEvents) {
-        this.pdlcConfig = pdlcConfig;
-        this.repo = repo;
+    public ReviewTrailService(ProjectDirectory projects, PortRegistry ports, ReviewEventRepository reviewEvents) {
+        this.projects = projects;
+        this.ports = ports;
         this.reviewEvents = reviewEvents;
     }
 
@@ -43,8 +44,9 @@ public class ReviewTrailService {
     private static final int MAX_ATTEMPTS = 5;
 
     public void appendReviewMd(WorkItemRef story, String slug, String block) {
+        RepoPort repo = ports.primaryRepo(story.profile());
         String path = slug + "/" + REVIEW_MD_FILE;
-        String defaultBranch = pdlcConfig.profile(story.profile()).repo().defaultBranch();
+        String defaultBranch = projects.project(story.profile()).repo().defaultBranch();
         RuntimeException lastConflict = null;
         for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
             String existing;
@@ -65,14 +67,14 @@ public class ReviewTrailService {
     }
 
     public String readReviewMd(WorkItemRef story, String slug) {
-        String defaultBranch = pdlcConfig.profile(story.profile()).repo().defaultBranch();
+        String defaultBranch = projects.project(story.profile()).repo().defaultBranch();
         return readReviewMd(story, slug, defaultBranch);
     }
 
     /** Reads {@code review.md} from an explicit {@code ref} (a snapshot's frozen commit sha)
      * instead of the profile's mutable default branch - a demo snapshot's trail never moves. */
     public String readReviewMd(WorkItemRef story, String slug, String ref) {
-        return repo.readFile(ref, slug + "/" + REVIEW_MD_FILE);
+        return ports.primaryRepo(story.profile()).readFile(ref, slug + "/" + REVIEW_MD_FILE);
     }
 
     public void appendReviewEvent(UUID workItemId, String kind, Map<String, Object> payload) {
