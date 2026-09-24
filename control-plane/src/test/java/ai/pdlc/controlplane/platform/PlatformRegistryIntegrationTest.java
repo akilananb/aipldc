@@ -239,4 +239,47 @@ class PlatformRegistryIntegrationTest {
         assertThat(runs.toolCalls(id)).extracting(c -> c.toolId() + ":" + c.decision() + ":" + c.httpStatus())
                 .containsExactly("get-order:ALLOWED:200", "cancel-order:DENIED:null");
     }
+
+    @Test
+    void theJdbcApprovalStoreGuardsDecisionsAndResolutionsOverTheV20Schema() {
+        AgentDefinitionDto created = agents.create("engineering",
+                new AgentDraftRequest("writer", "Writer", labelSpec("W"), null), AUTHOR);
+        agents.publish("engineering", "writer", created.draftRevision(), ENG_ADMIN);
+        var runs = new ai.pdlc.controlplane.runs.JdbcRunStore(jdbc);
+        java.util.UUID run = java.util.UUID.randomUUID();
+        runs.insert(new ai.pdlc.controlplane.runs.RunStore.RunRow(run, "engineering", "writer", 1, "sha256:x", "sonnet",
+                "p", "gw", false, "{}", "QUEUED", null, null, null, null, null, 0, null, "wf-" + run, "op@acme", null, null, null));
+        jdbc.update("UPDATE platform_runs SET status = 'AWAITING_APPROVAL' WHERE id = ?", run);
+        java.util.UUID approval = java.util.UUID.randomUUID();
+        jdbc.update("""
+                INSERT INTO platform_approvals (id, run_id, workspace_id, turn, call_id, tool_id, tool_version, args_json, args_hash)
+                VALUES (?, ?, 'engineering', 1, 'c1', 'cancel-order', 1, '{"orderId":"42"}', 'sha256:a')""", approval, run);
+        java.util.UUID effect = java.util.UUID.randomUUID();
+        jdbc.update("""
+                INSERT INTO platform_effects (id, run_id, approval_id, tool_id, tool_version, args_hash, idempotency_key, state)
+                VALUES (?, ?, ?, 'cancel-order', 1, 'sha256:a', ?, 'UNKNOWN')""", effect, run, approval, run + ":1:c1");
+        var store = new ai.pdlc.controlplane.runs.JdbcApprovalStore(jdbc);
+
+        assertThat(store.list("engineering", "PENDING")).singleElement().satisfies(a -> {
+            assertThat(a.runCreatedBy()).isEqualTo("op@acme");
+            assertThat(a.agentId()).isEqualTo("writer");
+            assertThat(a.argsJson()).contains("42");
+        });
+        assertThat(store.list("finance", null)).isEmpty();
+        assertThat(store.find("finance", approval)).isEmpty();
+        assertThat(store.runWorkspace(run)).contains("engineering");
+        assertThat(store.workflowId(run)).contains("wf-" + run);
+        assertThat(store.decide(approval, "APPROVED", "reviewer@acme", "ok")).isTrue();
+        assertThat(store.decide(approval, "REJECTED", "someone@acme", null)).isFalse();
+        assertThat(store.find("engineering", approval)).get().extracting(a -> a.status()).isEqualTo("APPROVED");
+
+        assertThat(store.resolve(effect, "RETRY", "op@acme", "safe to resend")).isTrue();
+        assertThat(store.resolve(effect, "SUCCEEDED", "op@acme", null)).isFalse();
+        assertThat(store.effects(run)).singleElement().satisfies(e -> {
+            assertThat(e.state()).isEqualTo("INTENDED");
+            assertThat(e.resolution()).isEqualTo("RETRY");
+        });
+        assertThatThrownBy(() -> jdbc.update("UPDATE platform_runs SET status = 'PAUSED' WHERE id = ?", run))
+                .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+    }
 }

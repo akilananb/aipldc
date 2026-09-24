@@ -40,4 +40,14 @@ public class TemporalRunLauncher implements RunLauncher {
     public void cancel(String workflowId) {
         client.newUntypedWorkflowStub(workflowId).cancel();
     }
+
+    @Override
+    public void signalApproval(String workflowId, String approvalId) {
+        client.newWorkflowStub(AgentRunWorkflow.class, workflowId).approvalDecided(approvalId);
+    }
+
+    @Override
+    public void signalEffect(String workflowId, String effectId) {
+        client.newWorkflowStub(AgentRunWorkflow.class, workflowId).effectResolved(effectId);
+    }
 }

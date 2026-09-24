@@ -42,6 +42,7 @@ class RunServiceTest {
     static final class FakeLauncher implements RunLauncher {
         final List<String> started = new ArrayList<>();
         final List<String> cancelled = new ArrayList<>();
+        final List<String> signals = new ArrayList<>();
         RuntimeException failure;
 
         @Override
@@ -55,6 +56,19 @@ class RunServiceTest {
         @Override
         public void cancel(String workflowId) {
             cancelled.add(workflowId);
+        }
+
+        @Override
+        public void signalApproval(String workflowId, String approvalId) {
+            if (failure != null) {
+                throw failure;
+            }
+            signals.add("approval|" + workflowId + "|" + approvalId);
+        }
+
+        @Override
+        public void signalEffect(String workflowId, String effectId) {
+            signals.add("effect|" + workflowId + "|" + effectId);
         }
     }
 
