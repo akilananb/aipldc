@@ -49,6 +49,10 @@ class ToolExecutorTest {
     private HttpServer server;
     private final List<String> requests = new CopyOnWriteArrayList<>();
     private final List<String> authorizations = new CopyOnWriteArrayList<>();
+    private final List<String> idempotencyKeys = new CopyOnWriteArrayList<>();
+    private final java.util.concurrent.atomic.AtomicInteger slowRequests = new java.util.concurrent.atomic.AtomicInteger();
+    private final Map<String, ToolStore.Approval> approvals = new java.util.concurrent.ConcurrentHashMap<>();
+    private final Map<String, ToolStore.Effect> effects = new java.util.concurrent.ConcurrentHashMap<>();
     private final ToolStore store = mock(ToolStore.class);
     private final List<CallRecord> recorded = new CopyOnWriteArrayList<>();
     private final SecretsPort secrets = ref -> "kv://orders-key".equals(ref) ? SECRET : null;
@@ -63,7 +67,15 @@ class ToolExecutorTest {
             requests.add(exchange.getRequestMethod() + " " + exchange.getRequestURI().getRawPath()
                     + (exchange.getRequestURI().getRawQuery() == null ? "" : "?" + exchange.getRequestURI().getRawQuery()));
             authorizations.add(exchange.getRequestHeaders().getFirst("Authorization"));
+            idempotencyKeys.add(String.valueOf(exchange.getRequestHeaders().getFirst("Idempotency-Key")));
             String path = exchange.getRequestURI().getRawPath();
+            if (path.startsWith("/api/slow") && slowRequests.getAndIncrement() == 0) {
+                try {
+                    Thread.sleep(2_500); // longer than the tool's 1s timeout: the caller cannot know if it applied
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
             if (path.startsWith("/api/redirect")) {
                 exchange.getResponseHeaders().add("Location", "http://169.254.169.254/latest/meta-data/iam");
                 exchange.sendResponseHeaders(302, -1);
@@ -77,9 +89,11 @@ class ToolExecutorTest {
             exchange.getResponseBody().write(bytes);
             exchange.close();
         });
+        server.setExecutor(java.util.concurrent.Executors.newCachedThreadPool());
         server.start();
         baseUrl = "http://localhost:" + server.getAddress().getPort() + "/api";
         doAnswer(inv -> recorded.add(inv.getArgument(0))).when(store).record(org.mockito.ArgumentMatchers.any());
+        fakeApprovalsAndEffects();
     }
 
     @AfterEach
@@ -130,16 +144,139 @@ class ToolExecutorTest {
         });
     }
 
+    /** approvals keyed by turn:callId, effects by idempotency key - as the unique keys in V20 do. */
+    private void fakeApprovalsAndEffects() {
+        when(store.approval(org.mockito.ArgumentMatchers.any(), anyInt(), anyString()))
+                .thenAnswer(inv -> Optional.ofNullable(approvals.get(inv.getArgument(1) + ":" + inv.getArgument(2))));
+        when(store.requestApproval(org.mockito.ArgumentMatchers.any(), anyString(), anyInt(), anyString(), anyString(), anyInt(),
+                anyString(), anyString())).thenAnswer(inv -> approvals.computeIfAbsent(inv.getArgument(2) + ":" + inv.getArgument(3),
+                k -> new ToolStore.Approval(UUID.randomUUID(), inv.getArgument(4), inv.getArgument(5), inv.getArgument(7), "PENDING",
+                        null, null)));
+        when(store.intend(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), anyString(), anyInt(),
+                anyString(), anyString())).thenAnswer(inv -> effects.computeIfAbsent(inv.getArgument(5),
+                k -> new ToolStore.Effect(UUID.randomUUID(), k, "INTENDED", 0, null, null, null, null, null)));
+        doAnswer(inv -> update(inv.getArgument(0), e -> new ToolStore.Effect(e.id(), e.idempotencyKey(), "SENT",
+                e.sendCount() + 1, null, null, e.resolution(), e.resolvedBy(), e.note()))).when(store).markSent(org.mockito.ArgumentMatchers.any());
+        doAnswer(inv -> update(inv.getArgument(0), e -> new ToolStore.Effect(e.id(), e.idempotencyKey(), inv.getArgument(1),
+                e.sendCount(), inv.getArgument(2), inv.getArgument(3), e.resolution(), e.resolvedBy(), e.note())))
+                .when(store).finish(org.mockito.ArgumentMatchers.any(), anyString(), org.mockito.ArgumentMatchers.any(), anyString());
+        doAnswer(inv -> update(inv.getArgument(0), e -> "SENT".equals(e.state()) ? new ToolStore.Effect(e.id(), e.idempotencyKey(),
+                "UNKNOWN", e.sendCount(), null, null, e.resolution(), e.resolvedBy(), e.note()) : e))
+                .when(store).markUnknown(org.mockito.ArgumentMatchers.any());
+    }
+
+    private Object update(UUID id, java.util.function.UnaryOperator<ToolStore.Effect> change) {
+        effects.replaceAll((k, e) -> e.id().equals(id) ? change.apply(e) : e);
+        return null;
+    }
+
+    private static ToolSpec writeSpec(String path, String idempotency) {
+        ToolSpec s = spec("POST", path, "WRITE", 4096);
+        return new ToolSpec(s.description(), s.kind(), s.connectionId(), s.method(), s.path(), s.inputSchema(), s.effect(), 1,
+                s.maxResponseBytes(), idempotency, new ToolSpec.Approval(30, 120));
+    }
+
+    private void decide(String status, String argsHashOverride) {
+        approvals.replaceAll((k, a) -> new ToolStore.Approval(a.id(), a.toolId(), a.toolVersion(),
+                argsHashOverride != null ? argsHashOverride : a.argsHash(), status, "reviewer@acme", "looks fine"));
+    }
+
     @Test
-    void aWriteToolIsDeniedBeforeAnyHttpRequest() {
-        given("cancel-order", spec("POST", "/orders/{orderId}/cancel", "WRITE", 4096));
+    void aWriteWithoutADecidedApprovalPausesTheRunAndSendsNothing() {
+        given("cancel-order", writeSpec("/orders/{orderId}/cancel", null));
 
         ToolExecutor.Outcome outcome = call("cancel-order", "{\"orderId\":\"42\"}");
 
-        assertThat(outcome.allowed()).isFalse();
-        assertThat(outcome.content()).contains("requires an approval");
+        assertThat(outcome.pause()).isNotNull();
+        assertThat(outcome.pause().kind()).isEqualTo("AWAITING_APPROVAL");
+        assertThat(outcome.pause().escalateAfterMinutes()).isEqualTo(30);
+        assertThat(outcome.pause().expireAfterMinutes()).isEqualTo(120);
         assertThat(requests).isEmpty();
-        assertThat(recorded).singleElement().extracting(CallRecord::decision).isEqualTo("DENIED");
+        assertThat(recorded).singleElement().extracting(CallRecord::decision).isEqualTo("PENDING_APPROVAL");
+        assertThat(call("cancel-order", "{\"orderId\":\"42\"}").pause().id()).isEqualTo(outcome.pause().id());
+    }
+
+    @Test
+    void anApprovedWriteIsSentOnceWithItsIdempotencyKeyAndNeverResent() {
+        given("cancel-order", writeSpec("/orders/{orderId}/cancel", "HEADER"));
+        call("cancel-order", "{\"orderId\":\"42\"}");
+        decide("APPROVED", null);
+
+        ToolExecutor.Outcome first = call("cancel-order", "{\"orderId\":\"42\"}");
+        ToolExecutor.Outcome replay = call("cancel-order", "{\"orderId\":\"42\"}");
+
+        assertThat(first.allowed()).isTrue();
+        assertThat(first.content()).contains("\"status\":200");
+        assertThat(replay.content()).isEqualTo(first.content());
+        assertThat(requests).containsExactly("POST /api/orders/42/cancel");
+        assertThat(idempotencyKeys).containsExactly(RUN + ":1:call-1");
+        assertThat(effects.values()).singleElement().satisfies(e -> {
+            assertThat(e.state()).isEqualTo("SUCCEEDED");
+            assertThat(e.sendCount()).isEqualTo(1);
+        });
+        assertThat(recorded).extracting(CallRecord::error).last().asString().contains("not resent");
+    }
+
+    @Test
+    void anApprovalForOtherArgumentsOrARejectionAuthorizesNothing() {
+        given("cancel-order", writeSpec("/orders/{orderId}/cancel", null));
+        call("cancel-order", "{\"orderId\":\"42\"}");
+
+        decide("APPROVED", "sha256:other-args");
+        assertThat(call("cancel-order", "{\"orderId\":\"42\"}").content()).contains("different arguments");
+        decide("REJECTED", null);
+        assertThat(call("cancel-order", "{\"orderId\":\"42\"}").content()).contains("rejected by reviewer@acme: looks fine");
+        decide("EXPIRED", null);
+        assertThat(call("cancel-order", "{\"orderId\":\"42\"}").content()).contains("expired without a decision");
+        assertThat(requests).isEmpty();
+    }
+
+    @Test
+    void aTimedOutWriteIsResentWithTheSameKeyWhenTheTargetDedups() {
+        given("slow-cancel", writeSpec("/slow/{orderId}", "HEADER"));
+        call("slow-cancel", "{\"orderId\":\"42\"}");
+        decide("APPROVED", null);
+
+        ToolExecutor.Outcome outcome = call("slow-cancel", "{\"orderId\":\"42\"}");
+
+        assertThat(outcome.allowed()).isTrue();
+        assertThat(requests).hasSize(2);
+        assertThat(idempotencyKeys).containsExactly(RUN + ":1:call-1", RUN + ":1:call-1");
+        assertThat(effects.values()).singleElement().satisfies(e -> {
+            assertThat(e.state()).isEqualTo("SUCCEEDED");
+            assertThat(e.sendCount()).isEqualTo(2);
+        });
+    }
+
+    @Test
+    void aTimedOutWriteWithoutIdempotencySupportWaitsForAnOperatorAndIsNotResent() {
+        given("slow-cancel", writeSpec("/slow/{orderId}", null));
+        call("slow-cancel", "{\"orderId\":\"42\"}");
+        decide("APPROVED", null);
+
+        ToolExecutor.Outcome outcome = call("slow-cancel", "{\"orderId\":\"42\"}");
+        ToolExecutor.Outcome again = call("slow-cancel", "{\"orderId\":\"42\"}");
+
+        assertThat(outcome.pause().kind()).isEqualTo("NEEDS_OPERATOR");
+        assertThat(again.pause().id()).isEqualTo(outcome.pause().id());
+        assertThat(requests).hasSize(1);
+        assertThat(idempotencyKeys).containsExactly("null");
+        assertThat(effects.values()).singleElement().extracting(ToolStore.Effect::state).isEqualTo("UNKNOWN");
+    }
+
+    @Test
+    void anOperatorResolvedEffectIsReportedToTheModelWithoutResending() {
+        given("cancel-order", writeSpec("/orders/{orderId}/cancel", null));
+        call("cancel-order", "{\"orderId\":\"42\"}");
+        decide("APPROVED", null);
+        String key = RUN + ":1:call-1";
+        effects.put(key, new ToolStore.Effect(UUID.randomUUID(), key, "SUCCEEDED", 1, null, null, "SUCCEEDED", "ops@acme",
+                "confirmed in the orders console"));
+
+        ToolExecutor.Outcome outcome = call("cancel-order", "{\"orderId\":\"42\"}");
+
+        assertThat(outcome.content()).contains("recorded by operator ops@acme: confirmed in the orders console");
+        assertThat(requests).isEmpty();
     }
 
     @Test

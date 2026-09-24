@@ -26,6 +26,9 @@ interface ToolDraft {
   timeoutSeconds: string;
   maxResponseBytes: string;
   inputSchema: string;
+  idempotency: string;
+  escalateAfterMinutes: string;
+  expireAfterMinutes: string;
 }
 
 function toDraft(name: string, spec: ToolSpec | null): ToolDraft {
@@ -39,6 +42,9 @@ function toDraft(name: string, spec: ToolSpec | null): ToolDraft {
     timeoutSeconds: spec?.timeoutSeconds != null ? String(spec.timeoutSeconds) : '',
     maxResponseBytes: spec?.maxResponseBytes != null ? String(spec.maxResponseBytes) : '',
     inputSchema: spec?.inputSchema ? JSON.stringify(spec.inputSchema, null, 2) : '',
+    idempotency: spec?.idempotency ?? 'NONE',
+    escalateAfterMinutes: spec?.approval?.escalateAfterMinutes != null ? String(spec.approval.escalateAfterMinutes) : '',
+    expireAfterMinutes: spec?.approval?.expireAfterMinutes != null ? String(spec.approval.expireAfterMinutes) : '',
   };
 }
 
@@ -58,8 +64,17 @@ function toSpec(d: ToolDraft): { ok: true; spec: ToolSpec } | { ok: false; error
   const int = (t: string) => (t.trim() === '' ? null : Number(t));
   const timeout = int(d.timeoutSeconds);
   const maxBytes = int(d.maxResponseBytes);
-  if ((timeout != null && !Number.isInteger(timeout)) || (maxBytes != null && !Number.isInteger(maxBytes))) {
+  const escalate = int(d.escalateAfterMinutes);
+  const expire = int(d.expireAfterMinutes);
+  if ([timeout, maxBytes, escalate, expire].some((n) => n != null && !Number.isInteger(n))) {
     return { ok: false, error: 'Limits must be whole numbers' };
+  }
+  // Write settings are sent only for WRITE tools and only when set, so READ tools keep the 2.1 shape.
+  const write = d.effect === 'WRITE';
+  const writeSettings: Partial<ToolSpec> = {};
+  if (write && d.idempotency === 'HEADER') writeSettings.idempotency = 'HEADER';
+  if (write && (escalate != null || expire != null)) {
+    writeSettings.approval = { escalateAfterMinutes: escalate, expireAfterMinutes: expire };
   }
   return {
     ok: true,
@@ -73,6 +88,7 @@ function toSpec(d: ToolDraft): { ok: true; spec: ToolSpec } | { ok: false; error
       effect: d.effect as ToolSpec['effect'],
       timeoutSeconds: timeout,
       maxResponseBytes: maxBytes,
+      ...writeSettings,
     },
   };
 }
@@ -367,7 +383,7 @@ export default function ToolEditorPage() {
                 </Field>
               </Box>
               <Box style={{ flex: '0 1 160px' }}>
-                <Field label="Effect" hint="Only GET is READ. WRITE tools are refused until approvals (slice 2.2).">
+                <Field label="Effect" hint="Only GET is READ. Every WRITE call waits for a reviewer's approval.">
                   <Select.Root value={draft.effect} disabled={readOnly} onValueChange={(v) => set('effect', v)}>
                     <Select.Trigger aria-label="Effect" style={{ width: '100%' }} />
                     <Select.Content>
@@ -415,6 +431,46 @@ export default function ToolEditorPage() {
                 </Field>
               </Box>
             </Flex>
+            {draft.effect === 'WRITE' && (
+              <Flex gap="3" wrap="wrap">
+                <Box style={{ flex: '1 1 220px' }}>
+                  <Field
+                    label="Idempotency"
+                    hint="Header: the target honors Idempotency-Key, so a write with an unknown outcome is resent safely. None: an operator must resolve it."
+                  >
+                    <Select.Root value={draft.idempotency} disabled={readOnly} onValueChange={(v) => set('idempotency', v)}>
+                      <Select.Trigger aria-label="Idempotency" style={{ width: '100%' }} />
+                      <Select.Content>
+                        <Select.Item value="NONE">None</Select.Item>
+                        <Select.Item value="HEADER">Idempotency-Key header</Select.Item>
+                      </Select.Content>
+                    </Select.Root>
+                  </Field>
+                </Box>
+                <Box style={{ flex: '1 1 160px' }}>
+                  <Field label="Escalate after (minutes)" htmlFor="tool-escalate" hint="Empty = 60.">
+                    <TextField.Root
+                      id="tool-escalate"
+                      inputMode="numeric"
+                      value={draft.escalateAfterMinutes}
+                      disabled={readOnly}
+                      onChange={(e) => set('escalateAfterMinutes', e.target.value)}
+                    />
+                  </Field>
+                </Box>
+                <Box style={{ flex: '1 1 160px' }}>
+                  <Field label="Expire after (minutes)" htmlFor="tool-expire" hint="Empty = 1440. Expired = denied, never approved.">
+                    <TextField.Root
+                      id="tool-expire"
+                      inputMode="numeric"
+                      value={draft.expireAfterMinutes}
+                      disabled={readOnly}
+                      onChange={(e) => set('expireAfterMinutes', e.target.value)}
+                    />
+                  </Field>
+                </Box>
+              </Flex>
+            )}
             <Field
               label="Input schema (JSON)"
               htmlFor="tool-schema"

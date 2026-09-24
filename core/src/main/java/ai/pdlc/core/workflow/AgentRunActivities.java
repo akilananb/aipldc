@@ -19,5 +19,16 @@ public interface AgentRunActivities {
 
     void markFailed(String runId, String error);
 
+    /** Also cancels the run's pending approvals. */
     void markCancelled(String runId);
+
+    /**
+     * Records that an approval waited past its escalation time and notifies (best effort). Returns
+     * the approval's current status - anything but {@code PENDING} means it was decided meanwhile
+     * (a lost signal), and the run can resume.
+     */
+    String escalateApproval(String approvalId);
+
+    /** PENDING → EXPIRED (never approved by time). Returns the approval's status afterwards. */
+    String expireApproval(String approvalId);
 }

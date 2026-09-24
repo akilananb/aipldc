@@ -13,6 +13,7 @@ import RelativeTime from '../components/RelativeTime';
 import type { AgentSpec, Workspace } from '../types';
 import { can, setSelectedWorkspace, statusVariant, useSelectedWorkspaceId, useWorkspaces } from './workspace';
 import ToolsSection from './ToolsSection';
+import ApprovalsSection, { usePendingApprovals } from './ApprovalsSection';
 
 const STARTER_SPEC: AgentSpec = {
   description: null,
@@ -36,7 +37,7 @@ export default function StudioPage() {
   const storedId = useSelectedWorkspaceId();
   const selected = workspaces.find((w) => w.id === storedId) ?? workspaces.find((w) => w.capabilities.length > 0);
   const [params, setParams] = useSearchParams();
-  const view = params.get('view') === 'tools' ? 'tools' : 'agents';
+  const view = params.get('view') === 'tools' ? 'tools' : params.get('view') === 'approvals' ? 'approvals' : 'agents';
 
   useEffect(() => {
     if (selected && selected.id !== storedId) setSelectedWorkspace(selected.id);
@@ -106,15 +107,29 @@ export default function StudioPage() {
       <SegmentedControl.Root
         mb="3"
         value={view}
-        onValueChange={(v) => setParams(v === 'tools' ? { view: 'tools' } : {}, { replace: true })}
+        onValueChange={(v) => setParams(v === 'agents' ? {} : { view: v }, { replace: true })}
         aria-label="Show"
       >
         <SegmentedControl.Item value="agents">Agents</SegmentedControl.Item>
         <SegmentedControl.Item value="tools">Tools</SegmentedControl.Item>
+        <SegmentedControl.Item value="approvals">
+          <ApprovalsLabel workspaceId={selected.id} />
+        </SegmentedControl.Item>
       </SegmentedControl.Root>
-      {view === 'tools' ? <ToolsSection workspace={selected} /> : <AgentList workspace={selected} />}
+      {view === 'tools' ? (
+        <ToolsSection workspace={selected} />
+      ) : view === 'approvals' ? (
+        <ApprovalsSection workspace={selected} />
+      ) : (
+        <AgentList workspace={selected} />
+      )}
     </Box>
   );
+}
+
+function ApprovalsLabel({ workspaceId }: { workspaceId: string }) {
+  const pending = usePendingApprovals(workspaceId).data?.length ?? 0;
+  return <>Approvals{pending > 0 ? ` (${pending})` : ''}</>;
 }
 
 function AgentList({ workspace }: { workspace: Workspace }) {

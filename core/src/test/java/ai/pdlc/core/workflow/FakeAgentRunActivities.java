@@ -10,13 +10,16 @@ import java.util.concurrent.atomic.AtomicInteger;
 /** In-process {@link AgentRunActivities} for {@link AgentRunWorkflowImplTest}; behaviour is set per test. */
 class FakeAgentRunActivities implements AgentRunActivities {
 
-    enum Mode { SUCCEED, FAIL_ONCE_THEN_SUCCEED, ALWAYS_FAIL, REJECT, BLOCK }
+    enum Mode { SUCCEED, FAIL_ONCE_THEN_SUCCEED, ALWAYS_FAIL, REJECT, BLOCK, APPROVAL_THEN_SUCCEED, OPERATOR_THEN_SUCCEED }
 
     volatile Mode mode = Mode.SUCCEED;
     final AtomicInteger invocations = new AtomicInteger();
     final List<String> events = new CopyOnWriteArrayList<>();
     final CountDownLatch invoked = new CountDownLatch(1);
     final CountDownLatch release = new CountDownLatch(1);
+    final CountDownLatch paused = new CountDownLatch(1);
+    /** What {@link #escalateApproval} reports as the approval's status. */
+    volatile String approvalStatusAtEscalation = "PENDING";
 
     @Override
     public AgentRunWorkflow.AgentRunOutcome invoke(String runId) {
@@ -38,6 +41,20 @@ class FakeAgentRunActivities implements AgentRunActivities {
                     Thread.currentThread().interrupt();
                 }
             }
+            case APPROVAL_THEN_SUCCEED -> {
+                if (attempt == 1) {
+                    events.add("awaiting:" + runId);
+                    paused.countDown();
+                    return AgentRunWorkflow.AgentRunOutcome.awaitingApproval(runId, "ap-1", 60, 1440);
+                }
+            }
+            case OPERATOR_THEN_SUCCEED -> {
+                if (attempt == 1) {
+                    events.add("operator:" + runId);
+                    paused.countDown();
+                    return AgentRunWorkflow.AgentRunOutcome.needsOperator(runId, "ef-1");
+                }
+            }
             default -> { }
         }
         events.add("succeeded:" + runId);
@@ -52,5 +69,17 @@ class FakeAgentRunActivities implements AgentRunActivities {
     @Override
     public void markCancelled(String runId) {
         events.add("cancelled:" + runId);
+    }
+
+    @Override
+    public String escalateApproval(String approvalId) {
+        events.add("escalated:" + approvalId);
+        return approvalStatusAtEscalation;
+    }
+
+    @Override
+    public String expireApproval(String approvalId) {
+        events.add("expired:" + approvalId);
+        return "EXPIRED";
     }
 }

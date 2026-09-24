@@ -1,6 +1,6 @@
 # Phase 2 execution spec: governed execution and federation
 
-This spec turns Phase 2 of [configurable-agent-platform.md](configurable-agent-platform.md) into slices, in the same format as [phase-1-execution-spec.md](phase-1-execution-spec.md). **Slice 2.1 is implemented on its branch**; slices 2.2–2.8 are specified and not yet built.
+This spec turns Phase 2 of [configurable-agent-platform.md](configurable-agent-platform.md) into slices, in the same format as [phase-1-execution-spec.md](phase-1-execution-spec.md). **Slices 2.1 and 2.2 are implemented**; slices 2.3–2.8 are specified and not yet built.
 
 **Phase 2 exit evidence** (from the roadmap):
 
@@ -106,6 +106,62 @@ Every call, allowed or denied, is recorded in `platform_tool_calls`: run, attemp
 - **Unknown outcomes.** A timeout after the request was sent is an unknown outcome. It is reconciled through the target's idempotency support, or the run pauses for an operator.
 - **API and UI:** an approval inbox (API and Studio).
 - **Exit:** an approved write executes exactly once. A retried delivery doesn't duplicate it where the target supports idempotency, and pauses as unknown where it doesn't.
+
+**As built:**
+
+- **Pausable runs.** A run can pause, so its conversation is stored in `platform_run_messages`, never in Temporal history. Each `invoke` is a resumable segment:
+  - the model's turn is stored before any of its calls run, and each result is stored as it completes;
+  - a retry or a resume re-runs only unanswered calls and never asks the model again for a turn already stored;
+  - turn and call limits and token usage are rebuilt from the store, so they hold across pauses.
+  - `platform_runs.active_ms` makes `timeoutSeconds` bound active time only; waiting for a human does not count.
+- **Workflow.** `AgentRunWorkflowImpl`, behind `getVersion("approvals")`:
+  - It re-invokes after each pause.
+  - An approval wait escalates at `approval.escalateAfterMinutes` (default 60), which records `escalated_at` and posts a best-effort `NotifyPort` notice.
+  - It then expires at `expireAfterMinutes` (default 1440) into a denial the model sees.
+  - An `UNKNOWN` effect waits for an operator with no deadline.
+  - Signals carry ids only. If a signal is lost, the decision is re-read at the escalation check.
+- **Approval binding.** `platform_approvals` is unique per (run, turn, call id). The executor runs a write only under an `APPROVED` row whose tool version and args hash equal the call's. When a model re-requests with changed arguments, that is a new call, so it needs a new approval.
+- **Who decides.**
+  - Approvals: a workspace `REVIEWER`, never the user who started the run (maker-checker), and only while `PENDING` (409 otherwise).
+  - Effect resolution: an `OPERATOR`, and only while the effect is `UNKNOWN`.
+- **Effects.** Before anything is sent, `platform_effects` records `INTENDED` under the key `run:turn:callId`, then moves to `SENT` → `SUCCEEDED`/`FAILED`/`UNKNOWN`.
+  - A known outcome is never resent.
+  - `idempotency: HEADER` tools send `Idempotency-Key` and, after a timeout, resend once with the same key.
+  - `NONE` tools pause for an operator, who resolves the effect as `SUCCEEDED`, `FAILED` or `RETRY`.
+- **API:**
+  - `GET /api/workspaces/{ws}/approvals[?status=]`
+  - `POST .../approvals/{id}/approve|reject {reason}`
+  - `GET .../runs/{runId}/effects`
+  - `POST .../runs/{runId}/effects/{id}/resolve {outcome, note}`
+- **Studio:**
+  - An Approvals view with a pending-count badge, the exact arguments and their hash, and approve/reject with a reason. The run's starter sees why they cannot decide.
+  - Run detail shows the pause state, a Writes table (state, send count, idempotency key) and operator resolution.
+  - The tool editor has idempotency and approval-timing fields.
+
+**Exit evidence** (live: Postgres 16, a Temporal dev server, control-plane, agents, a stub LLM that emits `tool_calls`, and a recording test API that deduplicates on `Idempotency-Key`):
+
+1. **Approved write, exactly once.**
+   - The run paused `AWAITING_APPROVAL` with 0 requests sent.
+   - The run's starter (also a REVIEWER) got 403.
+   - After another reviewer approved, exactly one `POST` went out with `Idempotency-Key: <run>:1:call_1`, and the run `SUCCEEDED`.
+2. **Crash mid-write, target deduplicates.** Agents was `kill -9`'d while the target held the approved POST.
+   - The effect stayed `SENT`.
+   - After restart, Temporal's retry resent it with the same key, and the target returned its stored result (`deduplicated: true`).
+   - It was **applied once**, the effect shows `SUCCEEDED` after 2 sends, and the run `SUCCEEDED`.
+3. **Crash mid-write, no idempotency support.** The same crash against a `NONE` tool left the run `NEEDS_OPERATOR` (effect `UNKNOWN`).
+   - A non-operator's resolve got 403.
+   - The operator resolved it `SUCCEEDED` with a note, and the model saw the operator's note.
+   - **No second POST** was sent.
+4. **Rejection.** The reason ("order 77 already shipped") reached the model as a denial, no request was sent, and the run finished.
+5. **Changed arguments.** The first approval ({"orderId":"100"}) was rejected. The model's new request ({"orderId":"101"}) got a new approval with a different args hash; only that approved call was sent.
+6. **Never approved by time.** With a 1/2-minute tool setting, the approval escalated at +1 min and expired at +2 min. The model saw "expired without a decision", and **no request was ever sent**.
+7. **Studio (Playwright).**
+   - The starter sees the request with Approve disabled and the reason why.
+   - Run detail shows the approval pause.
+   - The reviewer approves from the inbox, and the run resumes.
+   - Writes and the trace show the effect and its key.
+   - The tool editor shows the write settings.
+   - At phone width there is no horizontal scroll.
 
 ## Slice 2.3 — Remote MCP tools
 

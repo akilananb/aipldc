@@ -103,4 +103,69 @@ class AgentRunWorkflowImplTest {
         testEnv.sleep(Duration.ofSeconds(1));
         assertThat(activities.events).startsWith("cancelled:r5");
     }
+
+    @Test
+    void anApprovedWriteResumesTheRunWithoutEscalating() throws Exception {
+        activities.mode = FakeAgentRunActivities.Mode.APPROVAL_THEN_SUCCEED;
+        AgentRunWorkflow wf = stub("a1");
+        WorkflowClient.start(wf::run, new AgentRunWorkflow.AgentRunInput("a1", 60));
+        assertThat(activities.paused.await(10, TimeUnit.SECONDS)).isTrue();
+
+        wf.approvalDecided("ap-1");
+
+        assertThat(WorkflowStub.fromTyped(wf).getResult(10, TimeUnit.SECONDS, AgentRunWorkflow.AgentRunOutcome.class).status())
+                .isEqualTo("SUCCEEDED");
+        assertThat(activities.events).containsExactly("awaiting:a1", "succeeded:a1");
+    }
+
+    @Test
+    void anUndecidedApprovalEscalatesThenExpiresAndIsNeverApprovedByTime() {
+        activities.mode = FakeAgentRunActivities.Mode.APPROVAL_THEN_SUCCEED;
+
+        // The test environment skips time while the workflow waits: 60 min escalation, 1440 min expiry.
+        AgentRunWorkflow.AgentRunOutcome outcome = stub("a2").run(new AgentRunWorkflow.AgentRunInput("a2", 60));
+
+        assertThat(outcome.status()).isEqualTo("SUCCEEDED");
+        assertThat(activities.events).containsExactly("awaiting:a2", "escalated:ap-1", "expired:ap-1", "succeeded:a2");
+    }
+
+    @Test
+    void aDecisionWhoseSignalWasLostIsPickedUpAtEscalation() {
+        activities.mode = FakeAgentRunActivities.Mode.APPROVAL_THEN_SUCCEED;
+        activities.approvalStatusAtEscalation = "APPROVED";
+
+        stub("a3").run(new AgentRunWorkflow.AgentRunInput("a3", 60));
+
+        assertThat(activities.events).containsExactly("awaiting:a3", "escalated:ap-1", "succeeded:a3");
+    }
+
+    @Test
+    void anUnknownOutcomeWaitsForTheOperatorWithoutADeadline() throws Exception {
+        activities.mode = FakeAgentRunActivities.Mode.OPERATOR_THEN_SUCCEED;
+        AgentRunWorkflow wf = stub("o1");
+        WorkflowClient.start(wf::run, new AgentRunWorkflow.AgentRunInput("o1", 60));
+        assertThat(activities.paused.await(10, TimeUnit.SECONDS)).isTrue();
+
+        testEnv.sleep(Duration.ofDays(3));
+        assertThat(activities.events).containsExactly("operator:o1");
+        wf.effectResolved("ef-1");
+
+        assertThat(WorkflowStub.fromTyped(wf).getResult(10, TimeUnit.SECONDS, AgentRunWorkflow.AgentRunOutcome.class).status())
+                .isEqualTo("SUCCEEDED");
+        assertThat(activities.events).containsExactly("operator:o1", "succeeded:o1");
+    }
+
+    @Test
+    void cancellingARunThatAwaitsApprovalMarksItCancelled() throws Exception {
+        activities.mode = FakeAgentRunActivities.Mode.APPROVAL_THEN_SUCCEED;
+        AgentRunWorkflow wf = stub("a4");
+        WorkflowClient.start(wf::run, new AgentRunWorkflow.AgentRunInput("a4", 60));
+        assertThat(activities.paused.await(10, TimeUnit.SECONDS)).isTrue();
+
+        WorkflowStub.fromTyped(wf).cancel();
+
+        assertThatThrownBy(() -> WorkflowStub.fromTyped(wf).getResult(10, TimeUnit.SECONDS, AgentRunWorkflow.AgentRunOutcome.class))
+                .isInstanceOf(WorkflowFailedException.class);
+        assertThat(activities.events).containsExactly("awaiting:a4", "cancelled:a4");
+    }
 }

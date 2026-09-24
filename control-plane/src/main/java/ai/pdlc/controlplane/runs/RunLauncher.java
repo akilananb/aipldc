@@ -7,4 +7,10 @@ public interface RunLauncher {
 
     /** Requests cancellation; the workflow records {@code CANCELLED} itself. */
     void cancel(String workflowId);
+
+    /** Tells a paused run that its approval was decided (the decision itself is in the DB). */
+    void signalApproval(String workflowId, String approvalId);
+
+    /** Tells a run waiting on an operator that the effect was resolved. */
+    void signalEffect(String workflowId, String effectId);
 }

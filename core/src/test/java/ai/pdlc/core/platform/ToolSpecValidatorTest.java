@@ -76,4 +76,28 @@ class ToolSpecValidatorTest {
     void hashesLikeAnyOtherPublishedContent() {
         assertThat(ContentHash.of(valid())).isEqualTo(ContentHash.of(ContentHash.read(ContentHash.canonicalJson(valid()), ToolSpec.class)));
     }
+
+    private static ToolSpec write(String idempotency, ToolSpec.Approval approval) {
+        return new ToolSpec("Cancel an order", "http", "orders-api", "POST", "/orders/{orderId}/cancel",
+                valid().inputSchema(), "WRITE", 10, 4096, idempotency, approval);
+    }
+
+    @Test
+    void checksIdempotencyAndApprovalSettings() {
+        assertThat(ToolSpecValidator.validate("t", write("HEADER", new ToolSpec.Approval(30, 120)))).isEmpty();
+        assertThat(ToolSpecValidator.validate("t", write("MAYBE", null))).containsExactly("idempotency must be HEADER or NONE");
+        assertThat(ToolSpecValidator.validate("t", write(null, new ToolSpec.Approval(120, 30))))
+                .containsExactly("approval.escalateAfterMinutes must not exceed approval.expireAfterMinutes");
+        assertThat(ToolSpecValidator.validate("t", write(null, new ToolSpec.Approval(0, 50_000))))
+                .containsExactly("approval minutes must be between 1 and 43200");
+        ToolSpec v = valid();
+        assertThat(ToolSpecValidator.validate("t", new ToolSpec(v.description(), v.kind(), v.connectionId(), v.method(),
+                v.path(), v.inputSchema(), v.effect(), v.timeoutSeconds(), v.maxResponseBytes(), null, new ToolSpec.Approval(1, 2))))
+                .containsExactly("approval settings apply only to WRITE tools");
+    }
+
+    @Test
+    void sliceTwoOneToolsKeepTheirCanonicalForm() {
+        assertThat(ContentHash.canonicalJson(valid())).doesNotContain("idempotency", "approval");
+    }
 }
