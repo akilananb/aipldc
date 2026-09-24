@@ -8,8 +8,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
-/** In-process {@link AgentRegistryStore} for service tests. */
-class InMemoryAgentRegistryStore implements AgentRegistryStore {
+/** In-process {@link AgentRegistryStore} for service tests (public: the runs tests reuse it). */
+public class InMemoryAgentRegistryStore implements AgentRegistryStore {
 
     private final Map<String, AgentRow> agents = new HashMap<>();
     private final Map<String, List<VersionRow>> versions = new HashMap<>();

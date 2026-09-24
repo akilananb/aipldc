@@ -28,6 +28,10 @@ import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
+import ai.pdlc.agents.platform.AgentRunActivitiesImpl;
+import ai.pdlc.agents.platform.OpenAiCompatibleModelInvoker;
+import ai.pdlc.agents.platform.RunStore;
+import ai.pdlc.core.port.SecretsPort;
 
 /**
  * Proves the Spring container - not just the compiler - can construct {@link PromptTemplates} and
@@ -61,6 +65,16 @@ class AgentSpringWiringTest {
         }
 
         @Bean
+        RunStore runStore() {
+            return mock(RunStore.class);
+        }
+
+        @Bean
+        SecretsPort secretsPort() {
+            return mock(SecretsPort.class);
+        }
+
+        @Bean
         Profile activeProfile() {
             return new Profile("local",
                     new ProjectMeta("local", "local", null, List.of(), "", null),
@@ -69,6 +83,17 @@ class AgentSpringWiringTest {
                     new NotifyConfig("none", "none"),
                     new AgentsConfig("http://stub", null, Map.of()),
                     Map.of());
+        }
+    }
+
+    /** {@link AgentRunActivitiesImpl} also has two constructors (public + clock-injecting for tests). */
+    @Test
+    void springContainerConstructsThePlatformRunner() {
+        try (AnnotationConfigApplicationContext ctx = new AnnotationConfigApplicationContext()) {
+            ctx.register(TestBeans.class, OpenAiCompatibleModelInvoker.class, AgentRunActivitiesImpl.class);
+            ctx.refresh();
+
+            assertThat(ctx.getBean(AgentRunActivitiesImpl.class)).isNotNull();
         }
     }
 

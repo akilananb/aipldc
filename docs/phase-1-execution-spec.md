@@ -2,7 +2,7 @@
 
 This spec turns Phase 1 of [configurable-agent-platform.md](configurable-agent-platform.md) into
 slices that can be built one at a time. Each slice ships something usable end to end and has its
-own exit evidence. **Slices 1–3 are implemented**; slices 4–6 are specified here and are not
+own exit evidence. **Slices 1–4 are implemented**; slices 5–6 are specified here and are not
 yet built.
 
 **Phase 1 exit evidence** (from the roadmap):
@@ -217,21 +217,70 @@ rules in [Scalability and service boundaries](configurable-agent-platform.md#sca
 - connection health checks against the provider;
 - the agents runtime reading the catalog. That comes with the run in slice 4, where the model is resolved at invocation time.
 
-## Slice 4 — Single-agent durable run
+## Slice 4 — Single-agent durable run (implemented)
 
-- **Workflow:** a new Temporal workflow type, `AgentRunWorkflow`, in `core/.../workflow`, registered on the `REASONING` worker. It is not `FeatureWorkflow`.
-  - Input: workspace, run id, and the resolved bundle (agent id, version, content hash). Never the prompt text.
-- **Runner:** an `AgentRunActivities.invoke` activity in `agents`.
-  1. Load the pinned version from Postgres (read-only) and re-verify its hash.
-  2. Check that required variables are present.
-  3. Render with the existing Mustache engine using a data-only map.
-  4. Call the bound model through Embabel, enforcing `timeoutSeconds` and `maxOutputTokens` where the provider supports them. Unknown token usage is recorded as unknown.
-  5. Validate the output against `outputSchema`.
-- **Run records:** a `platform_runs` projection (status, pinned version and hash, timings, usage-or-unknown, error) and a `platform_run_artifacts` table for outputs.
-  - Large inputs and outputs go to access-controlled storage, never into workflow history.
-- **Working context:** bounded to this run's input plus its own prior turns (none, for single-shot runs). Retrieval and memory arrive in later phases.
-- **API:** `POST /api/workspaces/{ws}/agents/{id}/runs` (OPERATOR), with an idempotency key: the same key returns the same run. Also `GET .../runs/{runId}` and `POST .../runs/{runId}/cancel`.
-- **Exit:** the ALPHA/BETA scenario end to end. Start a run that waits before invoking the model; publish v2; the run outputs ALPHA and records the v1 hash; the next run outputs BETA. A worker restart mid-run resumes.
+**Workflow.** `AgentRunWorkflow`/`Impl` in `core/.../workflow` is a new workflow type, not `FeatureWorkflow`. It is registered on the agents `REASONING` worker, which is that queue's sole poller.
+
+- **Input:** only `{runId, timeoutSeconds}`. Prompt, inputs and outputs never enter workflow history.
+- **Deadline:** the invocation activity gets the agent's `timeoutSeconds` plus 30s. It retries at most twice, and never retries rejections (type `AgentRunRejected`: tampered definition, bad input, unavailable model, unresolvable secret, output failing its schema).
+- **Cancellation:** abandons the in-flight call and marks the run `CANCELLED` straight away. A reply that arrives later is discarded, because every write is status-guarded. Cancellation never claims to undo a call that already completed.
+
+**Runner.** `agents/.../platform/AgentRunActivitiesImpl.invoke` does these steps:
+
+1. Loads the run's pinned version (`RunStore`, shared Postgres) and re-verifies its content hash.
+2. Re-checks inputs with `AgentInputs`: required variables present, undeclared inputs rejected.
+3. Re-checks, now, that the pinned model is enabled and its connection active and unexpired. A revocation after start stops the run. There is no fallback here, because the model was chosen at start.
+4. Resolves the connection's `kv://` reference with `SecretsPort`, just before the call. The key is never stored or logged.
+5. Renders the pinned Mustache prompt with a data-only view of the inputs. `{{x}}` is inserted verbatim, not HTML-escaped.
+6. Calls the model through Spring AI's `OpenAiChatModel`, built per call from the connection's base URL, key and provider model.
+   - This is the same client Embabel wraps. Embabel itself only routes models registered at startup, which would defeat "no restart".
+   - The call enforces `timeoutSeconds` and `maxOutputTokens`, with client retries off.
+7. Validates the output against `outputSchema`, accepting one ```json fence around it. On failure the run is `FAILED`, and the raw output is kept for inspection.
+8. Records the output and the token usage. Usage is `null` when the provider doesn't report it.
+
+**Output schemas.** `OutputSchema` enforces an exact JSON-Schema subset: `type`, `properties`, `required`, `items`, `enum`, `description`. Publication now rejects any other keyword, instead of the runner silently ignoring it.
+
+**Run records.**
+
+- `V17__platform_runs.sql` stores each run with:
+  - the pin: agent version, content hash, model, provider model, connection, fallback flag;
+  - its inputs, status, output text and JSON, error, token counts and attempt count;
+  - an idempotency key (unique per workspace) and the workflow id.
+- The planned separate `platform_run_artifacts` table isn't needed yet: single-shot output fits on the run row.
+- Object storage for large artifacts arrives with the knowledge work in Phase 3.
+
+**Working context.** The run's own inputs only. Retrieval and memory come in later phases.
+
+**API (runs module, `control-plane/.../runs`).**
+
+| Method and path | Who |
+|---|---|
+| `POST /api/workspaces/{ws}/agents/{id}/runs` with `{inputs, idempotencyKey?}` | OPERATOR |
+| `GET /api/workspaces/{ws}/agents/{id}/runs` | member |
+| `GET /api/workspaces/{ws}/runs/{runId}` | member |
+| `POST /api/workspaces/{ws}/runs/{runId}/cancel` | OPERATOR |
+
+- **Start:** resolves the current version and model, validates inputs, writes the `QUEUED` row (the pin), then starts the workflow `agent-run-<runId>`.
+- **Same idempotency key:** returns the same run and starts nothing new. Reusing the key for another agent is a 409.
+- **Temporal unreachable at start:** 503, and the row is marked `FAILED`.
+
+**Exit evidence:**
+
+| Test | What it proves |
+|---|---|
+| `AgentRunWorkflowImplTest` (TestWorkflowEnvironment) | Success; one retry on a transient error; `FAILED` after two attempts; no retry for a rejection; cancellation. |
+| `AgentRunActivitiesImplTest` | Rendering, key resolution, usage; tampered hash, missing input, revoked connection and unresolvable secret are rejected before any model call; provider errors are retryable; schema validation with a fence; a terminal run is never re-invoked; a late result is discarded. |
+| `OpenAiCompatibleModelInvokerTest` | Real HTTP to a local chat-completions endpoint: key, model, token limit, and usage (unknown stays `null`). |
+| `RunServiceTest` | Pinning across a v2 publish, idempotency, input validation, OPERATOR and workspace isolation, revocation at start, cancel, unreachable Temporal. |
+| `OutputSchemaAndInputsTest`, `AgentSpringWiringTest` (the runner's two constructors) | The schema subset and inputs check; Spring can construct the runner. |
+
+**Live run** (local Postgres, Temporal dev server, a key-checking OpenAI-compatible stub, control-plane and the real agents worker):
+
+- A run started while the agents worker was down, then v2 was published. The run completed with v1's ALPHA prompt. The next run used BETA.
+- Cancelling a 12s call gave `CANCELLED`, and the late reply was discarded.
+- Killing the worker mid-call: the run resumed on a restarted worker and succeeded on attempt 2.
+- Structured output was parsed, and a schema violation failed with the output kept.
+- Revoking the connection refused new starts and failed an already-queued run at invocation.
 
 ## Slice 5 — Agent Studio UI
 

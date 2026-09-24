@@ -1,0 +1,106 @@
+package ai.pdlc.core.workflow;
+
+import io.temporal.client.WorkflowClient;
+import io.temporal.client.WorkflowFailedException;
+import io.temporal.client.WorkflowOptions;
+import io.temporal.client.WorkflowStub;
+import io.temporal.failure.CanceledFailure;
+import io.temporal.testing.TestWorkflowEnvironment;
+import io.temporal.worker.Worker;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+
+import java.time.Duration;
+import java.util.concurrent.TimeUnit;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+/** {@link AgentRunWorkflowImpl} against a fake {@link AgentRunActivities}: retry, rejection and cancellation semantics. */
+class AgentRunWorkflowImplTest {
+
+    private TestWorkflowEnvironment testEnv;
+    private FakeAgentRunActivities activities;
+    private WorkflowClient client;
+
+    @BeforeEach
+    void setUp() {
+        testEnv = TestWorkflowEnvironment.newInstance();
+        Worker worker = testEnv.newWorker(TaskQueues.REASONING);
+        worker.registerWorkflowImplementationTypes(AgentRunWorkflowImpl.class);
+        activities = new FakeAgentRunActivities();
+        worker.registerActivitiesImplementations(activities);
+        testEnv.start();
+        client = testEnv.getWorkflowClient();
+    }
+
+    @AfterEach
+    void tearDown() {
+        testEnv.close();
+    }
+
+    private AgentRunWorkflow stub(String id) {
+        return client.newWorkflowStub(AgentRunWorkflow.class,
+                WorkflowOptions.newBuilder().setTaskQueue(TaskQueues.REASONING).setWorkflowId("agent-run-" + id).build());
+    }
+
+    @Test
+    void aSuccessfulInvocationReturnsSucceeded() {
+        AgentRunWorkflow.AgentRunOutcome outcome = stub("r1").run(new AgentRunWorkflow.AgentRunInput("r1", 60));
+
+        assertThat(outcome.status()).isEqualTo("SUCCEEDED");
+        assertThat(activities.events).containsExactly("succeeded:r1");
+    }
+
+    @Test
+    void aTransientProviderErrorIsRetriedOnce() {
+        activities.mode = FakeAgentRunActivities.Mode.FAIL_ONCE_THEN_SUCCEED;
+
+        AgentRunWorkflow.AgentRunOutcome outcome = stub("r2").run(new AgentRunWorkflow.AgentRunInput("r2", 60));
+
+        assertThat(outcome.status()).isEqualTo("SUCCEEDED");
+        assertThat(activities.invocations).hasValue(2);
+    }
+
+    @Test
+    void aPersistentErrorFailsAfterTwoAttemptsAndIsRecorded() {
+        activities.mode = FakeAgentRunActivities.Mode.ALWAYS_FAIL;
+
+        AgentRunWorkflow.AgentRunOutcome outcome = stub("r3").run(new AgentRunWorkflow.AgentRunInput("r3", 60));
+
+        assertThat(outcome.status()).isEqualTo("FAILED");
+        assertThat(outcome.error()).isEqualTo("provider returned 503");
+        assertThat(activities.invocations).hasValue(2);
+        assertThat(activities.events).containsExactly("failed:r3:provider returned 503");
+    }
+
+    @Test
+    void aRejectionIsNotRetried() {
+        activities.mode = FakeAgentRunActivities.Mode.REJECT;
+
+        AgentRunWorkflow.AgentRunOutcome outcome = stub("r4").run(new AgentRunWorkflow.AgentRunInput("r4", 60));
+
+        assertThat(outcome.status()).isEqualTo("FAILED");
+        assertThat(activities.invocations).hasValue(1);
+        assertThat(activities.events).containsExactly("failed:r4:input \"input\" is required");
+    }
+
+    @Test
+    void cancellationMarksTheRunWithoutWaitingForTheModelCall() throws Exception {
+        activities.mode = FakeAgentRunActivities.Mode.BLOCK;
+        AgentRunWorkflow wf = stub("r5");
+        WorkflowClient.start(wf::run, new AgentRunWorkflow.AgentRunInput("r5", 600));
+        assertThat(activities.invoked.await(10, TimeUnit.SECONDS)).isTrue();
+
+        WorkflowStub untyped = WorkflowStub.fromTyped(wf);
+        untyped.cancel();
+
+        assertThatThrownBy(() -> untyped.getResult(10, TimeUnit.SECONDS, AgentRunWorkflow.AgentRunOutcome.class))
+                .isInstanceOf(WorkflowFailedException.class)
+                .hasCauseInstanceOf(CanceledFailure.class);
+        activities.release.countDown();
+        testEnv.sleep(Duration.ofSeconds(1));
+        assertThat(activities.events).startsWith("cancelled:r5");
+    }
+}
