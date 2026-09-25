@@ -233,12 +233,22 @@ function RunDetail({
           </Button>
         )}
       </Flex>
-      {run.model == null ? (
+      {run.model == null && run.remote?.protocolVersion?.startsWith('rest') ? (
         <Text size="1" color="gray" as="div" mb="2">
-          Remote A2A agent via {run.connectionId}
-          {run.remote ? ` (A2A ${run.remote.protocolVersion})` : ''} · task {run.remote?.taskId ?? 'not created yet'} · remote state{' '}
-          {run.remote?.state?.toLowerCase().replace('_', '-') ?? 'unknown'} · attempts {run.attempts}
-          {run.remote?.cancel ? ` · cancel ${run.remote.cancel.toLowerCase().replace('_', ' ')}` : ''}
+          REST service via {run.connectionId} ({run.remote.protocolVersion === 'rest-async' ? 'async job' : 'sync call'})
+          {run.remote.taskId ? ` · job ${run.remote.taskId}` : ''} · state {run.remote.state.toLowerCase()}
+          {run.remote.question ? ` (service said “${run.remote.question}”)` : ''} · attempts {run.attempts}
+          {run.remote.cancel ? ` · cancel ${run.remote.cancel.toLowerCase().replace('_', ' ')}` : ''}
+        </Text>
+      ) : run.model == null && run.remote == null ? (
+        <Text size="1" color="gray" as="div" mb="2">
+          Remote agent via {run.connectionId} · not answered yet · attempts {run.attempts}
+        </Text>
+      ) : run.model == null && run.remote ? (
+        <Text size="1" color="gray" as="div" mb="2">
+          Remote A2A agent via {run.connectionId} (A2A {run.remote.protocolVersion}) · task {run.remote.taskId ?? 'not created yet'} ·
+          remote state {run.remote.state?.toLowerCase().replace('_', '-') ?? 'unknown'} · attempts {run.attempts}
+          {run.remote.cancel ? ` · cancel ${run.remote.cancel.toLowerCase().replace('_', ' ')}` : ''}
         </Text>
       ) : (
         <Text size="1" color="gray" as="div" mb="2">

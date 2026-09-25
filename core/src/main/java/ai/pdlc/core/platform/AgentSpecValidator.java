@@ -49,7 +49,7 @@ public final class AgentSpecValidator {
             return errors;
         }
         boolean a2a = spec.isA2a();
-        boolean rest = spec.isRest();
+        boolean rest = spec.usesRestRuntime();
         boolean remoteRuntime = a2a || rest;
         if (!remoteRuntime && !AgentSpec.RUNTIME_NATIVE.equals(spec.runtime())) {
             errors.add("runtime must be \"" + AgentSpec.RUNTIME_NATIVE + "\", \"" + AgentSpec.RUNTIME_A2A + "\" or \""

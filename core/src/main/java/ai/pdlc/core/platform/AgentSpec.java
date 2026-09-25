@@ -108,14 +108,14 @@ public record AgentSpec(
     }
 
     @com.fasterxml.jackson.annotation.JsonIgnore
-    public boolean isRest() {
+    public boolean usesRestRuntime() {
         return RUNTIME_REST.equals(runtime);
     }
 
     /** The connection a remote runtime ({@code a2a}, {@code rest}) delegates through; null for native agents. */
     @com.fasterxml.jackson.annotation.JsonIgnore
     public String remoteConnectionId() {
-        return isA2a() && remote != null ? remote.connectionId() : isRest() && rest != null ? rest.connectionId() : null;
+        return isA2a() && remote != null ? remote.connectionId() : usesRestRuntime() && rest != null ? rest.connectionId() : null;
     }
 
     /** A pinned, published tool version the agent may call (Phase 2 slice 2.1). */

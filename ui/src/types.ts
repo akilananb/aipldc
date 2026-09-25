@@ -342,6 +342,29 @@ export interface AgentSpec {
   tools?: ToolRef[] | null;
   /** runtime 'a2a' (slice 2.5): the A2A_AGENT connection and the remote skill it delegates to. */
   remote?: { connectionId: string | null; skill: string | null } | null;
+  /** runtime 'rest' (slice 2.6): the REST_AGENT connection and the declared call mapping. */
+  rest?: RestBinding | null;
+}
+
+export interface RestEndpoint {
+  method: string | null;
+  path: string | null;
+}
+
+export interface RestBinding {
+  connectionId: string | null;
+  mode: 'sync' | 'async' | null;
+  submit: RestEndpoint | null;
+  status: RestEndpoint | null;
+  cancel: RestEndpoint | null;
+  taskIdPointer: string | null;
+  statePointer: string | null;
+  /** remote state value -> WORKING | COMPLETED | FAILED | CANCELED */
+  states: Record<string, string> | null;
+  resultPointer: string | null;
+  errorPointer: string | null;
+  pollSeconds: number | null;
+  idempotency: 'HEADER' | 'NONE' | null;
 }
 
 /** A remote A2A agent's card as the platform reads it (slice 2.5); error set when it could not be read. */

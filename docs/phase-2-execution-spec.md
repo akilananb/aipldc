@@ -379,6 +379,96 @@ Every call, allowed or denied, is recorded in `platform_tool_calls`: run, attemp
 - **gRPC:** registered descriptors and a service/method mapping, TLS/mTLS and deadlines. Only declared unary or streaming methods are callable; reflection never publishes methods by itself.
 - **Exit:** each adapter completes a real minimal task and exposes its supported lifecycle.
 
+The slice ships as two PRs: 2.6a (REST, below) and then 2.6b (gRPC).
+
+**As built (2.6a, REST):**
+
+- **Registry.**
+  - `AgentSpec` gains `rest` (NON_NULL, so existing versions keep their hashes). `runtime: "rest"` requires it and forbids a model binding, tools and `remote`.
+  - The binding declares:
+
+    | Field | Meaning |
+    |---|---|
+    | `connectionId` | a `REST_AGENT` connection |
+    | `mode` | `sync` or `async` |
+    | `submit` | POST/PUT and a relative path |
+    | `status` | GET with `{taskId}` (async only) |
+    | `cancel` | optional; POST/DELETE with `{taskId}` (async only) |
+    | `taskIdPointer`, `statePointer` | JSON Pointers into the responses |
+    | `states` | an explicit map from each remote value to `WORKING`/`COMPLETED`/`FAILED`/`CANCELED`; it must name at least one `COMPLETED` and one `FAILED` |
+    | `resultPointer`, `errorPointer` | optional JSON Pointers |
+    | `pollSeconds` | 1–60, default 2 |
+    | `idempotency` | `HEADER` or `NONE` |
+
+  - A sync binding may not declare any of the async parts.
+  - The prompt is optional. The request body is `{"inputs": {<declared variables>}, "prompt": <rendered prompt, when there is one>}`.
+- **Connections.**
+  - `REST_AGENT` is a new connection kind. It is egress-checked on save, granted per workspace, and uses a static bearer or OAuth client credentials.
+  - Publishing and starting a rest agent share the a2a checks, generalised to "remote runtimes": the connection must be active, unexpired, granted and of the right kind. The run pins the connection and has no model.
+  - No migration was needed. The V23 tables are reused:
+    - `platform_remote_tasks` with dialect `rest-sync`/`rest-async`, holding the mapped state and the service's raw state value;
+    - `platform_remote_sends` for the submit.
+- **Runner** (`agents/.../platform/RestAgentRunner`).
+  - Every URL is the connection's base URL plus the declared path, with `{taskId}` percent-encoded. Each one passes `EgressPolicy`. Redirects are never followed, bodies are capped at 1 MB, and a 401 gets one credential refresh.
+  - The submit is recorded as message `run:0` (INTENDED → SENT → ACKED). With `idempotency: HEADER` it carries `Idempotency-Key: <run>:0`, so a resend after an unanswered submit or a 5xx is deduplicated by the service.
+  - With `NONE`, an unanswered submit, or a retry that finds the submit already SENT, fails the run: "outcome unknown … not resent". A 4xx fails with the `errorPointer` text.
+  - Async: the job id is saved the moment the submit answers, and a retry polls that job instead of resubmitting. The status is read at `statePointer` and mapped only through `states`:
+
+    | Mapped state | Run |
+    |---|---|
+    | `WORKING` | keep polling |
+    | `COMPLETED` | `SUCCEEDED`; the value at `resultPointer` (or the whole body) is the output, checked against `outputSchema` |
+    | `FAILED` | `FAILED` with the `errorPointer` text |
+    | `CANCELED` | `FAILED` |
+    | a value the map does not name | `FAILED`: "the service reported state 'X', which the agent's mapping does not declare; it is not guessed" |
+
+  - When the agent's time runs out, the job is cancelled (if a cancel endpoint is declared) and the run fails.
+  - Polling stops as soon as the run is no longer RUNNING.
+- **Cancellation.** `markCancelled` calls the declared cancel endpoint and records the answer:
+
+  | Answer | Recorded |
+  |---|---|
+  | 2xx | `ACKNOWLEDGED` |
+  | 400/409/422 | `REFUSED` |
+  | 404 | `NOT_FOUND` |
+  | anything else | `FAILED` |
+  | sync mode, or no cancel endpoint | `UNSUPPORTED`: the request is abandoned, not undone |
+
+- **Studio.**
+  - "Runs as" is now Model / A2A agent / REST. The labels are shortened so the switch fits a phone.
+  - The REST form has:
+    - the service connection;
+    - Sync/Async job;
+    - method and path for submit, status and cancel;
+    - the pointers;
+    - an editable state table ("a value not listed here fails the run");
+    - the poll interval and idempotency.
+  - A run shows "REST service via X (async job) · job … · state … (service said "…") · cancel …". Before any remote answer, a run shows a neutral "Remote agent via X · not answered yet".
+- **Found in live testing and fixed:**
+  - An `@JsonIgnore isRest()` accessor made Jackson drop the `rest` property itself, so every JSON-posted rest agent lost its binding. It is now `usesRestRuntime()`, and a round-trip test proves `rest` survives canonical JSON and the hash.
+
+**Exit evidence (2.6a)** (live: Postgres 16, a Temporal dev server, control-plane, agents, and a Python REST service at :4050 with a static bearer, `/summarise` (sync, honours `Idempotency-Key`) and `/jobs` (async, with status and cancel)):
+
+1. **Setup.** A `REST_AGENT` at 169.254.169.254 is rejected. `rest-summary` (sync, `HEADER`), `rest-jobs` (async with cancel) and `rest-jobs-nocancel` validate and publish. An async binding whose states map has no `COMPLETED`/`FAILED` is refused.
+2. **Exit: sync completes.** The run is `SUCCEEDED` with the value at `/summary` ("Summary of Q3-ledger: …"), dialect `rest-sync`, and no model.
+3. **Exit: async completes.** The service logs `POST /jobs` → `GET running` → `GET done`. The run is `SUCCEEDED` with `/job/result` as the output.
+4. **Remote failure.** The run is `FAILED`: "the service reported the job failed: the partner ledger is unavailable".
+5. **Unmapped state.** The service answered `paused`. The run is `FAILED` with "…state 'paused', which the agent's mapping does not declare; it is not guessed", and the remote state is recorded as `UNKNOWN` with the raw value.
+6. **Cancel.**
+   - A cancelable job: the cancel is `ACKNOWLEDGED` (the service logs `cancelled`).
+   - A pinned job: `REFUSED` (the service answered 409).
+   - With no cancel endpoint: `UNSUPPORTED`.
+   - Every run is `CANCELLED`, and no poll follows the cancel.
+7. **Reconcile after a crash.** The agents worker was killed (`kill -9`) while a job was running. On restart, attempt 2 polled the saved job and the run `SUCCEEDED`. The service logs exactly **one** `POST /jobs`.
+8. **Idempotency.** The service dropped its first `/summarise` answer (it processed the request and closed the connection). The resend carried the same `Idempotency-Key`, and the service replayed its stored answer without processing again. The run is `SUCCEEDED` in 2 attempts.
+9. **No secret leaked.** The service's bearer appears 0 times in the control-plane, agents, Temporal and service logs, a full database dump, or the run workflow histories.
+10. **Studio** (Playwright):
+    - the rest agent editor, with REST selected and no model or tools;
+    - the state table;
+    - a test run from the Studio, completed with its job and the service's raw state;
+    - the sync form with no async fields;
+    - no horizontal scroll at 390 px wide.
+
 ## Slice 2.7 — ACP in the sandbox
 
 - **Build-worker hardening:** a pinned `acpx` version instead of `@latest`; no inherited host environment; no `--approve-all` (ACP permission requests are mediated by policy).

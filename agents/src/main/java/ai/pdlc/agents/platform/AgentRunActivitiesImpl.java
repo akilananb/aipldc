@@ -116,7 +116,7 @@ public class AgentRunActivitiesImpl implements AgentRunActivities {
             }
             return a2a.invoke(run, spec, PromptRenderer.render(run.contentHash(), spec.prompt(), run.inputs()));
         }
-        if (spec.isRest()) {
+        if (spec.usesRestRuntime()) {
             if (rest == null) {
                 throw reject("rest agents are not supported by this worker");
             }

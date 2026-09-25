@@ -178,20 +178,26 @@ export default function AgentForm({ draft, onChange, models, tools, readOnly, wo
         </Flex>
       </Field>
 
-      <Field label="Runs as" hint="A model call, or delegation to a remote A2A agent that chooses its own model and tools.">
+      <Field
+        label="Runs as"
+        hint="A model call, delegation to a remote A2A agent, or a call to an existing HTTP agent service through a declared mapping."
+      >
         <SegmentedControl.Root
           value={draft.runtime}
           onValueChange={(v) => !readOnly && set('runtime', v)}
           aria-label="Runtime"
-          style={{ maxWidth: 420, width: '100%' }}
+          style={{ maxWidth: 560, width: '100%' }}
         >
-          <SegmentedControl.Item value="native">Model (native)</SegmentedControl.Item>
-          <SegmentedControl.Item value="a2a">Remote A2A agent</SegmentedControl.Item>
+          <SegmentedControl.Item value="native">Model</SegmentedControl.Item>
+          <SegmentedControl.Item value="a2a">A2A agent</SegmentedControl.Item>
+          <SegmentedControl.Item value="rest">REST</SegmentedControl.Item>
         </SegmentedControl.Root>
       </Field>
 
       {draft.runtime === 'a2a' ? (
         <RemoteBinding draft={draft} set={set} readOnly={readOnly} workspaceId={workspaceId} connections={connections} />
+      ) : draft.runtime === 'rest' ? (
+        <RestMapping draft={draft} set={set} readOnly={readOnly} connections={connections} />
       ) : (
       <Flex gap="3" wrap="wrap">
         <Box style={{ flex: '1 1 260px' }}>
@@ -257,7 +263,7 @@ export default function AgentForm({ draft, onChange, models, tools, readOnly, wo
             />
           </Field>
         </Box>
-        {draft.runtime !== 'a2a' && (
+        {draft.runtime === 'native' && (
         <Box style={{ flex: '1 1 180px' }}>
           <Field label="Max output tokens" htmlFor="agent-max-tokens" hint="Optional; sent to providers that support it.">
             <TextField.Root
@@ -272,7 +278,7 @@ export default function AgentForm({ draft, onChange, models, tools, readOnly, wo
         )}
       </Flex>
 
-      {draft.runtime !== 'a2a' && (
+      {draft.runtime === 'native' && (
       <Field
         label="Tools"
         hint="Pin exact published tool versions. The model can call only these, and every call is checked by policy when it happens: write tools are refused until approvals arrive, and a revoked connection or grant denies the next call."
@@ -322,7 +328,7 @@ export default function AgentForm({ draft, onChange, models, tools, readOnly, wo
       </Field>
       )}
 
-      {draft.runtime !== 'a2a' && draft.tools.length > 0 && (
+      {draft.runtime === 'native' && draft.tools.length > 0 && (
         <Flex gap="3" wrap="wrap">
           <Box style={{ flex: '1 1 180px' }}>
             <Field label="Max model turns" htmlFor="agent-max-turns" hint="1–32; empty = 8. Running out fails the run.">
@@ -474,6 +480,182 @@ function RemoteBinding({
           </Text>
         )}
       </Field>
+    </Flex>
+  );
+}
+
+const REST_STATES = ['WORKING', 'COMPLETED', 'FAILED', 'CANCELED'];
+
+/**
+ * How a rest agent calls an existing HTTP agent service (slice 2.6): nothing about the remote job
+ * is inferred, so every call, pointer and state value is declared here. The request body is
+ * {"inputs": {...declared variables}, "prompt": rendered prompt when there is one}.
+ */
+function RestMapping({
+  draft,
+  set,
+  readOnly,
+  connections,
+}: {
+  draft: Draft;
+  set: <K extends keyof Draft>(key: K, value: Draft[K]) => void;
+  readOnly: boolean;
+  connections: WorkspaceConnection[];
+}) {
+  const services = connections.filter((c) => c.kind === 'REST_AGENT');
+  const async = draft.restMode === 'async';
+  const text = (key: keyof Draft, label: string, placeholder: string, hint?: string) => (
+    <Box style={{ flex: '1 1 220px' }}>
+      <Field label={label} htmlFor={`rest-${String(key)}`} hint={hint}>
+        <TextField.Root
+          id={`rest-${String(key)}`}
+          value={draft[key] as string}
+          disabled={readOnly}
+          placeholder={placeholder}
+          onChange={(e) => set(key, e.target.value as never)}
+        />
+      </Field>
+    </Box>
+  );
+  const method = (key: 'submitMethod' | 'cancelMethod', label: string, options: string[]) => (
+    <Box style={{ flex: '0 1 120px' }}>
+      <Field label={label}>
+        <Select.Root value={draft[key]} disabled={readOnly} onValueChange={(v) => set(key, v)}>
+          <Select.Trigger aria-label={label} style={{ width: '100%' }} />
+          <Select.Content>
+            {options.map((m) => (
+              <Select.Item key={m} value={m}>
+                {m}
+              </Select.Item>
+            ))}
+          </Select.Content>
+        </Select.Root>
+      </Field>
+    </Box>
+  );
+  return (
+    <Flex direction="column" gap="3">
+      <Flex gap="3" wrap="wrap" align="end">
+        <Box style={{ flex: '1 1 260px' }}>
+          <Field label="Service" hint="REST_AGENT connections granted to this workspace. Its credential never leaves the connection.">
+            <Select.Root value={draft.remoteConnection || undefined} disabled={readOnly} onValueChange={(v) => set('remoteConnection', v)}>
+              <Select.Trigger aria-label="Service connection" placeholder="Choose a connection" style={{ width: '100%' }} />
+              <Select.Content>
+                {services.map((c) => (
+                  <Select.Item key={c.id} value={c.id} disabled={c.status !== 'ACTIVE'}>
+                    {c.id} — {c.baseUrl}
+                  </Select.Item>
+                ))}
+              </Select.Content>
+            </Select.Root>
+            {services.length === 0 && (
+              <Text size="1" color="gray" as="p" mt="1">
+                No REST_AGENT connection is granted to this workspace; an enterprise Admin grants one.
+              </Text>
+            )}
+          </Field>
+        </Box>
+        <Box style={{ flex: '0 1 260px' }}>
+          <Field label="Call style">
+            <SegmentedControl.Root value={draft.restMode} onValueChange={(v) => !readOnly && set('restMode', v)} aria-label="Call style">
+              <SegmentedControl.Item value="sync">Sync</SegmentedControl.Item>
+              <SegmentedControl.Item value="async">Async job</SegmentedControl.Item>
+            </SegmentedControl.Root>
+          </Field>
+        </Box>
+      </Flex>
+      <Flex gap="3" wrap="wrap">
+        {method('submitMethod', 'Submit', ['POST', 'PUT'])}
+        {text('submitPath', 'Submit path', async ? '/jobs' : '/summarise', 'Relative to the service URL.')}
+        <Box style={{ flex: '0 1 200px' }}>
+          <Field label="Idempotency" hint="Header: an unanswered submit is resent with the same Idempotency-Key. None: it fails as unknown.">
+            <Select.Root value={draft.idempotency} disabled={readOnly} onValueChange={(v) => set('idempotency', v)}>
+              <Select.Trigger aria-label="Idempotency" style={{ width: '100%' }} />
+              <Select.Content>
+                <Select.Item value="NONE">None</Select.Item>
+                <Select.Item value="HEADER">Idempotency-Key header</Select.Item>
+              </Select.Content>
+            </Select.Root>
+          </Field>
+        </Box>
+      </Flex>
+      {async && (
+        <>
+          <Flex gap="3" wrap="wrap">
+            {text('statusPath', 'Status path (GET)', '/jobs/{taskId}', '{taskId} is the job id, percent-encoded.')}
+            {method('cancelMethod', 'Cancel', ['POST', 'DELETE'])}
+            {text('cancelPath', 'Cancel path (optional)', '/jobs/{taskId}/cancel', 'Without one, cancelling abandons the job.')}
+          </Flex>
+          <Flex gap="3" wrap="wrap">
+            {text('taskIdPointer', 'Job id pointer', '/job/id', 'JSON Pointer into the submit response.')}
+            {text('statePointer', 'State pointer', '/job/state', 'JSON Pointer into the status response.')}
+            {text('pollSeconds', 'Poll every (seconds)', '2', '1–60.')}
+          </Flex>
+          <Field
+            label="States"
+            hint="What each state value of the service means. A value not listed here fails the run: the platform never guesses."
+          >
+            <Flex direction="column" gap="2">
+              {draft.states.map((row, i) => (
+                <Flex key={i} gap="2" align="center" wrap="wrap">
+                  <TextField.Root
+                    aria-label={`Service state ${i + 1}`}
+                    value={row.remote}
+                    disabled={readOnly}
+                    placeholder="done"
+                    style={{ width: 180 }}
+                    onChange={(e) => set('states', draft.states.map((s, j) => (j === i ? { ...s, remote: e.target.value } : s)))}
+                  />
+                  <Text size="2" color="gray">
+                    means
+                  </Text>
+                  <Select.Root
+                    value={row.mapped}
+                    disabled={readOnly}
+                    onValueChange={(v) => set('states', draft.states.map((s, j) => (j === i ? { ...s, mapped: v } : s)))}
+                  >
+                    <Select.Trigger aria-label={`Meaning of state ${i + 1}`} style={{ width: 150 }} />
+                    <Select.Content>
+                      {REST_STATES.map((m) => (
+                        <Select.Item key={m} value={m}>
+                          {m}
+                        </Select.Item>
+                      ))}
+                    </Select.Content>
+                  </Select.Root>
+                  {!readOnly && (
+                    <IconButton
+                      variant="ghost"
+                      color="red"
+                      aria-label={`Remove state ${i + 1}`}
+                      onClick={() => set('states', draft.states.filter((_, j) => j !== i))}
+                    >
+                      <Trash2 size={14} />
+                    </IconButton>
+                  )}
+                </Flex>
+              ))}
+              {!readOnly && (
+                <Button
+                  size="1"
+                  variant="soft"
+                  style={{ alignSelf: 'flex-start' }}
+                  onClick={() => set('states', [...draft.states, { remote: '', mapped: 'WORKING' }])}
+                >
+                  <Plus size={13} /> Add state
+                </Button>
+              )}
+            </Flex>
+          </Field>
+        </>
+      )}
+      <Flex gap="3" wrap="wrap">
+        {text('resultPointer', 'Result pointer (optional)', async ? '/job/result' : '/summary', 'Empty = the whole response.')}
+        {text('errorPointer', 'Error message pointer (optional)', '/error', 'Shown when the service reports a failure.')}
+      </Flex>
+      <Text size="1" color="gray">
+        The service receives {'{"inputs": {…your variables}, "prompt": …}'}; the prompt is optional for REST agents.
+      </Text>
     </Flex>
   );
 }

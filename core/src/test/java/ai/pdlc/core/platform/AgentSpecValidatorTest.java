@@ -212,4 +212,16 @@ class AgentSpecValidatorTest {
         assertThat(ContentHash.canonicalJson(valid())).doesNotContain("rest");
         assertThat(ContentHash.canonicalJson(remote("partner-agent", "s"))).doesNotContain("\"rest\"");
     }
+
+    @Test
+    void aRestBindingSurvivesTheCanonicalJsonRoundTrip() {
+        AgentSpec spec = rest(asyncRest());
+        String json = ContentHash.canonicalJson(spec);
+
+        assertThat(json).contains("\"rest\":{").doesNotContain("usesRestRuntime");
+        AgentSpec read = ContentHash.read(json, AgentSpec.class);
+        assertThat(read.rest()).isEqualTo(spec.rest());
+        assertThat(ContentHash.ofAgent("r", read)).isEqualTo(ContentHash.ofAgent("r", spec));
+        assertThat(AgentSpecValidator.validate("R", read, MODELS)).isEmpty();
+    }
 }
