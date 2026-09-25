@@ -127,8 +127,8 @@ public class AgentRegistryService {
      * now. A disabled model or a revoked/expired connection fails here with the reason, unless the
      * agent declared an available fallback; there is no silent default model. A pinned tool that
      * is no longer usable (retired, connection revoked or ungranted) blocks the run up front. An
-     * {@code a2a} agent (slice 2.5) has no model: its {@code A2A_AGENT} connection must be usable by
-     * the workspace, and the run pins that connection instead.
+     * {@code a2a} or {@code rest} agent (slices 2.5, 2.6) has no model: its {@code A2A_AGENT} or
+     * {@code REST_AGENT} connection must be usable by the workspace, and the run pins that connection instead.
      */
     public ResolvedAgentDto resolveForRun(String workspaceId, String id, Identity identity) {
         workspaces.require(workspaceId, identity, Capability.OPERATOR);
@@ -138,12 +138,12 @@ public class AgentRegistryService {
         }
         VersionRow version = registry.verified(registry.findVersion(workspaceId, id, row.currentVersion()));
         AgentSpec spec = registry.spec(version.specJson());
-        if (spec.isA2a()) {
+        if (spec.isA2a() || spec.usesRestRuntime()) {
             List<String> problems = remoteProblems(workspaceId, spec);
             if (!problems.isEmpty()) {
                 throw new ConflictException("Agent " + id + " v" + version.version() + " cannot run: " + String.join("; ", problems));
             }
-            return new ResolvedAgentDto(toDto(version), null, null, spec.remote().connectionId(), false);
+            return new ResolvedAgentDto(toDto(version), null, null, spec.remoteConnectionId(), false);
         }
         List<String> toolProblems = tools.pinProblems(workspaceId, spec.toolsOrEmpty());
         if (!toolProblems.isEmpty()) {
@@ -180,7 +180,7 @@ public class AgentRegistryService {
 
     private List<String> check(String workspaceId, String name, AgentSpec spec) {
         List<String> errors = new ArrayList<>(AgentSpecValidator.validate(name, spec, models.authorizedModels()));
-        if (spec != null && spec.isA2a()) {
+        if (spec != null && (spec.isA2a() || spec.usesRestRuntime())) {
             errors.addAll(remoteProblems(workspaceId, spec));
         } else if (spec != null) {
             errors.addAll(tools.pinProblems(workspaceId, spec.toolsOrEmpty()));
@@ -188,12 +188,17 @@ public class AgentRegistryService {
         return errors;
     }
 
-    /** Malformed remote bindings are the validator's to report; this checks the connection now. */
+    /**
+     * A remote runtime's connection must be usable by the workspace now: {@code A2A_AGENT} for a2a,
+     * {@code REST_AGENT} for rest. Malformed bindings are the validator's to report.
+     */
     private List<String> remoteProblems(String workspaceId, AgentSpec spec) {
-        if (spec.remote() == null || spec.remote().connectionId() == null || spec.remote().connectionId().isBlank()) {
+        String connectionId = spec.remoteConnectionId();
+        if (connectionId == null || connectionId.isBlank()) {
             return List.of();
         }
-        return connections.toolConnectionProblems(spec.remote().connectionId(), workspaceId, ConnectionService.A2A_AGENT);
+        return connections.toolConnectionProblems(connectionId, workspaceId,
+                spec.isA2a() ? ConnectionService.A2A_AGENT : ConnectionService.REST_AGENT);
     }
 
     private AgentDefinitionDto toDto(DefinitionRow row) {

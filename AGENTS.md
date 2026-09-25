@@ -92,6 +92,7 @@ and shows the draft → a PO/SquadLead approves via `POST .../approve-agent-resu
 | `control-plane/.../runs/{ApprovalService,JdbcApprovalStore}` + `ui/src/studio/ApprovalsSection.tsx` | Write approvals inbox and effect resolution (docs/phase-2-execution-spec.md slice 2.2) |
 | `core/.../port/SandboxPort` + `adapters/.../sandbox/` + `control-plane/.../sandbox/` + `agents/.../platform/SandboxToolRunner` + `agents/.../config/SandboxConfig` + `infra/k8s/sandbox.yaml` | Sandbox tools (docs/phase-2-execution-spec.md slice 2.4): enterprise image catalog (`sandbox_images`), `KubernetesJobSandbox` (Job per call under a gVisor RuntimeClass) and `DockerSandbox` (local dev under `runsc`), and the per-call credentialed `SandboxEgressProxy` |
 | `adapters/.../a2a/` + `agents/.../platform/{A2aRunner,A2aCardActivitiesImpl}` + `control-plane/.../connections/A2aCardService` + `core/.../workflow/A2aCard*` | A2A outbound delegation (docs/phase-2-execution-spec.md slice 2.5): `runtime: a2a` agents on `A2A_AGENT` connections, A2A 1.0/0.3 JSON-RPC client, remote task tracking, operator replies |
+| `agents/.../platform/RestAgentRunner` + `core/.../platform/AgentSpec.RestBinding` | Generic REST agents (docs/phase-2-execution-spec.md slice 2.6a): `runtime: rest` agents on `REST_AGENT` connections, a declared sync or async submit/status/cancel mapping |
 | `control-plane/.../runs/` + `agents/.../platform/` + `core/.../workflow/AgentRunWorkflow*` | Durable single-agent runs: `RunService` pins version+model on a `platform_runs` row and starts `AgentRunWorkflow`; the agents-side `AgentRunActivitiesImpl` renders, calls the model at runtime (`OpenAiCompatibleModelInvoker`) and records the outcome |
 | `control-plane/src/main/resources/db/migration/` | Flyway `V1__schema.sql` … `V23__a2a_runs.sql` |
 | `agents/src/main/java/ai/pdlc/agents/{grill,po,plan,review,release,monitor,mention}/` | Per-domain LLM agent components |
@@ -239,6 +240,11 @@ scripts/e2e-demo-phase4.sh   # + release pack -> gate 3 -> deploy -> monitor
   intent (`platform_remote_sends`) before sending and the remote task id as soon as it is known; a retry reconciles via
   `GetTask`, and an outcome that cannot be reconciled fails the run instead of resending. Report remote states honestly
   (input-required/auth-required pause the run; a refused cancel is recorded as refused).
+- **REST agents** (slice 2.6a) run only through `RestAgentRunner`. The service's job state is only what the agent's
+  declared `states` map says: an unmapped value fails the run and is never guessed. Resend an unanswered submit only for
+  `idempotency: HEADER` bindings (same `Idempotency-Key`); a retry with a saved job id polls it and never resubmits.
+  Record-component accessors on specs must not look like bean getters of another component (`isRest()` once hid `rest`
+  from Jackson); mark helpers `@JsonIgnore` and name them so they cannot collide.
 - **No linter/formatter configured anywhere** (no ESLint, Prettier, Checkstyle, Spotless,
   `.editorconfig`). Match surrounding code style by hand; TypeScript's only enforced gate is
   `tsc --noEmit` (strict mode) inside `npm run build`.

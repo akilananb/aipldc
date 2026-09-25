@@ -28,6 +28,11 @@ public final class AgentSpecValidator {
     private static final Pattern NAME = Pattern.compile("^[A-Za-z_][A-Za-z0-9_]{0,63}$");
     private static final Pattern CONNECTION_ID = Pattern.compile("^[a-z0-9][a-z0-9-]{1,39}$");
     private static final Pattern SKILL = Pattern.compile("^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$");
+    /** A relative path, optionally with a query; no scheme, no authority, no dot segments. */
+    private static final Pattern REST_PATH = Pattern.compile("^/(?!/)[A-Za-z0-9._~!$&'()*+,;=:@%/{}?-]{0,511}$");
+    private static final Pattern POINTER = Pattern.compile("^(/([^~/]|~[01])*)*$");
+    static final java.util.Set<String> REST_STATES = java.util.Set.of("WORKING", "COMPLETED", "FAILED", "CANCELED");
+    public static final int MAX_POLL_SECONDS = 60;
     private static final Pattern TAG = Pattern.compile("\\{\\{(\\{?)\\s*([#^/&>=!]?)\\s*([^}]*?)\\s*}?}}");
 
     private AgentSpecValidator() {
@@ -44,8 +49,16 @@ public final class AgentSpecValidator {
             return errors;
         }
         boolean a2a = spec.isA2a();
-        if (!a2a && !AgentSpec.RUNTIME_NATIVE.equals(spec.runtime())) {
-            errors.add("runtime must be \"" + AgentSpec.RUNTIME_NATIVE + "\" or \"" + AgentSpec.RUNTIME_A2A + "\"");
+        boolean rest = spec.usesRestRuntime();
+        boolean remoteRuntime = a2a || rest;
+        if (!remoteRuntime && !AgentSpec.RUNTIME_NATIVE.equals(spec.runtime())) {
+            errors.add("runtime must be \"" + AgentSpec.RUNTIME_NATIVE + "\", \"" + AgentSpec.RUNTIME_A2A + "\" or \""
+                    + AgentSpec.RUNTIME_REST + "\"");
+        }
+        if (rest) {
+            checkRest(spec, errors);
+        } else if (spec.rest() != null) {
+            errors.add("rest is only for runtime \"" + AgentSpec.RUNTIME_REST + "\"");
         }
         if (a2a) {
             AgentSpec.Remote remote = spec.remote();
@@ -77,12 +90,14 @@ public final class AgentSpecValidator {
         }
 
         if (spec.prompt() == null || spec.prompt().isBlank()) {
-            errors.add("prompt is required");
+            if (!rest) {
+                errors.add("prompt is required");
+            }
         } else {
             checkTemplate(spec.prompt(), declared, errors);
         }
 
-        if (!a2a) {
+        if (!remoteRuntime) {
             checkModel(spec.model(), authorizedModels, errors);
         }
 
@@ -118,6 +133,91 @@ public final class AgentSpecValidator {
             errors.addAll(OutputSchema.unsupported(spec.outputSchema()));
         }
         return errors;
+    }
+
+    /** A {@code rest} agent: a complete, explicit mapping - nothing about the remote job is inferred. */
+    private static void checkRest(AgentSpec spec, List<String> errors) {
+        if (spec.model() != null) {
+            errors.add("a rest agent has no model binding; the service chooses its own");
+        }
+        if (!spec.toolsOrEmpty().isEmpty()) {
+            errors.add("a rest agent has no tools; the service uses its own");
+        }
+        AgentSpec.RestBinding r = spec.rest();
+        if (r == null) {
+            errors.add("rest is required for runtime \"rest\"");
+            return;
+        }
+        if (r.connectionId() == null || !CONNECTION_ID.matcher(r.connectionId()).matches()) {
+            errors.add("rest.connectionId must name a REST_AGENT connection");
+        }
+        boolean async = AgentSpec.RestBinding.ASYNC.equals(r.mode());
+        if (!async && !AgentSpec.RestBinding.SYNC.equals(r.mode())) {
+            errors.add("rest.mode must be \"sync\" or \"async\"");
+        }
+        checkEndpoint("rest.submit", r.submit(), Set.of("POST", "PUT"), false, true, errors);
+        pointer("rest.resultPointer", r.resultPointer(), false, errors);
+        pointer("rest.errorPointer", r.errorPointer(), false, errors);
+        if (r.idempotency() != null && !Set.of("HEADER", "NONE").contains(r.idempotency())) {
+            errors.add("rest.idempotency must be HEADER or NONE");
+        }
+        if (!async) {
+            if (r.status() != null || r.cancel() != null || r.taskIdPointer() != null || r.statePointer() != null
+                    || r.states() != null || r.pollSeconds() != null) {
+                errors.add("a sync rest agent has no status, cancel, taskIdPointer, statePointer, states or pollSeconds");
+            }
+            return;
+        }
+        checkEndpoint("rest.status", r.status(), Set.of("GET"), true, true, errors);
+        checkEndpoint("rest.cancel", r.cancel(), Set.of("POST", "DELETE"), true, false, errors);
+        pointer("rest.taskIdPointer", r.taskIdPointer(), true, errors);
+        pointer("rest.statePointer", r.statePointer(), true, errors);
+        if (r.states() == null || r.states().isEmpty()) {
+            errors.add("rest.states must map the service's state values to WORKING, COMPLETED, FAILED or CANCELED");
+        } else {
+            r.states().forEach((remote, mapped) -> {
+                if (remote == null || remote.isEmpty() || !REST_STATES.contains(mapped)) {
+                    errors.add("rest.states[" + remote + "] must be one of " + new java.util.TreeSet<>(REST_STATES));
+                }
+            });
+            if (!r.states().containsValue("COMPLETED") || !r.states().containsValue("FAILED")) {
+                errors.add("rest.states must name at least one COMPLETED and one FAILED value");
+            }
+        }
+        if (r.pollSeconds() != null && (r.pollSeconds() < 1 || r.pollSeconds() > MAX_POLL_SECONDS)) {
+            errors.add("rest.pollSeconds must be between 1 and " + MAX_POLL_SECONDS);
+        }
+    }
+
+    private static void checkEndpoint(String field, AgentSpec.Endpoint e, Set<String> methods, boolean needsTaskId, boolean required,
+                                      List<String> errors) {
+        if (e == null) {
+            if (required) {
+                errors.add(field + " is required");
+            }
+            return;
+        }
+        if (e.method() == null || !methods.contains(e.method())) {
+            errors.add(field + ".method must be one of " + new java.util.TreeSet<>(methods));
+        }
+        if (e.path() == null || !REST_PATH.matcher(e.path()).matches() || e.path().contains("/../") || e.path().endsWith("/..")
+                || e.path().contains("/./")) {
+            errors.add(field + ".path must be a relative path starting with /");
+        } else if (needsTaskId && !e.path().contains("{taskId}")) {
+            errors.add(field + ".path must contain {taskId}");
+        } else if (!needsTaskId && e.path().contains("{")) {
+            errors.add(field + ".path has no placeholders");
+        }
+    }
+
+    private static void pointer(String field, String value, boolean required, List<String> errors) {
+        if (value == null) {
+            if (required) {
+                errors.add(field + " is required");
+            }
+        } else if (!POINTER.matcher(value).matches()) {
+            errors.add(field + " must be a JSON Pointer such as /job/id");
+        }
     }
 
     private static void checkModel(AgentSpec.ModelBinding model, Set<String> authorizedModels, List<String> errors) {

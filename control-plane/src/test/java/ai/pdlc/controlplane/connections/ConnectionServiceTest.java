@@ -186,7 +186,7 @@ class ConnectionServiceTest {
                 "kv://x", "https://api.example/mcp", null, null), ADMIN)).hasMessageContaining("oauthClientId must match");
         assertThatThrownBy(() -> service.createConnection(new ConnectionRequest("m3", "HTTP_API", "OAUTH_CLIENT_CREDENTIALS",
                 "kv://x", "https://api.example/v1", null, "c"), ADMIN))
-                .hasMessageContaining("only supported for MCP_SERVER and A2A_AGENT connections");
+                .hasMessageContaining("only supported for MCP_SERVER, A2A_AGENT and REST_AGENT connections");
         assertThatThrownBy(() -> service.createConnection(new ConnectionRequest("m4", "MCP_SERVER", "API_KEY",
                 "kv://x", "https://api.example/mcp", null, "stray-client"), ADMIN))
                 .hasMessageContaining("oauthClientId applies only to authType OAUTH_CLIENT_CREDENTIALS");

@@ -66,22 +66,24 @@ public class AgentRunActivitiesImpl implements AgentRunActivities {
     private final ToolExecutor executor;
     private final NotifyPort notify;
     private final A2aRunner a2a;
+    private final RestAgentRunner rest;
     private final Clock clock;
 
     @Autowired
     public AgentRunActivitiesImpl(RunStore runs, SecretsPort secrets, ModelInvoker models, ToolStore tools,
-                                  ToolExecutor executor, NotifyPort notify, A2aRunner a2a) {
-        this(runs, secrets, models, tools, executor, notify, a2a, Clock.systemUTC());
+                                  ToolExecutor executor, NotifyPort notify, A2aRunner a2a, RestAgentRunner rest) {
+        this(runs, secrets, models, tools, executor, notify, a2a, rest, Clock.systemUTC());
     }
 
     AgentRunActivitiesImpl(RunStore runs, SecretsPort secrets, ModelInvoker models, ToolStore tools,
                            ToolExecutor executor, NotifyPort notify, Clock clock) {
-        this(runs, secrets, models, tools, executor, notify, null, clock);
+        this(runs, secrets, models, tools, executor, notify, null, null, clock);
     }
 
     AgentRunActivitiesImpl(RunStore runs, SecretsPort secrets, ModelInvoker models, ToolStore tools,
-                           ToolExecutor executor, NotifyPort notify, A2aRunner a2a, Clock clock) {
+                           ToolExecutor executor, NotifyPort notify, A2aRunner a2a, RestAgentRunner rest, Clock clock) {
         this.a2a = a2a;
+        this.rest = rest;
         this.runs = runs;
         this.secrets = secrets;
         this.models = models;
@@ -113,6 +115,14 @@ public class AgentRunActivitiesImpl implements AgentRunActivities {
                 throw reject("a2a agents are not supported by this worker");
             }
             return a2a.invoke(run, spec, PromptRenderer.render(run.contentHash(), spec.prompt(), run.inputs()));
+        }
+        if (spec.usesRestRuntime()) {
+            if (rest == null) {
+                throw reject("rest agents are not supported by this worker");
+            }
+            String prompt = spec.prompt() == null || spec.prompt().isBlank() ? null
+                    : PromptRenderer.render(run.contentHash(), spec.prompt(), run.inputs());
+            return rest.invoke(run, spec, prompt);
         }
         String unavailable = unavailable(run);
         if (unavailable != null) {
@@ -394,6 +404,9 @@ public class AgentRunActivitiesImpl implements AgentRunActivities {
         // A remote A2A task is asked to cancel; whether it did is recorded with the run (slice 2.5).
         if (a2a != null) {
             a2a.cancelRemote(runId);
+        }
+        if (rest != null) {
+            rest.cancelRemote(runId);
         }
     }
 

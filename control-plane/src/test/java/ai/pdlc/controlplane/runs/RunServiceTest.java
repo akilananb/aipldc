@@ -262,4 +262,34 @@ class RunServiceTest {
         assertThat(launcher.signals).containsExactly("input|agent-run-" + run.id() + "|" + run.id() + ":1");
         assertThatThrownBy(() -> service.reply("engineering", run.id(), "APAC", OPERATOR)).isInstanceOf(ConflictException.class);
     }
+
+    @Test
+    void aRestRunPinsItsRestAgentConnectionAndHasNoModel() {
+        registries.connections().createConnection(new ai.pdlc.controlplane.web.dto.ConnectionRequest("report-service", "REST_AGENT",
+                "API_KEY", "kv://report-key", "https://api.example", null), IT);
+        AgentSpec.RestBinding sync = new AgentSpec.RestBinding("report-service", "sync", new AgentSpec.Endpoint("POST", "/summarise"),
+                null, null, null, null, null, "/summary", null, null, null);
+        AgentSpec spec = new AgentSpec("Calls a service", "rest", null, List.of(new AgentSpec.Variable("input", null, true)),
+                null, new AgentSpec.Limits(null, 30), null, null, null, sync);
+        AgentDefinitionDto created = registry.create("engineering", new AgentDraftRequest("svc", "Service", spec, null), AUTHOR);
+        assertThat(registry.validate("engineering", "svc", AUTHOR).errors())
+                .containsExactly("connection report-service is not granted to workspace engineering");
+
+        registries.connections().grant("report-service", "engineering", IT);
+        registry.publish("engineering", "svc", created.draftRevision(), LEAD);
+        RunDto run = service.start("engineering", "svc", new StartRunRequest(Map.of("input", "Q3"), null), OPERATOR);
+
+        assertThat(run.model()).isNull();
+        assertThat(run.connectionId()).isEqualTo("report-service");
+
+        registries.connections().createConnection(new ai.pdlc.controlplane.web.dto.ConnectionRequest("wrong-kind", "A2A_AGENT",
+                "NONE", null, "https://api.example", null), IT);
+        registries.connections().grant("wrong-kind", "engineering", IT);
+        AgentSpec.RestBinding onA2a = new AgentSpec.RestBinding("wrong-kind", "sync", new AgentSpec.Endpoint("POST", "/x"),
+                null, null, null, null, null, null, null, null, null);
+        registry.create("engineering", new AgentDraftRequest("svc2", "Service 2", new AgentSpec("x", "rest", null, List.of(), null,
+                new AgentSpec.Limits(null, 30), null, null, null, onA2a), null), AUTHOR);
+        assertThat(registry.validate("engineering", "svc2", AUTHOR).errors()).singleElement().asString()
+                .contains("wrong-kind is not an REST_AGENT connection");
+    }
 }

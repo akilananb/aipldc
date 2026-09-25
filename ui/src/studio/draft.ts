@@ -6,6 +6,20 @@ export interface Draft {
   runtime: string;
   remoteConnection: string;
   remoteSkill: string;
+  /** runtime 'rest' (slice 2.6); the connection is remoteConnection. */
+  restMode: string;
+  submitMethod: string;
+  submitPath: string;
+  statusPath: string;
+  cancelMethod: string;
+  cancelPath: string;
+  taskIdPointer: string;
+  statePointer: string;
+  states: { remote: string; mapped: string }[];
+  resultPointer: string;
+  errorPointer: string;
+  pollSeconds: string;
+  idempotency: string;
   name: string;
   description: string;
   prompt: string;
@@ -25,8 +39,21 @@ export interface Draft {
 export function toDraft(name: string, spec: AgentSpec | null): Draft {
   return {
     runtime: spec?.runtime ?? 'native',
-    remoteConnection: spec?.remote?.connectionId ?? '',
+    remoteConnection: spec?.remote?.connectionId ?? spec?.rest?.connectionId ?? '',
     remoteSkill: spec?.remote?.skill ?? '',
+    restMode: spec?.rest?.mode ?? 'sync',
+    submitMethod: spec?.rest?.submit?.method ?? 'POST',
+    submitPath: spec?.rest?.submit?.path ?? '',
+    statusPath: spec?.rest?.status?.path ?? '',
+    cancelMethod: spec?.rest?.cancel?.method ?? 'POST',
+    cancelPath: spec?.rest?.cancel?.path ?? '',
+    taskIdPointer: spec?.rest?.taskIdPointer ?? '',
+    statePointer: spec?.rest?.statePointer ?? '',
+    states: Object.entries(spec?.rest?.states ?? {}).map(([remote, mapped]) => ({ remote, mapped })),
+    resultPointer: spec?.rest?.resultPointer ?? '',
+    errorPointer: spec?.rest?.errorPointer ?? '',
+    pollSeconds: spec?.rest?.pollSeconds != null ? String(spec.rest.pollSeconds) : '',
+    idempotency: spec?.rest?.idempotency ?? 'NONE',
     name,
     description: spec?.description ?? '',
     prompt: spec?.prompt ?? '',
@@ -83,6 +110,40 @@ export function toSpec(d: Draft): SpecResult {
     required: v.required,
   }));
   const description = d.description.trim() === '' ? null : d.description;
+  if (d.runtime === 'rest') {
+    const blank = (t: string) => (t.trim() === '' ? null : t.trim());
+    const poll = toInt(d.pollSeconds);
+    if (Number.isNaN(poll)) return { ok: false, error: 'Poll interval must be a whole number' };
+    const async = d.restMode === 'async';
+    return {
+      ok: true,
+      spec: {
+        description,
+        runtime: 'rest',
+        prompt: d.prompt.trim() === '' ? null : d.prompt,
+        variables,
+        model: null,
+        limits: { timeoutSeconds: timeout, maxOutputTokens: null },
+        outputSchema,
+        rest: {
+          connectionId: blank(d.remoteConnection),
+          mode: async ? 'async' : 'sync',
+          submit: { method: d.submitMethod, path: blank(d.submitPath) },
+          status: async ? { method: 'GET', path: blank(d.statusPath) } : null,
+          cancel: async && d.cancelPath.trim() !== '' ? { method: d.cancelMethod, path: d.cancelPath.trim() } : null,
+          taskIdPointer: async ? blank(d.taskIdPointer) : null,
+          statePointer: async ? blank(d.statePointer) : null,
+          states: async
+            ? Object.fromEntries(d.states.filter((s) => s.remote.trim() !== '').map((s) => [s.remote.trim(), s.mapped]))
+            : null,
+          resultPointer: blank(d.resultPointer),
+          errorPointer: blank(d.errorPointer),
+          pollSeconds: async ? poll : null,
+          idempotency: d.idempotency === 'HEADER' ? 'HEADER' : 'NONE',
+        },
+      },
+    };
+  }
   if (d.runtime === 'a2a') {
     // A remote agent chooses its own model and tools; only the time limit applies.
     return {

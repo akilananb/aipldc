@@ -48,15 +48,17 @@ public class ConnectionService {
     public static final String MCP_SERVER = "MCP_SERVER";
     /** A remote A2A agent (slice 2.5): its origin, and credentials an a2a platform agent delegates with. */
     public static final String A2A_AGENT = "A2A_AGENT";
+    /** An existing HTTP agent service a rest agent calls through a declared mapping (slice 2.6). */
+    public static final String REST_AGENT = "REST_AGENT";
     public static final String OAUTH_CLIENT_CREDENTIALS = "OAUTH_CLIENT_CREDENTIALS";
-    static final Set<String> KINDS = Set.of(MODEL_PROVIDER, HTTP_API, MCP_SERVER, A2A_AGENT);
+    static final Set<String> KINDS = Set.of(MODEL_PROVIDER, HTTP_API, MCP_SERVER, A2A_AGENT, REST_AGENT);
     /**
      * Kinds whose base URL workspace tools or agents call, so it must pass the egress policy and can be
      * granted to workspaces.
      */
-    static final Set<String> TOOL_KINDS = Set.of(HTTP_API, MCP_SERVER, A2A_AGENT);
+    static final Set<String> TOOL_KINDS = Set.of(HTTP_API, MCP_SERVER, A2A_AGENT, REST_AGENT);
     /** Kinds that may authenticate with OAuth client credentials discovered from the server. */
-    static final Set<String> OAUTH_KINDS = Set.of(MCP_SERVER, A2A_AGENT);
+    static final Set<String> OAUTH_KINDS = Set.of(MCP_SERVER, A2A_AGENT, REST_AGENT);
     static final Set<String> AUTH_TYPES = Set.of("API_KEY", "NONE", OAUTH_CLIENT_CREDENTIALS);
     static final Pattern OAUTH_CLIENT_ID = Pattern.compile("^[A-Za-z0-9._:@/-]{1,200}$");
 
@@ -169,7 +171,7 @@ public class ConnectionService {
     /**
      * Why a workspace's tool cannot use {@code connectionId} right now (empty = usable): it must be
      * an active, unexpired connection of {@code requiredKind} (HTTP_API for http tools, MCP_SERVER
-     * for mcp tools, A2A_AGENT for a2a agents) granted to the workspace. Used at tool publication, at MCP discovery, and
+     * for mcp tools, A2A_AGENT for a2a agents, REST_AGENT for rest agents) granted to the workspace. Used at tool publication, at MCP discovery, and
      * whenever an agent pinning the tool is published or started.
      */
     public List<String> toolConnectionProblems(String connectionId, String workspaceId, String requiredKind) {
@@ -245,8 +247,8 @@ public class ConnectionService {
     private static void validateCredentials(ConnectionRequest request, List<String> errors) {
         boolean oauth = OAUTH_CLIENT_CREDENTIALS.equals(request.authType());
         if (oauth && !OAUTH_KINDS.contains(request.kind())) {
-            errors.add("authType " + OAUTH_CLIENT_CREDENTIALS + " is only supported for " + MCP_SERVER + " and " + A2A_AGENT
-                    + " connections");
+            errors.add("authType " + OAUTH_CLIENT_CREDENTIALS + " is only supported for " + MCP_SERVER + ", " + A2A_AGENT
+                    + " and " + REST_AGENT + " connections");
         }
         if (oauth && (request.oauthClientId() == null || !OAUTH_CLIENT_ID.matcher(request.oauthClientId()).matches())) {
             errors.add("oauthClientId must match " + OAUTH_CLIENT_ID.pattern());
