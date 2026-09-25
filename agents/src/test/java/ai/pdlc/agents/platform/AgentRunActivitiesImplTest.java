@@ -46,7 +46,7 @@ class AgentRunActivitiesImplTest {
         return reply;
     };
     private final AgentRunActivitiesImpl runner = new AgentRunActivitiesImpl(runs, secrets, invoker, mock(ToolStore.class),
-            mock(ToolExecutor.class), mock(ai.pdlc.core.port.NotifyPort.class), (A2aRunner) null, (RestAgentRunner) null);
+            mock(ToolExecutor.class), mock(ai.pdlc.core.port.NotifyPort.class), (A2aRunner) null, (RestAgentRunner) null, (GrpcAgentRunner) null);
 
     private static String missing(String ref) {
         throw new IllegalStateException("No environment variable for " + ref);

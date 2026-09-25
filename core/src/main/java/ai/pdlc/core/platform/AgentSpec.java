@@ -15,8 +15,8 @@ import java.util.Map;
  * decides what is publishable.
  *
  * @param description  human-facing summary shown in the catalog
- * @param runtime      {@code native} (a model call) or {@code a2a} (delegation to a remote A2A agent,
- *                     Phase 2 slice 2.5)
+ * @param runtime      {@code native} (a model call), {@code a2a} (delegation to a remote A2A agent, Phase 2
+ *                     slice 2.5), {@code rest} or {@code grpc} (an existing agent service, slice 2.6)
  * @param prompt       Mustache template (restricted: no partials, no delimiter changes)
  * @param variables    every top-level template variable the prompt may reference
  * @param model        authorized model binding plus explicitly allowed fallbacks
@@ -25,6 +25,8 @@ import java.util.Map;
  * @param tools        pinned tool versions (native only, slice 2.1)
  * @param remote       runtime {@code a2a}: the {@code A2A_AGENT} connection and the remote skill (slice 2.5)
  * @param rest         runtime {@code rest}: the {@code REST_AGENT} connection and the declared call mapping (slice 2.6)
+ * @param grpc         runtime {@code grpc}: the {@code GRPC_AGENT} connection, registered descriptors and the one
+ *                     method the agent calls (slice 2.6b)
  */
 public record AgentSpec(
         String description,
@@ -36,11 +38,13 @@ public record AgentSpec(
         Map<String, Object> outputSchema,
         @JsonInclude(JsonInclude.Include.NON_NULL) List<ToolRef> tools,
         @JsonInclude(JsonInclude.Include.NON_NULL) Remote remote,
-        @JsonInclude(JsonInclude.Include.NON_NULL) RestBinding rest) {
+        @JsonInclude(JsonInclude.Include.NON_NULL) RestBinding rest,
+        @JsonInclude(JsonInclude.Include.NON_NULL) GrpcBinding grpc) {
 
     public static final String RUNTIME_NATIVE = "native";
     public static final String RUNTIME_A2A = "a2a";
     public static final String RUNTIME_REST = "rest";
+    public static final String RUNTIME_GRPC = "grpc";
 
     /**
      * Pre-slice-2.1 shape (no tools). Fields added after Phase 1 are omitted from canonical JSON
@@ -48,19 +52,25 @@ public record AgentSpec(
      */
     public AgentSpec(String description, String runtime, String prompt, List<Variable> variables, ModelBinding model,
                      Limits limits, Map<String, Object> outputSchema) {
-        this(description, runtime, prompt, variables, model, limits, outputSchema, null, null, null);
+        this(description, runtime, prompt, variables, model, limits, outputSchema, null, null, null, null);
     }
 
     /** Slice 2.1-2.4 shape (no remote binding); keeps those versions' hashes. */
     public AgentSpec(String description, String runtime, String prompt, List<Variable> variables, ModelBinding model,
                      Limits limits, Map<String, Object> outputSchema, List<ToolRef> tools) {
-        this(description, runtime, prompt, variables, model, limits, outputSchema, tools, null, null);
+        this(description, runtime, prompt, variables, model, limits, outputSchema, tools, null, null, null);
     }
 
     /** Slice 2.5 shape (no REST binding); keeps those versions' hashes. */
     public AgentSpec(String description, String runtime, String prompt, List<Variable> variables, ModelBinding model,
                      Limits limits, Map<String, Object> outputSchema, List<ToolRef> tools, Remote remote) {
-        this(description, runtime, prompt, variables, model, limits, outputSchema, tools, remote, null);
+        this(description, runtime, prompt, variables, model, limits, outputSchema, tools, remote, null, null);
+    }
+
+    /** Slice 2.6a shape (no gRPC binding); keeps those versions' hashes. */
+    public AgentSpec(String description, String runtime, String prompt, List<Variable> variables, ModelBinding model,
+                     Limits limits, Map<String, Object> outputSchema, List<ToolRef> tools, Remote remote, RestBinding rest) {
+        this(description, runtime, prompt, variables, model, limits, outputSchema, tools, remote, rest, null);
     }
 
     /**
@@ -102,6 +112,30 @@ public record AgentSpec(
     public record Endpoint(String method, String path) {
     }
 
+    /**
+     * How a {@code grpc} agent calls an existing gRPC service (slice 2.6b). {@code descriptorSet} is a
+     * base64 {@code FileDescriptorSet} registered with the version (and so part of its hash); only
+     * {@code service}/{@code method} in it is ever called - a unary or server-streaming method, never
+     * one discovered by reflection. The request message is built from the declared variables (each a
+     * top-level request field) plus, when {@code promptField} is set, the rendered prompt.
+     * {@code idempotent} declares that the service tolerates a resend (the same {@code idempotency-key}
+     * metadata), so a call whose outcome is unknown may be retried; {@code maxMessages} caps a stream.
+     */
+    public record GrpcBinding(String connectionId, String descriptorSet, String service, String method,
+                              String promptField, Boolean idempotent, Integer maxMessages) {
+
+        public static final int DEFAULT_MAX_MESSAGES = 100;
+
+        public int maxMessagesOrDefault() {
+            return maxMessages == null ? DEFAULT_MAX_MESSAGES : maxMessages;
+        }
+
+        @com.fasterxml.jackson.annotation.JsonIgnore
+        public boolean resendable() {
+            return Boolean.TRUE.equals(idempotent);
+        }
+    }
+
     @com.fasterxml.jackson.annotation.JsonIgnore
     public boolean isA2a() {
         return RUNTIME_A2A.equals(runtime);
@@ -112,10 +146,31 @@ public record AgentSpec(
         return RUNTIME_REST.equals(runtime);
     }
 
-    /** The connection a remote runtime ({@code a2a}, {@code rest}) delegates through; null for native agents. */
+    /** Named so Jackson cannot mistake it for the {@code grpc} component's getter (as {@code isRest()} once did). */
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    public boolean usesGrpcRuntime() {
+        return RUNTIME_GRPC.equals(runtime);
+    }
+
+    /** {@code a2a}, {@code rest} or {@code grpc}: the run delegates through a connection and has no model. */
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    public boolean usesRemoteRuntime() {
+        return isA2a() || usesRestRuntime() || usesGrpcRuntime();
+    }
+
+    /** The connection a remote runtime delegates through; null for native agents. */
     @com.fasterxml.jackson.annotation.JsonIgnore
     public String remoteConnectionId() {
-        return isA2a() && remote != null ? remote.connectionId() : usesRestRuntime() && rest != null ? rest.connectionId() : null;
+        if (isA2a()) {
+            return remote == null ? null : remote.connectionId();
+        }
+        if (usesRestRuntime()) {
+            return rest == null ? null : rest.connectionId();
+        }
+        if (usesGrpcRuntime()) {
+            return grpc == null ? null : grpc.connectionId();
+        }
+        return null;
     }
 
     /** A pinned, published tool version the agent may call (Phase 2 slice 2.1). */

@@ -344,6 +344,30 @@ export interface AgentSpec {
   remote?: { connectionId: string | null; skill: string | null } | null;
   /** runtime 'rest' (slice 2.6): the REST_AGENT connection and the declared call mapping. */
   rest?: RestBinding | null;
+  /** runtime 'grpc' (slice 2.6b): the GRPC_AGENT connection, registered descriptors and the one method called. */
+  grpc?: GrpcBinding | null;
+}
+
+export interface GrpcBinding {
+  connectionId: string | null;
+  /** base64 FileDescriptorSet (protoc --include_imports --descriptor_set_out); part of the version's hash. */
+  descriptorSet: string | null;
+  service: string | null;
+  method: string | null;
+  promptField: string | null;
+  idempotent: boolean | null;
+  maxMessages: number | null;
+}
+
+/** One method of a registered descriptor set, as the Studio lists it. */
+export interface GrpcMethodInfo {
+  service: string;
+  method: string;
+  kind: 'unary' | 'server-stream' | 'client-stream' | 'bidi-stream';
+  callable: boolean;
+  requestType: string;
+  requestFields: { name: string; type: string; repeated: boolean; string: boolean }[];
+  responseType: string;
 }
 
 export interface RestEndpoint {
@@ -510,7 +534,7 @@ export interface ToolVersion {
 /** A connection granted to the workspace (no secret reference is exposed). */
 export interface WorkspaceConnection {
   id: string;
-  kind: 'HTTP_API' | 'MCP_SERVER' | string;
+  kind: 'HTTP_API' | 'MCP_SERVER' | 'A2A_AGENT' | 'REST_AGENT' | 'GRPC_AGENT' | string;
   authType: string;
   baseUrl: string;
   status: string;

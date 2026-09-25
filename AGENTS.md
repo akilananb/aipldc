@@ -93,8 +93,9 @@ and shows the draft → a PO/SquadLead approves via `POST .../approve-agent-resu
 | `core/.../port/SandboxPort` + `adapters/.../sandbox/` + `control-plane/.../sandbox/` + `agents/.../platform/SandboxToolRunner` + `agents/.../config/SandboxConfig` + `infra/k8s/sandbox.yaml` | Sandbox tools (docs/phase-2-execution-spec.md slice 2.4): enterprise image catalog (`sandbox_images`), `KubernetesJobSandbox` (Job per call under a gVisor RuntimeClass) and `DockerSandbox` (local dev under `runsc`), and the per-call credentialed `SandboxEgressProxy` |
 | `adapters/.../a2a/` + `agents/.../platform/{A2aRunner,A2aCardActivitiesImpl}` + `control-plane/.../connections/A2aCardService` + `core/.../workflow/A2aCard*` | A2A outbound delegation (docs/phase-2-execution-spec.md slice 2.5): `runtime: a2a` agents on `A2A_AGENT` connections, A2A 1.0/0.3 JSON-RPC client, remote task tracking, operator replies |
 | `agents/.../platform/RestAgentRunner` + `core/.../platform/AgentSpec.RestBinding` | Generic REST agents (docs/phase-2-execution-spec.md slice 2.6a): `runtime: rest` agents on `REST_AGENT` connections, a declared sync or async submit/status/cancel mapping |
+| `agents/.../platform/GrpcAgentRunner` + `core/.../platform/{GrpcDescriptors,AgentSpec.GrpcBinding}` + `control-plane/.../web/GrpcDescriptorsController` | Generic gRPC agents (docs/phase-2-execution-spec.md slice 2.6b): `runtime: grpc` agents on `GRPC_AGENT` connections (pinned CA, mTLS by `kv://` reference), descriptors registered in the version, unary and server-streaming calls |
 | `control-plane/.../runs/` + `agents/.../platform/` + `core/.../workflow/AgentRunWorkflow*` | Durable single-agent runs: `RunService` pins version+model on a `platform_runs` row and starts `AgentRunWorkflow`; the agents-side `AgentRunActivitiesImpl` renders, calls the model at runtime (`OpenAiCompatibleModelInvoker`) and records the outcome |
-| `control-plane/src/main/resources/db/migration/` | Flyway `V1__schema.sql` … `V23__a2a_runs.sql` |
+| `control-plane/src/main/resources/db/migration/` | Flyway `V1__schema.sql` … `V24__grpc_connections.sql` |
 | `agents/src/main/java/ai/pdlc/agents/{grill,po,plan,review,release,monitor,mention}/` | Per-domain LLM agent components |
 | `agents/src/main/java/ai/pdlc/agents/activities/` | `AgentActivitiesImpl`, `AgentContext` (best-effort reads), `RunRecorder` |
 | `agents/src/main/java/ai/pdlc/agents/templates/` | `PromptTemplates` (Mustache renderer) |
@@ -245,6 +246,11 @@ scripts/e2e-demo-phase4.sh   # + release pack -> gate 3 -> deploy -> monitor
   `idempotency: HEADER` bindings (same `Idempotency-Key`); a retry with a saved job id polls it and never resubmits.
   Record-component accessors on specs must not look like bean getters of another component (`isRest()` once hid `rest`
   from Jackson); mark helpers `@JsonIgnore` and name them so they cannot collide.
+- **gRPC agents** (slice 2.6b) run only through `GrpcAgentRunner`, calling only the method the version registered, with
+  message types from the version's own `FileDescriptorSet` (`GrpcDescriptors`) - never server reflection, never client or
+  bidi streaming. Connect to the address `EgressPolicy` checked (authority kept for TLS), with no proxy or retries; never
+  send a credential over `grpc://`; resolve CA/client-certificate PEM from `kv://` only in agents. Resend an unknown
+  outcome only for `idempotent` bindings (same `idempotency-key`); record a wire cancel as `SIGNALLED`, never as acknowledged.
 - **No linter/formatter configured anywhere** (no ESLint, Prettier, Checkstyle, Spotless,
   `.editorconfig`). Match surrounding code style by hand; TypeScript's only enforced gate is
   `tsc --noEmit` (strict mode) inside `npm run build`.

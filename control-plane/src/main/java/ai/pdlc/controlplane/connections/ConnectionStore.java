@@ -1,5 +1,7 @@
 package ai.pdlc.controlplane.connections;
 
+import ai.pdlc.controlplane.web.dto.ConnectionTls;
+
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
@@ -10,7 +12,16 @@ public interface ConnectionStore {
     record ConnectionRow(String id, String scope, String workspaceId, String kind, String authType, String secretRef,
                          String baseUrl, String status, OffsetDateTime expiresAt, OffsetDateTime createdAt,
                          String createdBy, OffsetDateTime updatedAt, String updatedBy, OffsetDateTime revokedAt,
-                         String revokedBy, String oauthClientId) {
+                         String revokedBy, String oauthClientId, ConnectionTls tls) {
+
+        /** Without TLS references (every kind but GRPC_AGENT). */
+        public ConnectionRow(String id, String scope, String workspaceId, String kind, String authType, String secretRef,
+                             String baseUrl, String status, OffsetDateTime expiresAt, OffsetDateTime createdAt,
+                             String createdBy, OffsetDateTime updatedAt, String updatedBy, OffsetDateTime revokedAt,
+                             String revokedBy, String oauthClientId) {
+            this(id, scope, workspaceId, kind, authType, secretRef, baseUrl, status, expiresAt, createdAt, createdBy,
+                    updatedAt, updatedBy, revokedAt, revokedBy, oauthClientId, null);
+        }
 
         /** Without an OAuth client id (every kind but OAUTH_CLIENT_CREDENTIALS MCP servers). */
         public ConnectionRow(String id, String scope, String workspaceId, String kind, String authType, String secretRef,
@@ -18,7 +29,7 @@ public interface ConnectionStore {
                              String createdBy, OffsetDateTime updatedAt, String updatedBy, OffsetDateTime revokedAt,
                              String revokedBy) {
             this(id, scope, workspaceId, kind, authType, secretRef, baseUrl, status, expiresAt, createdAt, createdBy,
-                    updatedAt, updatedBy, revokedAt, revokedBy, null);
+                    updatedAt, updatedBy, revokedAt, revokedBy, null, null);
         }
     }
 
@@ -38,6 +49,9 @@ public interface ConnectionStore {
     void revokeConnection(String id, String revokedBy);
 
     void setOAuthClientId(String id, String oauthClientId);
+
+    /** Replaces the TLS references of a GRPC_AGENT connection (null clears them). */
+    void setTls(String id, ConnectionTls tls);
 
     Optional<ModelRow> model(String id);
 

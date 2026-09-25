@@ -49,7 +49,7 @@ class ToolLoopTest {
     };
     private final StoredConversation stored = StoredConversation.attach(runs);
     private final AgentRunActivitiesImpl runner = new AgentRunActivitiesImpl(runs, ref -> "sk-test", model, tools, executor,
-            mock(ai.pdlc.core.port.NotifyPort.class), (A2aRunner) null, (RestAgentRunner) null);
+            mock(ai.pdlc.core.port.NotifyPort.class), (A2aRunner) null, (RestAgentRunner) null, (GrpcAgentRunner) null);
 
     private static AgentSpec agent(Integer maxTurns, Integer maxCalls) {
         return new AgentSpec("orders", "native", "Where is order {{input}}?",

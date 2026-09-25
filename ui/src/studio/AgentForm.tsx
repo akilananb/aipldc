@@ -1,13 +1,13 @@
-import { useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import CodeMirror from '@uiw/react-codemirror';
 import { markdown as markdownLang } from '@codemirror/lang-markdown';
 import { EditorView } from '@codemirror/view';
 import { Box, Button, Callout, Checkbox, Flex, IconButton, SegmentedControl, Select, Text, TextArea, TextField } from '@radix-ui/themes';
-import { Plus, RefreshCw, Trash2, Wand2 } from 'lucide-react';
+import { FileUp, Plus, RefreshCw, Trash2, Wand2 } from 'lucide-react';
 import { useMutation } from '@tanstack/react-query';
 import { errorMessage, studio } from '../api';
 import { useAppearance } from '../theme';
-import type { A2aCard, CatalogModel, ToolDefinition, WorkspaceConnection } from '../types';
+import type { A2aCard, CatalogModel, GrpcMethodInfo, ToolDefinition, WorkspaceConnection } from '../types';
 import { referencedVariables, type Draft } from './draft';
 
 interface Props {
@@ -180,17 +180,19 @@ export default function AgentForm({ draft, onChange, models, tools, readOnly, wo
 
       <Field
         label="Runs as"
-        hint="A model call, delegation to a remote A2A agent, or a call to an existing HTTP agent service through a declared mapping."
+        hint="A model call, delegation to a remote A2A agent, or a call to an existing HTTP or gRPC agent service through a declared mapping."
       >
         <SegmentedControl.Root
           value={draft.runtime}
           onValueChange={(v) => !readOnly && set('runtime', v)}
           aria-label="Runtime"
+          size={{ initial: '1', sm: '2' }}
           style={{ maxWidth: 560, width: '100%' }}
         >
           <SegmentedControl.Item value="native">Model</SegmentedControl.Item>
           <SegmentedControl.Item value="a2a">A2A agent</SegmentedControl.Item>
           <SegmentedControl.Item value="rest">REST</SegmentedControl.Item>
+          <SegmentedControl.Item value="grpc">gRPC</SegmentedControl.Item>
         </SegmentedControl.Root>
       </Field>
 
@@ -198,6 +200,8 @@ export default function AgentForm({ draft, onChange, models, tools, readOnly, wo
         <RemoteBinding draft={draft} set={set} readOnly={readOnly} workspaceId={workspaceId} connections={connections} />
       ) : draft.runtime === 'rest' ? (
         <RestMapping draft={draft} set={set} readOnly={readOnly} connections={connections} />
+      ) : draft.runtime === 'grpc' ? (
+        <GrpcMapping draft={draft} set={set} readOnly={readOnly} workspaceId={workspaceId} connections={connections} />
       ) : (
       <Flex gap="3" wrap="wrap">
         <Box style={{ flex: '1 1 260px' }}>
@@ -655,6 +659,241 @@ function RestMapping({
       </Flex>
       <Text size="1" color="gray">
         The service receives {'{"inputs": {…your variables}, "prompt": …}'}; the prompt is optional for REST agents.
+      </Text>
+    </Flex>
+  );
+}
+
+/** Base64 of a binary file, in chunks (descriptor sets are up to 512 KB). */
+function toBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  }
+  return btoa(binary);
+}
+
+/**
+ * How a grpc agent calls an existing gRPC service (slice 2.6b). The author registers the service's
+ * descriptor set with the version; the method list comes from those descriptors only (never from the
+ * service's reflection), and the agent can call exactly the one unary or server-streaming method chosen.
+ */
+function GrpcMapping({
+  draft,
+  set,
+  readOnly,
+  workspaceId,
+  connections,
+}: {
+  draft: Draft;
+  set: <K extends keyof Draft>(key: K, value: Draft[K]) => void;
+  readOnly: boolean;
+  workspaceId: string;
+  connections: WorkspaceConnection[];
+}) {
+  const services = connections.filter((c) => c.kind === 'GRPC_AGENT');
+  const [methods, setMethods] = useState<GrpcMethodInfo[] | null>(null);
+  const [fileError, setFileError] = useState<string | null>(null);
+  const load = useMutation({
+    mutationFn: (descriptorSet: string) => studio.grpcDescribe(workspaceId, descriptorSet),
+    onSuccess: setMethods,
+    onError: () => setMethods(null),
+  });
+  const loadMethods = load.mutate;
+  useEffect(() => {
+    if (draft.descriptorSet !== '') loadMethods(draft.descriptorSet);
+    // Only the descriptors registered when the editor opens; later uploads load explicitly.
+  }, []);
+  const key = draft.grpcService && draft.grpcMethod ? `${draft.grpcService}/${draft.grpcMethod}` : '';
+  const selected = methods?.find((m) => `${m.service}/${m.method}` === key) ?? null;
+  const variableNames = draft.variables.map((v) => v.name.trim()).filter((n) => n !== '');
+  const unknownVariables = selected ? variableNames.filter((n) => !selected.requestFields.some((f) => f.name === n)) : [];
+  const onFile = (file: File | undefined) => {
+    setFileError(null);
+    if (!file) return;
+    if (file.size > 512 * 1024) {
+      setFileError('The descriptor set is larger than 512 KB.');
+      return;
+    }
+    file.arrayBuffer().then((buffer) => {
+      const encoded = toBase64(buffer);
+      set('descriptorSet', encoded);
+      loadMethods(encoded);
+    });
+  };
+  return (
+    <Flex direction="column" gap="3">
+      <Box style={{ maxWidth: 560 }}>
+        <Field
+          label="Service"
+          hint="GRPC_AGENT connections granted to this workspace. Its bearer token, CA and client certificate never leave the connection."
+        >
+          <Select.Root value={draft.remoteConnection || undefined} disabled={readOnly} onValueChange={(v) => set('remoteConnection', v)}>
+            <Select.Trigger aria-label="Service connection" placeholder="Choose a connection" style={{ width: '100%' }} />
+            <Select.Content>
+              {services.map((c) => (
+                <Select.Item key={c.id} value={c.id} disabled={c.status !== 'ACTIVE'}>
+                  {c.id} — {c.baseUrl}
+                </Select.Item>
+              ))}
+            </Select.Content>
+          </Select.Root>
+          {services.length === 0 && (
+            <Text size="1" color="gray" as="p" mt="1">
+              No GRPC_AGENT connection is granted to this workspace; an enterprise Admin grants one.
+            </Text>
+          )}
+        </Field>
+      </Box>
+      <Field
+        label="Descriptor set"
+        hint="The service's FileDescriptorSet: protoc --include_imports --descriptor_set_out=agent.pb. It is stored with the version and is the only source of callable methods."
+      >
+        <Flex gap="2" align="center" wrap="wrap">
+          {!readOnly && (
+            <Button asChild variant="soft">
+              <label style={{ cursor: 'pointer' }}>
+                <FileUp size={14} /> Upload .pb
+                <input
+                  type="file"
+                  accept=".pb,.desc,.protoset,.bin,application/octet-stream"
+                  aria-label="Descriptor set file"
+                  style={{ display: 'none' }}
+                  onChange={(e) => onFile(e.target.files?.[0])}
+                />
+              </label>
+            </Button>
+          )}
+          <Button
+            variant="soft"
+            disabled={draft.descriptorSet === ''}
+            loading={load.isPending}
+            onClick={() => loadMethods(draft.descriptorSet)}
+          >
+            <RefreshCw size={14} /> Load methods
+          </Button>
+          <Text size="1" color="gray">
+            {draft.descriptorSet === ''
+              ? 'None registered'
+              : `${Math.round((draft.descriptorSet.length * 3) / 4 / 1024) || '<1'} KB registered`}
+          </Text>
+        </Flex>
+        {!readOnly && (
+          <TextArea
+            aria-label="Descriptor set (base64)"
+            placeholder="…or paste it as base64"
+            value={draft.descriptorSet}
+            rows={2}
+            mt="2"
+            style={{ fontFamily: 'var(--code-font-family)', fontSize: 12, width: '100%' }}
+            onChange={(e) => set('descriptorSet', e.target.value.trim())}
+          />
+        )}
+      </Field>
+      {fileError && (
+        <Callout.Root color="red" size="1">
+          <Callout.Text>{fileError}</Callout.Text>
+        </Callout.Root>
+      )}
+      {load.isError && (
+        <Callout.Root color="red" size="1">
+          <Callout.Text>{errorMessage(load.error)}</Callout.Text>
+        </Callout.Root>
+      )}
+      <Field label="Method" hint="Only unary and server-streaming methods can be called; streaming requests are not supported.">
+        {methods ? (
+          <Select.Root
+            value={selected ? key : undefined}
+            disabled={readOnly}
+            onValueChange={(v) => {
+              const m = methods.find((x) => `${x.service}/${x.method}` === v);
+              if (!m) return;
+              set('grpcService', m.service);
+              set('grpcMethod', m.method);
+            }}
+          >
+            <Select.Trigger aria-label="Method" placeholder="Choose a method" style={{ width: '100%', maxWidth: 560 }} />
+            <Select.Content>
+              {methods.map((m) => (
+                <Select.Item key={`${m.service}/${m.method}`} value={`${m.service}/${m.method}`} disabled={!m.callable}>
+                  {m.service}/{m.method} · {m.kind}
+                  {m.callable ? '' : ' (not callable)'}
+                </Select.Item>
+              ))}
+            </Select.Content>
+          </Select.Root>
+        ) : (
+          <Text size="2" color="gray">
+            {key ? `${key} (load the methods to check it)` : 'Upload or paste the descriptor set, then load its methods.'}
+          </Text>
+        )}
+        {methods && key !== '' && !selected && (
+          <Text size="1" color="amber" as="p" mt="1">
+            {key} is not in these descriptors; publishing will fail.
+          </Text>
+        )}
+      </Field>
+      {selected && (
+        <Text size="1" color="gray">
+          {selected.requestType} fields: {selected.requestFields.map((f) => `${f.name} (${f.repeated ? 'repeated ' : ''}${f.type})`).join(', ')}
+          . Each variable fills the field of the same name; the reply ({selected.responseType}
+          {selected.kind === 'server-stream' ? ', as a JSON array of messages' : ''}) is the output.
+        </Text>
+      )}
+      {unknownVariables.length > 0 && (
+        <Text size="1" color="amber">
+          Not request fields: {unknownVariables.join(', ')}. Rename them to match, or publishing will fail.
+        </Text>
+      )}
+      <Flex gap="3" wrap="wrap" align="end">
+        <Box style={{ flex: '1 1 220px' }}>
+          <Field label="Prompt field (optional)" hint="A string request field that receives the rendered prompt; needs a prompt.">
+            <Select.Root
+              value={draft.promptField || 'none'}
+              disabled={readOnly}
+              onValueChange={(v) => set('promptField', v === 'none' ? '' : v)}
+            >
+              <Select.Trigger aria-label="Prompt field" style={{ width: '100%' }} />
+              <Select.Content>
+                <Select.Item value="none">No prompt</Select.Item>
+                {(selected?.requestFields ?? [])
+                  .filter((f) => f.string && !variableNames.includes(f.name))
+                  .map((f) => (
+                    <Select.Item key={f.name} value={f.name}>
+                      {f.name}
+                    </Select.Item>
+                  ))}
+                {draft.promptField !== '' && !selected?.requestFields.some((f) => f.name === draft.promptField) && (
+                  <Select.Item value={draft.promptField}>{draft.promptField}</Select.Item>
+                )}
+              </Select.Content>
+            </Select.Root>
+          </Field>
+        </Box>
+        {selected?.kind === 'server-stream' && (
+          <Box style={{ flex: '0 1 180px' }}>
+            <Field label="Max messages" htmlFor="grpc-max-messages" hint="1–1000; empty = 100. More fails the run.">
+              <TextField.Root
+                id="grpc-max-messages"
+                value={draft.maxMessages}
+                disabled={readOnly}
+                placeholder="100"
+                onChange={(e) => set('maxMessages', e.target.value)}
+              />
+            </Field>
+          </Box>
+        )}
+      </Flex>
+      <Text as="label" size="2">
+        <Flex gap="2" align="center">
+          <Checkbox
+            checked={draft.grpcIdempotent}
+            disabled={readOnly}
+            onCheckedChange={(v) => set('grpcIdempotent', v === true)}
+          />
+          The method is idempotent: a call whose outcome is unknown may be resent (same idempotency-key metadata)
+        </Flex>
       </Text>
     </Flex>
   );

@@ -80,7 +80,7 @@ class AgentSpecValidatorTest {
 
         assertThat(AgentSpecValidator.validate(" ", empty, MODELS)).containsExactly(
                 "name is required",
-                "runtime must be \"native\", \"a2a\" or \"rest\"",
+                "runtime must be \"native\", \"a2a\", \"rest\" or \"grpc\"",
                 "prompt is required",
                 "model.model is required",
                 "limits.timeoutSeconds is required");
@@ -223,5 +223,63 @@ class AgentSpecValidatorTest {
         assertThat(read.rest()).isEqualTo(spec.rest());
         assertThat(ContentHash.ofAgent("r", read)).isEqualTo(ContentHash.ofAgent("r", spec));
         assertThat(AgentSpecValidator.validate("R", read, MODELS)).isEmpty();
+    }
+
+    static AgentSpec grpc(AgentSpec.GrpcBinding binding, String prompt, String... variables) {
+        return new AgentSpec("Calls the report agent", "grpc", prompt,
+                java.util.Arrays.stream(variables).map(v -> new AgentSpec.Variable(v, null, true)).toList(),
+                null, new AgentSpec.Limits(null, 120), null, null, null, null, binding);
+    }
+
+    static AgentSpec.GrpcBinding binding(String method, String promptField, Integer maxMessages) {
+        return new AgentSpec.GrpcBinding("report-grpc", GrpcFixtures.reportSet(), "demo.ReportAgent", method, promptField, false,
+                maxMessages);
+    }
+
+    @Test
+    void aGrpcAgentCallsOnlyADeclaredUnaryOrServerStreamingMethod() {
+        assertThat(AgentSpecValidator.validate("G", grpc(binding("Summarise", "prompt", null), "Summarise {{input}}", "input", "limit"),
+                MODELS)).isEmpty();
+        assertThat(AgentSpecValidator.validate("G", grpc(binding("Report", null, 50), null, "input"), MODELS)).isEmpty();
+
+        assertThat(AgentSpecValidator.validate("G", grpc(binding("Upload", null, null), null, "input"), MODELS))
+                .containsExactly("grpc method demo.ReportAgent/Upload is client-stream; only unary and server-streaming methods are callable");
+        assertThat(AgentSpecValidator.validate("G", grpc(binding("Delete", null, null), null), MODELS))
+                .containsExactly("grpc: service demo.ReportAgent has no method Delete");
+        AgentSpec.GrpcBinding corrupt = new AgentSpec.GrpcBinding("report-grpc", "%%%", "demo.ReportAgent", "Summarise", null, null, null);
+        assertThat(AgentSpecValidator.validate("G", grpc(corrupt, null), MODELS)).containsExactly("grpc: descriptorSet must be base64");
+    }
+
+    @Test
+    void aGrpcAgentsInputsMustLandInRealRequestFields() {
+        assertThat(AgentSpecValidator.validate("G", grpc(binding("Summarise", "limit", 5), "{{input}} {{region}}", "input", "region"),
+                MODELS)).containsExactly(
+                "variable \"region\" is not a field of demo.SummariseRequest",
+                "grpc.promptField must be a string field of demo.SummariseRequest",
+                "grpc.maxMessages is only for server-streaming methods");
+        assertThat(AgentSpecValidator.validate("G", grpc(binding("Summarise", "input", null), "{{input}}", "input"), MODELS))
+                .containsExactly("grpc.promptField \"input\" is also a variable");
+        assertThat(AgentSpecValidator.validate("G", grpc(binding("Summarise", null, null), "{{input}}", "input"), MODELS))
+                .containsExactly("a grpc agent with a prompt must name grpc.promptField to carry it");
+        assertThat(AgentSpecValidator.validate("G", grpc(binding("Report", null, 5000), null), MODELS))
+                .containsExactly("grpc.maxMessages must be between 1 and 1000");
+        AgentSpec withModel = new AgentSpec("x", "grpc", null, List.of(), new AgentSpec.ModelBinding("sonnet", List.of()),
+                new AgentSpec.Limits(null, 60), null, null, null, null, null);
+        assertThat(AgentSpecValidator.validate("G", withModel, MODELS)).containsExactly(
+                "a grpc agent has no model binding; the service chooses its own", "grpc is required for runtime \"grpc\"");
+    }
+
+    @Test
+    void aGrpcBindingSurvivesTheCanonicalJsonRoundTripAndLeavesOtherHashesAlone() {
+        AgentSpec spec = grpc(binding("Summarise", "prompt", null), "Summarise {{input}}", "input");
+        String json = ContentHash.canonicalJson(spec);
+
+        assertThat(json).contains("\"grpc\":{").doesNotContain("usesGrpcRuntime").doesNotContain("usesRemoteRuntime");
+        AgentSpec read = ContentHash.read(json, AgentSpec.class);
+        assertThat(read.grpc()).isEqualTo(spec.grpc());
+        assertThat(ContentHash.ofAgent("g", read)).isEqualTo(ContentHash.ofAgent("g", spec));
+        assertThat(ContentHash.canonicalJson(valid())).doesNotContain("grpc");
+        assertThat(ContentHash.canonicalJson(rest(asyncRest()))).doesNotContain("\"grpc\"");
+        assertThat(read.remoteConnectionId()).isEqualTo("report-grpc");
     }
 }

@@ -240,6 +240,13 @@ function RunDetail({
           {run.remote.question ? ` (service said “${run.remote.question}”)` : ''} · attempts {run.attempts}
           {run.remote.cancel ? ` · cancel ${run.remote.cancel.toLowerCase().replace('_', ' ')}` : ''}
         </Text>
+      ) : run.model == null && run.remote?.protocolVersion?.startsWith('grpc') ? (
+        <Text size="1" color="gray" as="div" mb="2">
+          gRPC service via {run.connectionId} ({run.remote.protocolVersion === 'grpc-server-stream' ? 'server stream' : 'unary'}) · state{' '}
+          {run.remote.state.toLowerCase()}
+          {run.remote.question ? ` (status ${run.remote.question})` : ''} · attempts {run.attempts}
+          {run.remote.cancel ? ` · cancel ${run.remote.cancel.toLowerCase().replace('_', ' ')}` : ''}
+        </Text>
       ) : run.model == null && run.remote == null ? (
         <Text size="1" color="gray" as="div" mb="2">
           Remote agent via {run.connectionId} · not answered yet · attempts {run.attempts}

@@ -1,5 +1,5 @@
 import { getIdentity, sendsDevHeaders, type AuthState } from './identity';
-import type { A2aCard, AgentDefinition, AgentSpec, AgentValidation, AgentVersion, Approval, CatalogModel, Effect, McpDiscovery, PlatformRun, SandboxImage, ToolCallRecord, ToolDefinition, ToolSpec, ToolVersion, Workspace, WorkspaceConnection } from './types';
+import type { A2aCard, AgentDefinition, GrpcMethodInfo, AgentSpec, AgentValidation, AgentVersion, Approval, CatalogModel, Effect, McpDiscovery, PlatformRun, SandboxImage, ToolCallRecord, ToolDefinition, ToolSpec, ToolVersion, Workspace, WorkspaceConnection } from './types';
 import type { AgentRun, AgentsStatus, ArtifactVersion, BoardComment, Comment, CommentIntent, DemoStatus, GrillQuestions, ItemDetail, ItemSummary, Project, ProjectRequest, QualityReport, ReleaseDocument, ScenarioReview, SpecDocs } from './types';
 
 export const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8081';
@@ -133,6 +133,9 @@ export const studio = {
   // Remote A2A agents (docs/phase-2-execution-spec.md slice 2.5)
   a2aCard: (wsId: string, connectionId: string) =>
     request<A2aCard>(`${ws(wsId)}/connections/${encodeURIComponent(connectionId)}/a2a-card`, { method: 'POST' }),
+  // gRPC agents (docs/phase-2-execution-spec.md slice 2.6b): methods of a registered descriptor set
+  grpcDescribe: (wsId: string, descriptorSet: string) =>
+    request<GrpcMethodInfo[]>(`${ws(wsId)}/grpc/describe`, { method: 'POST', body: JSON.stringify({ descriptorSet }) }),
   replyToRun: (wsId: string, runId: string, text: string) =>
     request<PlatformRun>(`${ws(wsId)}/runs/${encodeURIComponent(runId)}/input`, { method: 'POST', body: JSON.stringify({ text }) }),
   // Enterprise sandbox image catalog (docs/phase-2-execution-spec.md slice 2.4)

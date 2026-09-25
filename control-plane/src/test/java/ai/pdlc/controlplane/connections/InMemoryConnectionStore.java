@@ -45,7 +45,7 @@ public class InMemoryConnectionStore implements ConnectionStore {
         OffsetDateTime now = OffsetDateTime.now();
         return connections.putIfAbsent(r.id(), new ConnectionRow(r.id(), r.scope(), r.workspaceId(), r.kind(), r.authType(),
                 r.secretRef(), r.baseUrl(), "ACTIVE", r.expiresAt(), now, r.createdBy(), now, r.createdBy(), null, null,
-                r.oauthClientId())) == null;
+                r.oauthClientId(), r.tls())) == null;
     }
 
     @Override
@@ -53,7 +53,7 @@ public class InMemoryConnectionStore implements ConnectionStore {
         ConnectionRow r = connections.get(id);
         connections.put(id, new ConnectionRow(id, r.scope(), r.workspaceId(), r.kind(), r.authType(), secretRef, baseUrl,
                 r.status(), expiresAt, r.createdAt(), r.createdBy(), OffsetDateTime.now(), updatedBy, r.revokedAt(), r.revokedBy(),
-                r.oauthClientId()));
+                r.oauthClientId(), r.tls()));
     }
 
     @Override
@@ -62,7 +62,7 @@ public class InMemoryConnectionStore implements ConnectionStore {
         OffsetDateTime now = OffsetDateTime.now();
         connections.put(id, new ConnectionRow(id, r.scope(), r.workspaceId(), r.kind(), r.authType(), r.secretRef(),
                 r.baseUrl(), "REVOKED", r.expiresAt(), r.createdAt(), r.createdBy(), now, revokedBy, now, revokedBy,
-                r.oauthClientId()));
+                r.oauthClientId(), r.tls()));
     }
 
     @Override
@@ -70,7 +70,15 @@ public class InMemoryConnectionStore implements ConnectionStore {
         ConnectionRow r = connections.get(id);
         connections.put(id, new ConnectionRow(id, r.scope(), r.workspaceId(), r.kind(), r.authType(), r.secretRef(),
                 r.baseUrl(), r.status(), r.expiresAt(), r.createdAt(), r.createdBy(), r.updatedAt(), r.updatedBy(),
-                r.revokedAt(), r.revokedBy(), oauthClientId));
+                r.revokedAt(), r.revokedBy(), oauthClientId, r.tls()));
+    }
+
+    @Override
+    public void setTls(String id, ai.pdlc.controlplane.web.dto.ConnectionTls tls) {
+        ConnectionRow r = connections.get(id);
+        connections.put(id, new ConnectionRow(id, r.scope(), r.workspaceId(), r.kind(), r.authType(), r.secretRef(),
+                r.baseUrl(), r.status(), r.expiresAt(), r.createdAt(), r.createdBy(), r.updatedAt(), r.updatedBy(),
+                r.revokedAt(), r.revokedBy(), r.oauthClientId(), tls));
     }
 
     @Override
