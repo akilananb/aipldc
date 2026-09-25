@@ -33,6 +33,7 @@ public final class AgentSpecValidator {
     private static final Pattern POINTER = Pattern.compile("^(/([^~/]|~[01])*)*$");
     static final java.util.Set<String> REST_STATES = java.util.Set.of("WORKING", "COMPLETED", "FAILED", "CANCELED");
     public static final int MAX_POLL_SECONDS = 60;
+    public static final int MAX_STREAM_MESSAGES = 1_000;
     private static final Pattern TAG = Pattern.compile("\\{\\{(\\{?)\\s*([#^/&>=!]?)\\s*([^}]*?)\\s*}?}}");
 
     private AgentSpecValidator() {
@@ -50,10 +51,16 @@ public final class AgentSpecValidator {
         }
         boolean a2a = spec.isA2a();
         boolean rest = spec.usesRestRuntime();
-        boolean remoteRuntime = a2a || rest;
+        boolean grpc = spec.usesGrpcRuntime();
+        boolean remoteRuntime = spec.usesRemoteRuntime();
         if (!remoteRuntime && !AgentSpec.RUNTIME_NATIVE.equals(spec.runtime())) {
-            errors.add("runtime must be \"" + AgentSpec.RUNTIME_NATIVE + "\", \"" + AgentSpec.RUNTIME_A2A + "\" or \""
-                    + AgentSpec.RUNTIME_REST + "\"");
+            errors.add("runtime must be \"" + AgentSpec.RUNTIME_NATIVE + "\", \"" + AgentSpec.RUNTIME_A2A + "\", \""
+                    + AgentSpec.RUNTIME_REST + "\" or \"" + AgentSpec.RUNTIME_GRPC + "\"");
+        }
+        if (grpc) {
+            checkGrpc(spec, errors);
+        } else if (spec.grpc() != null) {
+            errors.add("grpc is only for runtime \"" + AgentSpec.RUNTIME_GRPC + "\"");
         }
         if (rest) {
             checkRest(spec, errors);
@@ -90,7 +97,7 @@ public final class AgentSpecValidator {
         }
 
         if (spec.prompt() == null || spec.prompt().isBlank()) {
-            if (!rest) {
+            if (!rest && !grpc) {
                 errors.add("prompt is required");
             }
         } else {
@@ -186,6 +193,70 @@ public final class AgentSpecValidator {
         }
         if (r.pollSeconds() != null && (r.pollSeconds() < 1 || r.pollSeconds() > MAX_POLL_SECONDS)) {
             errors.add("rest.pollSeconds must be between 1 and " + MAX_POLL_SECONDS);
+        }
+    }
+
+    /**
+     * A {@code grpc} agent: the registered descriptors must contain the declared method, which must be
+     * unary or server-streaming, and every input must land in a real request field.
+     */
+    private static void checkGrpc(AgentSpec spec, List<String> errors) {
+        if (spec.model() != null) {
+            errors.add("a grpc agent has no model binding; the service chooses its own");
+        }
+        if (!spec.toolsOrEmpty().isEmpty()) {
+            errors.add("a grpc agent has no tools; the service uses its own");
+        }
+        AgentSpec.GrpcBinding g = spec.grpc();
+        if (g == null) {
+            errors.add("grpc is required for runtime \"grpc\"");
+            return;
+        }
+        if (g.connectionId() == null || !CONNECTION_ID.matcher(g.connectionId()).matches()) {
+            errors.add("grpc.connectionId must name a GRPC_AGENT connection");
+        }
+        GrpcDescriptors.Resolved method;
+        try {
+            method = GrpcDescriptors.resolve(g.descriptorSet(), g.service(), g.method());
+        } catch (GrpcDescriptors.InvalidDescriptorsException e) {
+            errors.add("grpc: " + e.getMessage());
+            return;
+        }
+        if (!method.callable()) {
+            errors.add("grpc method " + method.fullMethodName() + " is "
+                    + GrpcDescriptors.kind(method.clientStreaming(), method.serverStreaming())
+                    + "; only unary and server-streaming methods are callable");
+        }
+        Set<String> variables = new HashSet<>();
+        if (spec.variables() != null) {
+            for (AgentSpec.Variable v : spec.variables()) {
+                if (v != null && v.name() != null) {
+                    variables.add(v.name());
+                    if (method.input().findFieldByName(v.name()) == null) {
+                        errors.add("variable \"" + v.name() + "\" is not a field of " + method.input().getFullName());
+                    }
+                }
+            }
+        }
+        if (g.promptField() != null) {
+            com.google.protobuf.Descriptors.FieldDescriptor f = method.input().findFieldByName(g.promptField());
+            if (f == null || !GrpcDescriptors.isString(f)) {
+                errors.add("grpc.promptField must be a string field of " + method.input().getFullName());
+            } else if (variables.contains(g.promptField())) {
+                errors.add("grpc.promptField \"" + g.promptField() + "\" is also a variable");
+            }
+            if (spec.prompt() == null || spec.prompt().isBlank()) {
+                errors.add("grpc.promptField needs a prompt to send");
+            }
+        } else if (spec.prompt() != null && !spec.prompt().isBlank()) {
+            errors.add("a grpc agent with a prompt must name grpc.promptField to carry it");
+        }
+        if (g.maxMessages() != null) {
+            if (!method.serverStreaming()) {
+                errors.add("grpc.maxMessages is only for server-streaming methods");
+            } else if (g.maxMessages() < 1 || g.maxMessages() > MAX_STREAM_MESSAGES) {
+                errors.add("grpc.maxMessages must be between 1 and " + MAX_STREAM_MESSAGES);
+            }
         }
     }
 

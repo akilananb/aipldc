@@ -9,6 +9,7 @@ import ai.pdlc.controlplane.web.ForbiddenException;
 import ai.pdlc.controlplane.web.NotFoundException;
 import ai.pdlc.controlplane.web.dto.ConnectionDto;
 import ai.pdlc.controlplane.web.dto.ConnectionRequest;
+import ai.pdlc.controlplane.web.dto.ConnectionTls;
 import ai.pdlc.controlplane.web.dto.ModelDto;
 import ai.pdlc.controlplane.web.dto.ModelRequest;
 import ai.pdlc.core.platform.EgressPolicy;
@@ -50,16 +51,24 @@ public class ConnectionService {
     public static final String A2A_AGENT = "A2A_AGENT";
     /** An existing HTTP agent service a rest agent calls through a declared mapping (slice 2.6). */
     public static final String REST_AGENT = "REST_AGENT";
+    /**
+     * An existing gRPC agent service a grpc agent calls (slice 2.6b): {@code grpcs://host:port}, or
+     * {@code grpc://host:port} (plaintext) only without credentials; optional pinned CA and mTLS client
+     * certificate by reference. No OAuth: there is no discovery to find an authorization server.
+     */
+    public static final String GRPC_AGENT = "GRPC_AGENT";
     public static final String OAUTH_CLIENT_CREDENTIALS = "OAUTH_CLIENT_CREDENTIALS";
-    static final Set<String> KINDS = Set.of(MODEL_PROVIDER, HTTP_API, MCP_SERVER, A2A_AGENT, REST_AGENT);
+    static final Set<String> KINDS = Set.of(MODEL_PROVIDER, HTTP_API, MCP_SERVER, A2A_AGENT, REST_AGENT, GRPC_AGENT);
     /**
      * Kinds whose base URL workspace tools or agents call, so it must pass the egress policy and can be
      * granted to workspaces.
      */
-    static final Set<String> TOOL_KINDS = Set.of(HTTP_API, MCP_SERVER, A2A_AGENT, REST_AGENT);
+    static final Set<String> TOOL_KINDS = Set.of(HTTP_API, MCP_SERVER, A2A_AGENT, REST_AGENT, GRPC_AGENT);
     /** Kinds that may authenticate with OAuth client credentials discovered from the server. */
     static final Set<String> OAUTH_KINDS = Set.of(MCP_SERVER, A2A_AGENT, REST_AGENT);
     static final Set<String> AUTH_TYPES = Set.of("API_KEY", "NONE", OAUTH_CLIENT_CREDENTIALS);
+    /** {@code grpcs://host:port} or {@code grpc://host:port}: an authority and nothing else. */
+    static final Pattern GRPC_TARGET = Pattern.compile("^grpcs?://(\\[[0-9A-Fa-f:.]+]|[A-Za-z0-9.-]+):([0-9]{1,5})$");
     static final Pattern OAUTH_CLIENT_ID = Pattern.compile("^[A-Za-z0-9._:@/-]{1,200}$");
 
     private final ConnectionStore store;
@@ -94,7 +103,8 @@ public class ConnectionService {
         throwIfAny(errors);
         ConnectionRow row = new ConnectionRow(request.id(), "ENTERPRISE", null, request.kind(), request.authType(),
                 blankToNull(request.secretRef()), request.baseUrl(), "ACTIVE", request.expiresAt(), null,
-                identity.user(), null, identity.user(), null, null, blankToNull(request.oauthClientId()));
+                identity.user(), null, identity.user(), null, null, blankToNull(request.oauthClientId()),
+                request.tls() == null || request.tls().empty() ? null : trimmed(request.tls()));
         if (!store.insertConnection(row)) {
             throw new ConflictException("Connection " + request.id() + " already exists");
         }
@@ -109,12 +119,14 @@ public class ConnectionService {
         List<String> errors = new ArrayList<>();
         String clientId = OAUTH_CLIENT_CREDENTIALS.equals(existing.authType()) && blank(request.oauthClientId())
                 ? existing.oauthClientId() : request.oauthClientId();
+        ConnectionTls tls = request.tls() == null ? existing.tls() : request.tls().empty() ? null : trimmed(request.tls());
         validateCredentials(new ConnectionRequest(id, existing.kind(), existing.authType(), request.secretRef(),
-                request.baseUrl(), request.expiresAt(), clientId), errors);
+                request.baseUrl(), request.expiresAt(), clientId, tls), errors);
         checkEgress(existing.kind(), request.baseUrl(), errors);
         throwIfAny(errors);
         store.updateConnection(id, blankToNull(request.secretRef()), request.baseUrl(), request.expiresAt(), identity.user());
         store.setOAuthClientId(id, blankToNull(clientId));
+        store.setTls(id, tls);
         return toDto(store.connection(id).orElseThrow());
     }
 
@@ -164,7 +176,7 @@ public class ConnectionService {
         return store.grantedTo(workspaceId).stream()
                 .map(r -> new ConnectionDto(r.id(), r.scope(), r.workspaceId(), r.kind(), r.authType(), null, r.baseUrl(),
                         r.status(), r.expiresAt(), r.createdAt(), r.createdBy(), r.updatedAt(), r.updatedBy(),
-                        r.revokedAt(), r.revokedBy(), r.oauthClientId()))
+                        r.revokedAt(), r.revokedBy(), r.oauthClientId(), null))
                 .toList();
     }
 
@@ -265,9 +277,52 @@ public class ConnectionService {
         } else if (request.secretRef() == null || !SECRET_REF.matcher(request.secretRef()).matches()) {
             errors.add("secretRef must be a secret reference matching " + SECRET_REF.pattern() + " - never a secret value");
         }
-        if (request.baseUrl() == null || !(request.baseUrl().startsWith("https://") || request.baseUrl().startsWith("http://"))) {
-            errors.add("baseUrl must start with http:// or https://");
+        if (GRPC_AGENT.equals(request.kind())) {
+            validateGrpcTarget(request, errors);
+        } else {
+            if (request.baseUrl() == null || !(request.baseUrl().startsWith("https://") || request.baseUrl().startsWith("http://"))) {
+                errors.add("baseUrl must start with http:// or https://");
+            }
+            if (request.tls() != null && !request.tls().empty()) {
+                errors.add("tls applies only to " + GRPC_AGENT + " connections");
+            }
         }
+    }
+
+    /**
+     * A gRPC target and its TLS references. Plaintext ({@code grpc://}) carries no credential and no TLS
+     * material, so a bearer or client key is never sent where anyone on the path could read it.
+     */
+    private static void validateGrpcTarget(ConnectionRequest request, List<String> errors) {
+        java.util.regex.Matcher m = request.baseUrl() == null ? null : GRPC_TARGET.matcher(request.baseUrl());
+        if (m == null || !m.matches() || Integer.parseInt(m.group(2)) < 1 || Integer.parseInt(m.group(2)) > 65_535) {
+            errors.add("baseUrl must be grpcs://host:port (or grpc://host:port without credentials)");
+            return;
+        }
+        ConnectionTls tls = request.tls();
+        boolean plaintext = request.baseUrl().startsWith("grpc://");
+        if (plaintext && !"NONE".equals(request.authType())) {
+            errors.add("a grpc:// (plaintext) connection cannot carry credentials; use grpcs://");
+        }
+        if (plaintext && tls != null && !tls.empty()) {
+            errors.add("a grpc:// (plaintext) connection has no TLS settings; use grpcs://");
+        }
+        if (tls == null) {
+            return;
+        }
+        for (String ref : java.util.Arrays.asList(tls.caRef(), tls.clientCertRef(), tls.clientKeyRef())) {
+            if (!blank(ref) && !SECRET_REF.matcher(ref.strip()).matches()) {
+                errors.add("tls references must match " + SECRET_REF.pattern() + " - never PEM content");
+                break;
+            }
+        }
+        if (blank(tls.clientCertRef()) != blank(tls.clientKeyRef())) {
+            errors.add("tls.clientCertRef and tls.clientKeyRef go together (mTLS needs both)");
+        }
+    }
+
+    private static ConnectionTls trimmed(ConnectionTls tls) {
+        return new ConnectionTls(blankToNull(tls.caRef()), blankToNull(tls.clientCertRef()), blankToNull(tls.clientKeyRef()));
     }
 
     private void checkEgress(String kind, String baseUrl, List<String> errors) {
@@ -276,7 +331,9 @@ public class ConnectionService {
         }
         URI uri;
         try {
-            uri = URI.create(baseUrl);
+            // A gRPC target is checked as the https origin with the same host and port.
+            uri = URI.create(baseUrl.startsWith("grpcs://") || baseUrl.startsWith("grpc://")
+                    ? "https://" + baseUrl.substring(baseUrl.indexOf("://") + 3) : baseUrl);
         } catch (IllegalArgumentException e) {
             errors.add("baseUrl is not a valid URL");
             return;
@@ -326,6 +383,6 @@ public class ConnectionService {
     static ConnectionDto toDto(ConnectionRow r) {
         return new ConnectionDto(r.id(), r.scope(), r.workspaceId(), r.kind(), r.authType(), r.secretRef(), r.baseUrl(),
                 r.status(), r.expiresAt(), r.createdAt(), r.createdBy(), r.updatedAt(), r.updatedBy(), r.revokedAt(),
-                r.revokedBy(), r.oauthClientId());
+                r.revokedBy(), r.oauthClientId(), r.tls());
     }
 }

@@ -67,23 +67,27 @@ public class AgentRunActivitiesImpl implements AgentRunActivities {
     private final NotifyPort notify;
     private final A2aRunner a2a;
     private final RestAgentRunner rest;
+    private final GrpcAgentRunner grpc;
     private final Clock clock;
 
     @Autowired
     public AgentRunActivitiesImpl(RunStore runs, SecretsPort secrets, ModelInvoker models, ToolStore tools,
-                                  ToolExecutor executor, NotifyPort notify, A2aRunner a2a, RestAgentRunner rest) {
-        this(runs, secrets, models, tools, executor, notify, a2a, rest, Clock.systemUTC());
+                                  ToolExecutor executor, NotifyPort notify, A2aRunner a2a, RestAgentRunner rest,
+                                  GrpcAgentRunner grpc) {
+        this(runs, secrets, models, tools, executor, notify, a2a, rest, grpc, Clock.systemUTC());
     }
 
     AgentRunActivitiesImpl(RunStore runs, SecretsPort secrets, ModelInvoker models, ToolStore tools,
                            ToolExecutor executor, NotifyPort notify, Clock clock) {
-        this(runs, secrets, models, tools, executor, notify, null, null, clock);
+        this(runs, secrets, models, tools, executor, notify, null, null, null, clock);
     }
 
     AgentRunActivitiesImpl(RunStore runs, SecretsPort secrets, ModelInvoker models, ToolStore tools,
-                           ToolExecutor executor, NotifyPort notify, A2aRunner a2a, RestAgentRunner rest, Clock clock) {
+                           ToolExecutor executor, NotifyPort notify, A2aRunner a2a, RestAgentRunner rest,
+                           GrpcAgentRunner grpc, Clock clock) {
         this.a2a = a2a;
         this.rest = rest;
+        this.grpc = grpc;
         this.runs = runs;
         this.secrets = secrets;
         this.models = models;
@@ -123,6 +127,14 @@ public class AgentRunActivitiesImpl implements AgentRunActivities {
             String prompt = spec.prompt() == null || spec.prompt().isBlank() ? null
                     : PromptRenderer.render(run.contentHash(), spec.prompt(), run.inputs());
             return rest.invoke(run, spec, prompt);
+        }
+        if (spec.usesGrpcRuntime()) {
+            if (grpc == null) {
+                throw reject("grpc agents are not supported by this worker");
+            }
+            String prompt = spec.prompt() == null || spec.prompt().isBlank() ? null
+                    : PromptRenderer.render(run.contentHash(), spec.prompt(), run.inputs());
+            return grpc.invoke(run, spec, prompt);
         }
         String unavailable = unavailable(run);
         if (unavailable != null) {
@@ -407,6 +419,9 @@ public class AgentRunActivitiesImpl implements AgentRunActivities {
         }
         if (rest != null) {
             rest.cancelRemote(runId);
+        }
+        if (grpc != null) {
+            grpc.cancelRemote(runId);
         }
     }
 

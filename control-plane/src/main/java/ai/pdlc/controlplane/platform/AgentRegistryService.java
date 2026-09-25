@@ -138,7 +138,7 @@ public class AgentRegistryService {
         }
         VersionRow version = registry.verified(registry.findVersion(workspaceId, id, row.currentVersion()));
         AgentSpec spec = registry.spec(version.specJson());
-        if (spec.isA2a() || spec.usesRestRuntime()) {
+        if (spec.usesRemoteRuntime()) {
             List<String> problems = remoteProblems(workspaceId, spec);
             if (!problems.isEmpty()) {
                 throw new ConflictException("Agent " + id + " v" + version.version() + " cannot run: " + String.join("; ", problems));
@@ -180,7 +180,7 @@ public class AgentRegistryService {
 
     private List<String> check(String workspaceId, String name, AgentSpec spec) {
         List<String> errors = new ArrayList<>(AgentSpecValidator.validate(name, spec, models.authorizedModels()));
-        if (spec != null && (spec.isA2a() || spec.usesRestRuntime())) {
+        if (spec != null && (spec.usesRemoteRuntime())) {
             errors.addAll(remoteProblems(workspaceId, spec));
         } else if (spec != null) {
             errors.addAll(tools.pinProblems(workspaceId, spec.toolsOrEmpty()));
@@ -190,7 +190,7 @@ public class AgentRegistryService {
 
     /**
      * A remote runtime's connection must be usable by the workspace now: {@code A2A_AGENT} for a2a,
-     * {@code REST_AGENT} for rest. Malformed bindings are the validator's to report.
+     * {@code REST_AGENT} for rest, {@code GRPC_AGENT} for grpc. Malformed bindings are the validator's to report.
      */
     private List<String> remoteProblems(String workspaceId, AgentSpec spec) {
         String connectionId = spec.remoteConnectionId();
@@ -198,7 +198,11 @@ public class AgentRegistryService {
             return List.of();
         }
         return connections.toolConnectionProblems(connectionId, workspaceId,
-                spec.isA2a() ? ConnectionService.A2A_AGENT : ConnectionService.REST_AGENT);
+                switch (spec.runtime()) {
+                    case AgentSpec.RUNTIME_A2A -> ConnectionService.A2A_AGENT;
+                    case AgentSpec.RUNTIME_REST -> ConnectionService.REST_AGENT;
+                    default -> ConnectionService.GRPC_AGENT;
+                });
     }
 
     private AgentDefinitionDto toDto(DefinitionRow row) {

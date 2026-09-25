@@ -55,7 +55,7 @@ class A2aRunnerTest {
             return Optional.of(new Invocation(i.runId(), i.workspaceId(), status, i.agentId(), i.version(), i.contentHash(), i.name(),
                     i.specJson(), i.inputs(), i.model(), i.providerModel(), i.modelEnabled(), i.connectionId(), i.connectionStatus(),
                     i.connectionExpiresAt(), i.authType(), i.secretRef(), i.baseUrl(), i.attempts(), i.activeMs(), i.connectionKind(),
-                    i.oauthClientId(), i.granted()));
+                    i.oauthClientId(), i.granted(), i.tls()));
         }
 
         @Override

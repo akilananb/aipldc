@@ -28,7 +28,18 @@ public class RunStore {
                              String model, String providerModel, Boolean modelEnabled, String connectionId,
                              String connectionStatus, OffsetDateTime connectionExpiresAt, String authType,
                              String secretRef, String baseUrl, int attempts, long activeMs, String connectionKind,
-                             String oauthClientId, boolean granted) {
+                             String oauthClientId, boolean granted, TlsRefs tls) {
+
+        /** Slice 2.1-2.6a shape (no TLS references: every connection kind but GRPC_AGENT). */
+        public Invocation(UUID runId, String workspaceId, String status, String agentId, int version, String contentHash,
+                          String name, String specJson, Map<String, String> inputs, String model, String providerModel,
+                          Boolean modelEnabled, String connectionId, String connectionStatus, OffsetDateTime connectionExpiresAt,
+                          String authType, String secretRef, String baseUrl, int attempts, long activeMs, String connectionKind,
+                          String oauthClientId, boolean granted) {
+            this(runId, workspaceId, status, agentId, version, contentHash, name, specJson, inputs, model, providerModel,
+                    modelEnabled, connectionId, connectionStatus, connectionExpiresAt, authType, secretRef, baseUrl, attempts,
+                    activeMs, connectionKind, oauthClientId, granted, null);
+        }
 
         /** Native-run shape (a model-provider connection, which is never granted per workspace). */
         public Invocation(UUID runId, String workspaceId, String status, String agentId, int version, String contentHash,
@@ -37,8 +48,12 @@ public class RunStore {
                           String authType, String secretRef, String baseUrl, int attempts, long activeMs) {
             this(runId, workspaceId, status, agentId, version, contentHash, name, specJson, inputs, model, providerModel,
                     modelEnabled, connectionId, connectionStatus, connectionExpiresAt, authType, secretRef, baseUrl, attempts,
-                    activeMs, "MODEL_PROVIDER", null, false);
+                    activeMs, "MODEL_PROVIDER", null, false, null);
         }
+    }
+
+    /** A GRPC_AGENT connection's TLS material, as {@code kv://} references (slice 2.6b); resolved only at call time. */
+    public record TlsRefs(String caRef, String clientCertRef, String clientKeyRef) {
     }
 
     /** The remote task an a2a run follows (slice 2.5); {@code cancel} is what the remote agent did with a cancel. */
@@ -65,7 +80,7 @@ public class RunStore {
                        v.name, v.spec_json,
                        m.enabled AS model_enabled,
                        c.status AS connection_status, c.expires_at, c.auth_type, c.secret_ref, c.base_url,
-                       c.kind AS connection_kind, c.oauth_client_id,
+                       c.kind AS connection_kind, c.oauth_client_id, c.tls_ca_ref, c.tls_client_cert_ref, c.tls_client_key_ref,
                        EXISTS (SELECT 1 FROM connection_grants g
                                WHERE g.connection_id = c.id AND g.workspace_id = r.workspace_id) AS granted
                 FROM platform_runs r
@@ -81,8 +96,13 @@ public class RunStore {
                 rs.getString("connection_id"), rs.getString("connection_status"),
                 rs.getObject("expires_at", OffsetDateTime.class), rs.getString("auth_type"),
                 rs.getString("secret_ref"), rs.getString("base_url"), rs.getInt("attempts"), rs.getLong("active_ms"),
-                rs.getString("connection_kind"), rs.getString("oauth_client_id"), rs.getBoolean("granted")), runId);
+                rs.getString("connection_kind"), rs.getString("oauth_client_id"), rs.getBoolean("granted"),
+                tlsRefs(rs.getString("tls_ca_ref"), rs.getString("tls_client_cert_ref"), rs.getString("tls_client_key_ref"))), runId);
         return rows.stream().findFirst();
+    }
+
+    private static TlsRefs tlsRefs(String ca, String cert, String key) {
+        return ca == null && cert == null && key == null ? null : new TlsRefs(ca, cert, key);
     }
 
     /**

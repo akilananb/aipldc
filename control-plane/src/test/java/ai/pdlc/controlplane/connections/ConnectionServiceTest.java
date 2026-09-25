@@ -213,4 +213,46 @@ class ConnectionServiceTest {
         assertThat(service.toolConnectionProblems("partner-agent", "engineering", ConnectionService.MCP_SERVER))
                 .singleElement().asString().contains("not an MCP_SERVER connection");
     }
+
+    @Test
+    void grpcAgentsUseGrpcsWithOptionalPinnedCaAndMtlsByReferenceOnly() {
+        workspaces.create(new ai.pdlc.controlplane.web.dto.WorkspaceRequest("engineering", "Engineering", java.util.List.of("lead@acme")), ADMIN);
+        ConnectionDto tls = service.createConnection(new ConnectionRequest("report-grpc", "GRPC_AGENT", "API_KEY", "kv://grpc-key",
+                "grpcs://api.example:8443", null, null,
+                new ai.pdlc.controlplane.web.dto.ConnectionTls("kv://grpc-ca", "kv://grpc-client-cert", "kv://grpc-client-key")), ADMIN);
+        assertThat(tls.tls().clientKeyRef()).isEqualTo("kv://grpc-client-key");
+        service.grant("report-grpc", "engineering", ADMIN);
+        assertThat(service.workspaceConnections("engineering", new Identity("lead@acme", "SquadLead")))
+                .singleElement().satisfies(c -> assertThat(c.tls()).isNull());
+
+        ConnectionDto rotated = service.updateConnection("report-grpc", new ConnectionRequest(null, null, null, "kv://grpc-key-2",
+                "grpcs://api.example:8443", null), ADMIN);
+        assertThat(rotated.tls().caRef()).isEqualTo("kv://grpc-ca");
+        ConnectionDto cleared = service.updateConnection("report-grpc", new ConnectionRequest(null, null, null, "kv://grpc-key-2",
+                "grpcs://api.example:8443", null, null, new ai.pdlc.controlplane.web.dto.ConnectionTls(null, null, "")), ADMIN);
+        assertThat(cleared.tls()).isNull();
+
+        assertThatThrownBy(() -> service.createConnection(new ConnectionRequest("plain", "GRPC_AGENT", "API_KEY", "kv://grpc-key",
+                "grpc://api.example:9000", null), ADMIN))
+                .hasMessageContaining("a grpc:// (plaintext) connection cannot carry credentials; use grpcs://");
+        assertThat(service.createConnection(new ConnectionRequest("plain", "GRPC_AGENT", "NONE", null,
+                "grpc://api.example:9000", null), ADMIN).status()).isEqualTo("ACTIVE");
+        assertThatThrownBy(() -> service.createConnection(new ConnectionRequest("half", "GRPC_AGENT", "NONE", null,
+                "grpcs://api.example:443", null, null, new ai.pdlc.controlplane.web.dto.ConnectionTls(null, "kv://c", null)), ADMIN))
+                .hasMessageContaining("tls.clientCertRef and tls.clientKeyRef go together");
+        assertThatThrownBy(() -> service.createConnection(new ConnectionRequest("pem", "GRPC_AGENT", "NONE", null,
+                "grpcs://api.example:443", null, null, new ai.pdlc.controlplane.web.dto.ConnectionTls("-----BEGIN CERTIFICATE-----", null, null)),
+                ADMIN)).hasMessageContaining("never PEM content");
+        assertThatThrownBy(() -> service.createConnection(new ConnectionRequest("path", "GRPC_AGENT", "NONE", null,
+                "grpcs://api.example:443/v1", null), ADMIN)).hasMessageContaining("baseUrl must be grpcs://host:port");
+        assertThatThrownBy(() -> service.createConnection(new ConnectionRequest("https", "GRPC_AGENT", "NONE", null,
+                "https://api.example", null), ADMIN)).hasMessageContaining("baseUrl must be grpcs://host:port");
+        assertThatThrownBy(() -> service.createConnection(new ConnectionRequest("oauth", "GRPC_AGENT", "OAUTH_CLIENT_CREDENTIALS",
+                "kv://s", "grpcs://api.example:443", null, "client"), ADMIN)).hasMessageContaining("only supported for");
+        assertThatThrownBy(() -> service.createConnection(new ConnectionRequest("meta", "GRPC_AGENT", "NONE", null,
+                "grpcs://169.254.169.254:443", null), ADMIN)).hasMessageContaining("not an allowed destination");
+        assertThatThrownBy(() -> service.createConnection(new ConnectionRequest("resttls", "REST_AGENT", "NONE", null,
+                "https://api.example", null, null, new ai.pdlc.controlplane.web.dto.ConnectionTls("kv://ca", null, null)), ADMIN))
+                .hasMessageContaining("tls applies only to GRPC_AGENT connections");
+    }
 }

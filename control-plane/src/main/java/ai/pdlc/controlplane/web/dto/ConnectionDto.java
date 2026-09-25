@@ -6,5 +6,13 @@ import java.time.OffsetDateTime;
 public record ConnectionDto(String id, String scope, String workspaceId, String kind, String authType, String secretRef,
                             String baseUrl, String status, OffsetDateTime expiresAt, OffsetDateTime createdAt,
                             String createdBy, OffsetDateTime updatedAt, String updatedBy, OffsetDateTime revokedAt,
-                            String revokedBy, String oauthClientId) {
+                            String revokedBy, String oauthClientId, ConnectionTls tls) {
+
+    public ConnectionDto(String id, String scope, String workspaceId, String kind, String authType, String secretRef,
+                         String baseUrl, String status, OffsetDateTime expiresAt, OffsetDateTime createdAt,
+                         String createdBy, OffsetDateTime updatedAt, String updatedBy, OffsetDateTime revokedAt,
+                         String revokedBy, String oauthClientId) {
+        this(id, scope, workspaceId, kind, authType, secretRef, baseUrl, status, expiresAt, createdAt, createdBy, updatedAt,
+                updatedBy, revokedAt, revokedBy, oauthClientId, null);
+    }
 }

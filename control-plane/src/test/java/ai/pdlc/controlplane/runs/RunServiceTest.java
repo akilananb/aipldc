@@ -292,4 +292,34 @@ class RunServiceTest {
         assertThat(registry.validate("engineering", "svc2", AUTHOR).errors()).singleElement().asString()
                 .contains("wrong-kind is not an REST_AGENT connection");
     }
+
+    @Test
+    void aGrpcRunPinsItsGrpcAgentConnectionAndHasNoModel() {
+        registries.connections().createConnection(new ai.pdlc.controlplane.web.dto.ConnectionRequest("report-grpc", "GRPC_AGENT",
+                "API_KEY", "kv://grpc-key", "grpcs://api.example:8443", null), IT);
+        var file = com.google.protobuf.DescriptorProtos.FileDescriptorProto.newBuilder().setName("demo.proto").setPackage("demo")
+                .setSyntax("proto3")
+                .addMessageType(com.google.protobuf.DescriptorProtos.DescriptorProto.newBuilder().setName("Req")
+                        .addField(com.google.protobuf.DescriptorProtos.FieldDescriptorProto.newBuilder().setName("input").setNumber(1)
+                                .setType(com.google.protobuf.DescriptorProtos.FieldDescriptorProto.Type.TYPE_STRING)))
+                .addService(com.google.protobuf.DescriptorProtos.ServiceDescriptorProto.newBuilder().setName("Agent")
+                        .addMethod(com.google.protobuf.DescriptorProtos.MethodDescriptorProto.newBuilder().setName("Run")
+                                .setInputType(".demo.Req").setOutputType(".demo.Req")))
+                .build();
+        String set = java.util.Base64.getEncoder().encodeToString(
+                com.google.protobuf.DescriptorProtos.FileDescriptorSet.newBuilder().addFile(file).build().toByteArray());
+        AgentSpec spec = new AgentSpec("Calls a gRPC service", "grpc", null, List.of(new AgentSpec.Variable("input", null, true)),
+                null, new AgentSpec.Limits(null, 30), null, null, null, null,
+                new AgentSpec.GrpcBinding("report-grpc", set, "demo.Agent", "Run", null, false, null));
+        AgentDefinitionDto created = registry.create("engineering", new AgentDraftRequest("grpc", "gRPC", spec, null), AUTHOR);
+        assertThat(registry.validate("engineering", "grpc", AUTHOR).errors())
+                .containsExactly("connection report-grpc is not granted to workspace engineering");
+
+        registries.connections().grant("report-grpc", "engineering", IT);
+        registry.publish("engineering", "grpc", created.draftRevision(), LEAD);
+        RunDto run = service.start("engineering", "grpc", new StartRunRequest(Map.of("input", "Q3"), null), OPERATOR);
+
+        assertThat(run.model()).isNull();
+        assertThat(run.connectionId()).isEqualTo("report-grpc");
+    }
 }

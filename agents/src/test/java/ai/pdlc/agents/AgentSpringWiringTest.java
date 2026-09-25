@@ -110,7 +110,7 @@ class AgentSpringWiringTest {
                     ai.pdlc.agents.platform.McpToolCaller.class, ToolExecutor.class, AgentRunActivitiesImpl.class,
                     ai.pdlc.agents.platform.McpDiscoveryActivitiesImpl.class, ai.pdlc.agents.config.SandboxConfig.class,
                     ai.pdlc.agents.platform.A2aRunner.class, ai.pdlc.agents.platform.A2aCardActivitiesImpl.class,
-                    ai.pdlc.agents.platform.RestAgentRunner.class);
+                    ai.pdlc.agents.platform.RestAgentRunner.class, ai.pdlc.agents.platform.GrpcAgentRunner.class);
             ctx.refresh();
 
             // Sandbox tools default to off: every call is refused (no isolation runtime).
