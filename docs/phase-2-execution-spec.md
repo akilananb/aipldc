@@ -1,6 +1,6 @@
 # Phase 2 execution spec: governed execution and federation
 
-This spec turns Phase 2 of [configurable-agent-platform.md](configurable-agent-platform.md) into slices, in the same format as [phase-1-execution-spec.md](phase-1-execution-spec.md). **Slices 2.1–2.4 are implemented**; slices 2.5–2.8 are specified and not yet built.
+This spec turns Phase 2 of [configurable-agent-platform.md](configurable-agent-platform.md) into slices, in the same format as [phase-1-execution-spec.md](phase-1-execution-spec.md). **Slices 2.1–2.5 are implemented**; slices 2.6–2.8 are specified and not yet built.
 
 **Phase 2 exit evidence** (from the roadmap):
 
@@ -310,6 +310,68 @@ Every call, allowed or denied, is recorded in `platform_tool_calls`: run, attemp
 - **Registry:** `AgentSpec.runtime = "a2a"` names a connection and the remote skill.
 - **Durability:** the remote task id is persisted as soon as it's known. The invocation identity is reused across retries, and an unknown outcome is reconciled through status.
 - **Exit:** a controlled remote A2A agent completes a task, pauses at input-required, is cancelled, and fails remotely. Each case is shown with honest status semantics.
+
+**As built:**
+
+- **Registry.**
+  - `AgentSpec` gains `remote {connectionId, skill}` (NON_NULL, so existing versions keep their hashes).
+  - `runtime: "a2a"` requires `remote` and forbids a model binding and tools. The prompt still renders the message sent, and `limits.timeoutSeconds` and `outputSchema` still apply.
+  - A new connection kind, `A2A_AGENT`, holds the agent's origin. It is egress-checked on save, granted to workspaces like tool connections, and may use a static bearer or OAuth client credentials.
+  - Publishing and starting an a2a agent require that connection to be active, unexpired and granted. The run pins the connection, and it has no model (V23 makes `platform_runs.model` nullable).
+- **Client** (`adapters/.../a2a/A2aClient`): the JSON-RPC binding of **A2A 1.0** or **0.3**, whichever the card offers, preferring 1.0.
+  - 1.0 uses `SendMessage`/`SendStreamingMessage`/`GetTask`/`CancelTask`, ProtoJSON enums and `A2A-Version: 1.0`. 0.3 uses `message/send`/`message/stream`/`tasks/get`/`tasks/cancel` with `kind`-tagged objects.
+  - The same rules apply as for the MCP client: the egress guard on every URL, no redirects, a hard deadline including a stalled event stream, byte caps, and `maybeSent` on timeouts.
+  - Auth reuses `McpAuth`/`McpOAuth` (bearer, or RFC 9728 → 8414 → client credentials with `resource`).
+- **The card is not a trust credential.** The platform takes only the skill list, the version and the JSON-RPC endpoint from it, and the endpoint must have the connection's origin (another origin is refused). The card is re-read on every invocation, and a skill it no longer offers fails the run without sending. The skill is sent as `metadata.skill`, since A2A has no standard way to address one.
+- **Studio discovery.** `POST /api/workspaces/{ws}/connections/{id}/a2a-card` (AUTHOR, granted connection) runs `A2aCardWorkflow` in the agents worker and returns the name, version, streaming support and skills for the skill picker.
+- **Durability** (V23 `platform_remote_sends`, `platform_remote_tasks`):
+  - Every message has a stable id: `run:0` for the prompt, `run:<seq>` for a reply. Each is recorded INTENDED → SENT → ACKED, and the remote task id is saved the moment the agent answers.
+  - A retry that finds a message SENT reconciles with `GetTask` on the saved task instead of sending again. When there is no task to ask about, the run fails as "outcome unknown … not resent".
+  - Polling uses a 1–5 s backoff. It stops if the run is no longer RUNNING, and it counts against the agent's active time.
+- **Status semantics:**
+
+  | Remote state | Run |
+  |---|---|
+  | completed | `SUCCEEDED`: the artifacts' text is the output; a data part or JSON text is checked against `outputSchema` |
+  | failed / rejected | `FAILED`, with the remote message |
+  | canceled (by the remote agent itself) | `FAILED` ("the remote agent cancelled its task"): nobody cancelled the platform run |
+  | input-required | `AWAITING_INPUT`: the question is stored as a `REMOTE_AGENT` message |
+  | auth-required | `AWAITING_AUTH`: the platform cannot sign in for the agent, so only cancel ends it |
+  | still working when the agent's time runs out | the remote task is asked to cancel, and the run fails |
+- **Replies.**
+  - `POST /api/workspaces/{ws}/runs/{id}/input {text}` (OPERATOR) atomically moves an `AWAITING_INPUT` run to `QUEUED`, so only one reply per question is accepted. It stores the reply as a `REMOTE_USER` message and signals `inputProvided`.
+  - The next invocation sends the reply to the same remote task and context.
+  - With no reply within 7 days, the remote task is asked to cancel and the run fails.
+- **Cancellation** is best effort. `markCancelled` asks the remote agent to cancel and records `ACKNOWLEDGED`, `REFUSED` (not cancelable), `UNSUPPORTED`, `NOT_FOUND` or `FAILED` next to the run. The platform run is `CANCELLED` either way.
+- **Studio:**
+  - The agent form has a "Runs as" switch (Model / Remote A2A agent). The a2a form shows the connection picker, "Load skills" from the card, and a skill picker; the model, fallbacks and tools are hidden.
+  - A run shows the remote task, its remote state and the cancel acknowledgement. `AWAITING_INPUT` shows the question with a reply box for operators, and `AWAITING_AUTH` explains that only cancel ends it.
+
+**Exit evidence** (live: Postgres 16, a Temporal dev server, control-plane, agents, and a Python process serving two controlled remote agents: an A2A 1.0 agent at :4040 behind OAuth client credentials, which is polled, and an A2A 0.3 agent at :4041 with a static bearer, which streams):
+
+1. **Setup.**
+   - An `A2A_AGENT` at 169.254.169.254 is rejected, and reading a card before the grant gets 409.
+   - After the grant, both cards read correctly: "Partner finance agent · 1.0 · polled" and "Partner research agent · 0.3 · streaming", each with 7 skills.
+   - An a2a draft that names a model fails validation.
+2. **Exit: completes.**
+   - A2A 1.0: the remote log shows 401 → token issued (`resource=…/a2a`) → `SendMessage` (`A2A-Version: 1.0`, message `run:0`) → two `GetTask` → completed. The run is `SUCCEEDED` with the artifact as output and remote state `COMPLETED`.
+   - A2A 0.3: `message/stream` completes in one streamed exchange.
+3. **Exit: pauses at input-required.**
+   - The run went `AWAITING_INPUT` with the question "Which region should the report cover?".
+   - A REVIEWER-only user's reply got 403. The operator's reply "EMEA" moved the run to `QUEUED`, and a second reply got 409.
+   - The remote log shows the reply as `SendMessage … messageId=run:2 taskId=<the same task>`. The run is `SUCCEEDED` (attempts 2), and both sends are `ACKED`.
+   - The same flow passed through the Studio against the 0.3 agent (Playwright).
+4. **Exit: cancelled.**
+   - A cancelable remote task: `CancelTask → canceled`, the run is `CANCELLED`, and the remote cancel is `ACKNOWLEDGED`.
+   - A non-cancelable task: `CancelTask → refused`, the run is still `CANCELLED`, the remote state is `WORKING`, and the remote cancel is `REFUSED`, as the agent answered.
+5. **Exit: fails remotely.** The run is `FAILED` with "the remote agent reported failed: the partner ledger is unavailable".
+6. **auth-required** held the run at `AWAITING_AUTH`, and cancelling ended it (the remote cancel was acknowledged).
+7. **Card re-check.** With the skill removed from the card, the next run failed with "the remote agent's card no longer offers skill summarise", and nothing was sent.
+8. **Reconcile after a crash.** The agents worker was killed (`kill -9`) while a remote task was working. After Temporal retried the activity, attempt 2 called `GetTask` on the saved task id and the run `SUCCEEDED`. The remote log shows exactly **one** `SendMessage`.
+   - This run found a bug, which is fixed and covered by a test: the final remote state had not been recorded when the retry found the task already complete.
+   - The same session also stopped abandoned activities from polling a task after its run was cancelled.
+9. **No secret leaked.** The OAuth client secret, the static bearer and all 5 issued access tokens appear 0 times in the control-plane and agents logs, a data-only dump of the database, and 157 workflow-history events.
+10. **Studio** (Playwright): the runtime switch, the skill picker loaded from the card, the paused run with the question and reply box, the completed run with its remote task and state, and no horizontal scroll at 390 px wide.
 
 ## Slice 2.6 — Generic REST and gRPC agent adapters
 

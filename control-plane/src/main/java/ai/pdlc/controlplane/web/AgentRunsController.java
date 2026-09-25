@@ -51,4 +51,14 @@ public class AgentRunsController {
     public RunDto cancel(@PathVariable String workspaceId, @PathVariable String runId, HttpServletRequest http) {
         return service.cancel(workspaceId, runId, identityResolver.resolve(http));
     }
+
+    /** OPERATOR: answer a remote A2A agent that is waiting for input (slice 2.5). */
+    @PostMapping("/api/workspaces/{workspaceId}/runs/{runId}/input")
+    public RunDto reply(@PathVariable String workspaceId, @PathVariable String runId, @RequestBody RunInputRequest request,
+                        HttpServletRequest http) {
+        return service.reply(workspaceId, runId, request == null ? null : request.text(), identityResolver.resolve(http));
+    }
+
+    public record RunInputRequest(String text) {
+    }
 }

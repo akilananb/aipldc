@@ -62,6 +62,8 @@ export function statusVariant(status: string): string {
     case 'CANCELLED':
     case 'AWAITING_APPROVAL':
     case 'NEEDS_OPERATOR':
+    case 'AWAITING_INPUT':
+    case 'AWAITING_AUTH':
     case 'PENDING':
     case 'PENDING_APPROVAL':
     case 'UNKNOWN':

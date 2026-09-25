@@ -65,16 +65,23 @@ public class AgentRunActivitiesImpl implements AgentRunActivities {
     private final ToolStore tools;
     private final ToolExecutor executor;
     private final NotifyPort notify;
+    private final A2aRunner a2a;
     private final Clock clock;
 
     @Autowired
     public AgentRunActivitiesImpl(RunStore runs, SecretsPort secrets, ModelInvoker models, ToolStore tools,
-                                  ToolExecutor executor, NotifyPort notify) {
-        this(runs, secrets, models, tools, executor, notify, Clock.systemUTC());
+                                  ToolExecutor executor, NotifyPort notify, A2aRunner a2a) {
+        this(runs, secrets, models, tools, executor, notify, a2a, Clock.systemUTC());
     }
 
     AgentRunActivitiesImpl(RunStore runs, SecretsPort secrets, ModelInvoker models, ToolStore tools,
                            ToolExecutor executor, NotifyPort notify, Clock clock) {
+        this(runs, secrets, models, tools, executor, notify, null, clock);
+    }
+
+    AgentRunActivitiesImpl(RunStore runs, SecretsPort secrets, ModelInvoker models, ToolStore tools,
+                           ToolExecutor executor, NotifyPort notify, A2aRunner a2a, Clock clock) {
+        this.a2a = a2a;
         this.runs = runs;
         this.secrets = secrets;
         this.models = models;
@@ -100,6 +107,12 @@ public class AgentRunActivitiesImpl implements AgentRunActivities {
         List<String> inputErrors = AgentInputs.validate(spec, run.inputs());
         if (!inputErrors.isEmpty()) {
             throw reject(String.join("; ", inputErrors));
+        }
+        if (spec.isA2a()) {
+            if (a2a == null) {
+                throw reject("a2a agents are not supported by this worker");
+            }
+            return a2a.invoke(run, spec, PromptRenderer.render(run.contentHash(), spec.prompt(), run.inputs()));
         }
         String unavailable = unavailable(run);
         if (unavailable != null) {
@@ -378,6 +391,18 @@ public class AgentRunActivitiesImpl implements AgentRunActivities {
         runs.cancel(UUID.fromString(runId));
         // Sandbox calls still running for this run lose their egress credentials and are killed.
         executor.cancelRun(runId);
+        // A remote A2A task is asked to cancel; whether it did is recorded with the run (slice 2.5).
+        if (a2a != null) {
+            a2a.cancelRemote(runId);
+        }
+    }
+
+    @Override
+    public void expireInput(String runId) {
+        if (a2a != null) {
+            a2a.cancelRemote(runId);
+        }
+        runs.fail(UUID.fromString(runId), "no reply to the remote agent's question in time; the remote task was asked to cancel", null);
     }
 
     @Override

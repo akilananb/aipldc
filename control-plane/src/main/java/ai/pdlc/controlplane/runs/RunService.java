@@ -87,7 +87,37 @@ public class RunService {
 
     public RunDto get(String workspaceId, String runId, Identity identity) {
         workspaces.requireMember(workspaceId, identity);
-        return toDto(find(workspaceId, runId));
+        RunRow row = find(workspaceId, runId);
+        return withRemote(toDto(row), store.remote(row.id()).orElse(null));
+    }
+
+    static final int MAX_REPLY_CHARS = 20_000;
+
+    /**
+     * An operator answers a remote agent that stopped at input-required (slice 2.5). The reply is
+     * stored with the run and the workflow is signalled; the next invocation sends it to the same
+     * remote task. Only one reply is accepted per question.
+     */
+    public RunDto reply(String workspaceId, String runId, String text, Identity identity) {
+        workspaces.require(workspaceId, identity, Capability.OPERATOR);
+        RunRow row = find(workspaceId, runId);
+        if (text == null || text.isBlank()) {
+            throw new IllegalArgumentException("text is required");
+        }
+        if (text.length() > MAX_REPLY_CHARS) {
+            throw new IllegalArgumentException("text may be at most " + MAX_REPLY_CHARS + " characters");
+        }
+        if (!"AWAITING_INPUT".equals(row.status())) {
+            throw new ConflictException("Run " + runId + " is " + row.status() + ", not waiting for input");
+        }
+        int seq = store.acceptInput(row.id(), text, identity.user())
+                .orElseThrow(() -> new ConflictException("Run " + runId + " is no longer waiting for input"));
+        try {
+            launcher.signalInput(row.workflowId(), row.id() + ":" + seq);
+        } catch (RuntimeException e) {
+            throw new ServiceUnavailableException("Reply stored, but run " + runId + " could not be resumed: workflow service unavailable", e);
+        }
+        return get(workspaceId, runId, identity);
     }
 
     /** The run's tool-call trace (members): decisions and outcomes, never credentials or response bodies. */
@@ -142,6 +172,17 @@ public class RunService {
         }
     }
 
+    private static RunDto withRemote(RunDto d, RunStore.RemoteRow remote) {
+        if (remote == null) {
+            return d;
+        }
+        return new RunDto(d.id(), d.workspaceId(), d.agentId(), d.agentVersion(), d.contentHash(), d.model(), d.providerModel(),
+                d.connectionId(), d.fallback(), d.inputs(), d.status(), d.outputText(), d.output(), d.error(), d.promptTokens(),
+                d.completionTokens(), d.attempts(), d.idempotencyKey(), d.createdBy(), d.createdAt(), d.startedAt(),
+                d.finishedAt(), new RunDto.Remote(remote.dialect(), remote.taskId(), remote.contextId(), remote.state(),
+                        remote.statusText(), remote.cancel()));
+    }
+
     static RunDto toDto(RunRow r) {
         try {
             Map<String, String> inputs = JSON.readValue(r.inputJson(), new TypeReference<Map<String, String>>() { });
@@ -149,7 +190,7 @@ public class RunService {
             return new RunDto(r.id().toString(), r.workspaceId(), r.agentId(), r.agentVersion(), r.contentHash(), r.model(),
                     r.providerModel(), r.connectionId(), r.fallback(), inputs, r.status(), r.outputText(), output, r.error(),
                     r.promptTokens(), r.completionTokens(), r.attempts(), r.idempotencyKey(), r.createdBy(), r.createdAt(),
-                    r.startedAt(), r.finishedAt());
+                    r.startedAt(), r.finishedAt(), null);
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }

@@ -30,6 +30,13 @@ public interface AgentRunWorkflow {
     @SignalMethod
     void effectResolved(String effectId);
 
+    /**
+     * An operator answered a remote agent that is waiting for input (docs/phase-2-execution-spec.md
+     * slice 2.5). Carries only the reply's message id; the text lives in {@code platform_run_messages}.
+     */
+    @SignalMethod
+    void inputProvided(String messageId);
+
     /** {@code timeoutSeconds} is the pinned agent's {@code limits.timeoutSeconds}. */
     record AgentRunInput(String runId, int timeoutSeconds) {
     }
@@ -37,8 +44,9 @@ public interface AgentRunWorkflow {
     /**
      * Terminal status ({@code SUCCEEDED}/{@code FAILED}/{@code CANCELLED}) or a pause: status
      * {@link #AWAITING_APPROVAL} with {@code approvalId} and the approval's escalation/expiry
-     * minutes, or {@link #NEEDS_OPERATOR} with {@code effectId}. Ids and durations only; content
-     * stays in the run row.
+     * minutes, {@link #NEEDS_OPERATOR} with {@code effectId}, or (slice 2.5, a2a runs)
+     * {@link #AWAITING_INPUT} / {@link #AWAITING_AUTH} when the remote agent asked for input or
+     * for authorization. Ids and durations only; content stays in the run row.
      */
     record AgentRunOutcome(String runId, String status, String error, String approvalId, String effectId,
                            Integer escalateAfterMinutes, Integer expireAfterMinutes) {
@@ -60,4 +68,6 @@ public interface AgentRunWorkflow {
 
     String AWAITING_APPROVAL = "AWAITING_APPROVAL";
     String NEEDS_OPERATOR = "NEEDS_OPERATOR";
+    String AWAITING_INPUT = "AWAITING_INPUT";
+    String AWAITING_AUTH = "AWAITING_AUTH";
 }

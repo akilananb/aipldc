@@ -1,11 +1,13 @@
 package ai.pdlc.controlplane.runs;
 
 import ai.pdlc.controlplane.web.dto.ToolCallDto;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.OffsetDateTime;
 import java.util.List;
@@ -24,6 +26,8 @@ public class JdbcRunStore implements RunStore {
             (Integer) rs.getObject("completion_tokens"), rs.getInt("attempts"), rs.getString("idempotency_key"),
             rs.getString("workflow_id"), rs.getString("created_by"), rs.getObject("created_at", OffsetDateTime.class),
             rs.getObject("started_at", OffsetDateTime.class), rs.getObject("finished_at", OffsetDateTime.class));
+
+    private static final ObjectMapper JSON = new ObjectMapper();
 
     private final JdbcTemplate jdbc;
 
@@ -62,6 +66,26 @@ public class JdbcRunStore implements RunStore {
     public List<RunRow> list(String workspaceId, String agentId, int limit) {
         return jdbc.query("SELECT * FROM platform_runs WHERE workspace_id = ? AND agent_id = ? ORDER BY created_at DESC LIMIT ?",
                 ROW, workspaceId, agentId, limit);
+    }
+
+    @Override
+    public Optional<RemoteRow> remote(UUID runId) {
+        return jdbc.query("SELECT * FROM platform_remote_tasks WHERE run_id = ?", (rs, n) -> new RemoteRow(
+                rs.getString("dialect"), rs.getString("task_id"), rs.getString("context_id"), rs.getString("state"),
+                rs.getString("status_text"), rs.getString("cancel")), runId).stream().findFirst();
+    }
+
+    @Override
+    @Transactional
+    public Optional<Integer> acceptInput(UUID runId, String text, String by) {
+        if (jdbc.update("UPDATE platform_runs SET status = 'QUEUED' WHERE id = ? AND status = 'AWAITING_INPUT'", runId) != 1) {
+            return Optional.empty();
+        }
+        Integer seq = jdbc.queryForObject("SELECT COALESCE(MAX(seq), 0) + 1 FROM platform_run_messages WHERE run_id = ?",
+                Integer.class, runId);
+        jdbc.update("INSERT INTO platform_run_messages (run_id, seq, kind, content_json) VALUES (?, ?, 'REMOTE_USER', ?)",
+                runId, seq, JSON.createObjectNode().put("text", text).put("by", by).toString());
+        return Optional.ofNullable(seq);
     }
 
     @Override

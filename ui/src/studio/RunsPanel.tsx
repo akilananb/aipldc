@@ -161,7 +161,7 @@ export default function RunsPanel({ workspaceId, agentId, current, canRun, retir
                     </Table.Cell>
                     <Table.Cell>v{r.agentVersion}</Table.Cell>
                     <Table.Cell>
-                      {r.model}
+                      {r.model ?? `remote · ${r.connectionId}`}
                       {r.fallback ? ' (fallback)' : ''}
                     </Table.Cell>
                     <Table.Cell>
@@ -233,11 +233,20 @@ function RunDetail({
           </Button>
         )}
       </Flex>
-      <Text size="1" color="gray" as="div" mb="2">
-        Model {run.model} → {run.providerModel} via {run.connectionId}
-        {run.fallback ? ' (declared fallback)' : ''} · attempts {run.attempts} · tokens in {tokens(run.promptTokens)} / out{' '}
-        {tokens(run.completionTokens)}
-      </Text>
+      {run.model == null ? (
+        <Text size="1" color="gray" as="div" mb="2">
+          Remote A2A agent via {run.connectionId}
+          {run.remote ? ` (A2A ${run.remote.protocolVersion})` : ''} · task {run.remote?.taskId ?? 'not created yet'} · remote state{' '}
+          {run.remote?.state?.toLowerCase().replace('_', '-') ?? 'unknown'} · attempts {run.attempts}
+          {run.remote?.cancel ? ` · cancel ${run.remote.cancel.toLowerCase().replace('_', ' ')}` : ''}
+        </Text>
+      ) : (
+        <Text size="1" color="gray" as="div" mb="2">
+          Model {run.model} → {run.providerModel} via {run.connectionId}
+          {run.fallback ? ' (declared fallback)' : ''} · attempts {run.attempts} · tokens in {tokens(run.promptTokens)} / out{' '}
+          {tokens(run.completionTokens)}
+        </Text>
+      )}
       {run.error && (
         <Callout.Root color="red" size="1" mb="2">
           <Callout.Text>{run.error}</Callout.Text>
@@ -259,6 +268,15 @@ function RunDetail({
             as a denial — never approved by time.
           </Callout.Text>
         </Callout.Root>
+      ) : run.status === 'AWAITING_INPUT' ? (
+        <RemoteQuestion run={run} canReply={canCancel} />
+      ) : run.status === 'AWAITING_AUTH' ? (
+        <Callout.Root color="amber" size="1">
+          <Callout.Text>
+            Paused: the remote agent needs authorization the platform cannot give
+            {run.remote?.question ? ` — “${run.remote.question}”` : ''}. Only cancelling ends this run.
+          </Callout.Text>
+        </Callout.Root>
       ) : run.status === 'NEEDS_OPERATOR' ? (
         <Callout.Root color="red" size="1">
           <Callout.Text>
@@ -269,13 +287,61 @@ function RunDetail({
       ) : (
         active && (
           <Text size="2" color="gray">
-            Waiting for the model…
+            {run.model == null ? 'Waiting for the remote agent…' : 'Waiting for the model…'}
           </Text>
         )
       )}
       {effects.length > 0 && <EffectsTable run={run} effects={effects} canResolve={canCancel} />}
       {(usesTools || calls.length > 0) && <ToolTrace calls={calls} error={callsQuery.error} />}
     </Box>
+  );
+}
+
+/** The remote agent's question and, for operators, one reply that resumes the same remote task. */
+function RemoteQuestion({ run, canReply }: { run: PlatformRun; canReply: boolean }) {
+  const queryClient = useQueryClient();
+  const [text, setText] = useState('');
+  const reply = useMutation({
+    mutationFn: () => studio.replyToRun(run.workspaceId, run.id, text),
+    onSuccess: () => {
+      setText('');
+      void queryClient.invalidateQueries({ queryKey: ['studio', run.workspaceId, 'run', run.id] });
+      toast.success('Reply sent; the run resumes');
+    },
+    onError: (e) => toast.error(errorMessage(e)),
+  });
+  return (
+    <Callout.Root color="amber" size="1" style={{ gridTemplateColumns: '1fr', justifyContent: 'stretch' }}>
+      <Box style={{ gridColumn: '1 / -1', width: '100%' }}>
+        <Text as="div" mb="1">
+          Paused: the remote agent needs input{run.remote?.question ? ':' : '.'}
+        </Text>
+        {run.remote?.question && (
+          <Text as="div" weight="medium" mb="2">
+            “{run.remote.question}”
+          </Text>
+        )}
+        {canReply ? (
+          <Flex direction="column" gap="2">
+            <TextArea
+              aria-label="Reply to the remote agent"
+              placeholder="Your answer is sent to the same remote task"
+              value={text}
+              rows={2}
+              style={{ width: '100%' }}
+              onChange={(e) => setText(e.target.value)}
+            />
+            <Flex justify="end">
+              <Button size="1" disabled={text.trim() === ''} loading={reply.isPending} onClick={() => reply.mutate()}>
+                Send reply
+              </Button>
+            </Flex>
+          </Flex>
+        ) : (
+          <Text size="1">Replying needs the OPERATOR capability.</Text>
+        )}
+      </Box>
+    </Callout.Root>
   );
 }
 

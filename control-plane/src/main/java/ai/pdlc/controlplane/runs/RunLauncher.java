@@ -13,4 +13,7 @@ public interface RunLauncher {
 
     /** Tells a run waiting on an operator that the effect was resolved. */
     void signalEffect(String workflowId, String effectId);
+
+    /** Tells a run waiting on a remote agent's input-required that an operator replied. */
+    void signalInput(String workflowId, String messageId);
 }

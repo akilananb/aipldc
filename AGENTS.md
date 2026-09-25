@@ -91,8 +91,9 @@ and shows the draft → a PO/SquadLead approves via `POST .../approve-agent-resu
 | `adapters/.../mcp/` + `control-plane/.../connections/McpDiscoveryService` + `agents/.../platform/{McpToolCaller,McpCredentials,McpDiscoveryActivitiesImpl}` + `ui/src/studio/McpDiscoveryPanel.tsx` | Remote MCP tools (docs/phase-2-execution-spec.md slice 2.3): governed Streamable-HTTP client, OAuth client credentials, discovery/review, fingerprint-checked execution |
 | `control-plane/.../runs/{ApprovalService,JdbcApprovalStore}` + `ui/src/studio/ApprovalsSection.tsx` | Write approvals inbox and effect resolution (docs/phase-2-execution-spec.md slice 2.2) |
 | `core/.../port/SandboxPort` + `adapters/.../sandbox/` + `control-plane/.../sandbox/` + `agents/.../platform/SandboxToolRunner` + `agents/.../config/SandboxConfig` + `infra/k8s/sandbox.yaml` | Sandbox tools (docs/phase-2-execution-spec.md slice 2.4): enterprise image catalog (`sandbox_images`), `KubernetesJobSandbox` (Job per call under a gVisor RuntimeClass) and `DockerSandbox` (local dev under `runsc`), and the per-call credentialed `SandboxEgressProxy` |
+| `adapters/.../a2a/` + `agents/.../platform/{A2aRunner,A2aCardActivitiesImpl}` + `control-plane/.../connections/A2aCardService` + `core/.../workflow/A2aCard*` | A2A outbound delegation (docs/phase-2-execution-spec.md slice 2.5): `runtime: a2a` agents on `A2A_AGENT` connections, A2A 1.0/0.3 JSON-RPC client, remote task tracking, operator replies |
 | `control-plane/.../runs/` + `agents/.../platform/` + `core/.../workflow/AgentRunWorkflow*` | Durable single-agent runs: `RunService` pins version+model on a `platform_runs` row and starts `AgentRunWorkflow`; the agents-side `AgentRunActivitiesImpl` renders, calls the model at runtime (`OpenAiCompatibleModelInvoker`) and records the outcome |
-| `control-plane/src/main/resources/db/migration/` | Flyway `V1__schema.sql` … `V22__sandbox_images.sql` |
+| `control-plane/src/main/resources/db/migration/` | Flyway `V1__schema.sql` … `V23__a2a_runs.sql` |
 | `agents/src/main/java/ai/pdlc/agents/{grill,po,plan,review,release,monitor,mention}/` | Per-domain LLM agent components |
 | `agents/src/main/java/ai/pdlc/agents/activities/` | `AgentActivitiesImpl`, `AgentContext` (best-effort reads), `RunRecorder` |
 | `agents/src/main/java/ai/pdlc/agents/templates/` | `PromptTemplates` (Mustache renderer) |
@@ -233,6 +234,11 @@ scripts/e2e-demo-phase4.sh   # + release pack -> gate 3 -> deploy -> monitor
   (non-root, read-only root, dropped capabilities, no host mounts or runtime socket, fresh workspace per call), give
   them network only through `SandboxEgressProxy` with a per-call credential that is revoked when the call ends or the
   run is cancelled, and never pass input or credentials on a command line or in a Job spec.
+- **A2A delegation** (slice 2.5): talk to remote agents only through `adapters/.../a2a/A2aClient`. Never trust the Agent
+  Card for more than skills, version and a same-origin endpoint; re-read it per invocation. Record every message's
+  intent (`platform_remote_sends`) before sending and the remote task id as soon as it is known; a retry reconciles via
+  `GetTask`, and an outcome that cannot be reconciled fails the run instead of resending. Report remote states honestly
+  (input-required/auth-required pause the run; a refused cancel is recorded as refused).
 - **No linter/formatter configured anywhere** (no ESLint, Prettier, Checkstyle, Spotless,
   `.editorconfig`). Match surrounding code style by hand; TypeScript's only enforced gate is
   `tsc --noEmit` (strict mode) inside `npm run build`.

@@ -1,11 +1,13 @@
-import { useMemo, type ReactNode } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import CodeMirror from '@uiw/react-codemirror';
 import { markdown as markdownLang } from '@codemirror/lang-markdown';
 import { EditorView } from '@codemirror/view';
-import { Box, Button, Callout, Checkbox, Flex, IconButton, Select, Text, TextArea, TextField } from '@radix-ui/themes';
-import { Plus, Trash2, Wand2 } from 'lucide-react';
+import { Box, Button, Callout, Checkbox, Flex, IconButton, SegmentedControl, Select, Text, TextArea, TextField } from '@radix-ui/themes';
+import { Plus, RefreshCw, Trash2, Wand2 } from 'lucide-react';
+import { useMutation } from '@tanstack/react-query';
+import { errorMessage, studio } from '../api';
 import { useAppearance } from '../theme';
-import type { CatalogModel, ToolDefinition } from '../types';
+import type { A2aCard, CatalogModel, ToolDefinition, WorkspaceConnection } from '../types';
 import { referencedVariables, type Draft } from './draft';
 
 interface Props {
@@ -15,6 +17,9 @@ interface Props {
   /** The workspace's tools; only published, active ones can be pinned. */
   tools: ToolDefinition[];
   readOnly: boolean;
+  workspaceId: string;
+  /** Connections granted to the workspace; a2a agents bind an A2A_AGENT one. */
+  connections: WorkspaceConnection[];
 }
 
 function Field({ label, hint, children, htmlFor }: { label: string; hint?: string; children: ReactNode; htmlFor?: string }) {
@@ -38,7 +43,7 @@ function Field({ label, hint, children, htmlFor }: { label: string; hint?: strin
  * the prompt uses CodeMirror, which is also keyboard-operable. Unavailable catalog models are listed
  * but disabled, with the reason, so an author sees why a binding would not publish.
  */
-export default function AgentForm({ draft, onChange, models, tools, readOnly }: Props) {
+export default function AgentForm({ draft, onChange, models, tools, readOnly, workspaceId, connections }: Props) {
   const appearance = useAppearance();
   const set = <K extends keyof Draft>(key: K, value: Draft[K]) => onChange({ ...draft, [key]: value });
   const extensions = useMemo(() => [markdownLang(), EditorView.lineWrapping], []);
@@ -173,6 +178,21 @@ export default function AgentForm({ draft, onChange, models, tools, readOnly }: 
         </Flex>
       </Field>
 
+      <Field label="Runs as" hint="A model call, or delegation to a remote A2A agent that chooses its own model and tools.">
+        <SegmentedControl.Root
+          value={draft.runtime}
+          onValueChange={(v) => !readOnly && set('runtime', v)}
+          aria-label="Runtime"
+          style={{ maxWidth: 420, width: '100%' }}
+        >
+          <SegmentedControl.Item value="native">Model (native)</SegmentedControl.Item>
+          <SegmentedControl.Item value="a2a">Remote A2A agent</SegmentedControl.Item>
+        </SegmentedControl.Root>
+      </Field>
+
+      {draft.runtime === 'a2a' ? (
+        <RemoteBinding draft={draft} set={set} readOnly={readOnly} workspaceId={workspaceId} connections={connections} />
+      ) : (
       <Flex gap="3" wrap="wrap">
         <Box style={{ flex: '1 1 260px' }}>
           <Field label="Model" hint="Only available catalog models can be published; there is no silent default.">
@@ -223,6 +243,7 @@ export default function AgentForm({ draft, onChange, models, tools, readOnly }: 
           </Field>
         </Box>
       </Flex>
+      )}
 
       <Flex gap="3" wrap="wrap">
         <Box style={{ flex: '1 1 180px' }}>
@@ -236,6 +257,7 @@ export default function AgentForm({ draft, onChange, models, tools, readOnly }: 
             />
           </Field>
         </Box>
+        {draft.runtime !== 'a2a' && (
         <Box style={{ flex: '1 1 180px' }}>
           <Field label="Max output tokens" htmlFor="agent-max-tokens" hint="Optional; sent to providers that support it.">
             <TextField.Root
@@ -247,8 +269,10 @@ export default function AgentForm({ draft, onChange, models, tools, readOnly }: 
             />
           </Field>
         </Box>
+        )}
       </Flex>
 
+      {draft.runtime !== 'a2a' && (
       <Field
         label="Tools"
         hint="Pin exact published tool versions. The model can call only these, and every call is checked by policy when it happens: write tools are refused until approvals arrive, and a revoked connection or grant denies the next call."
@@ -296,8 +320,9 @@ export default function AgentForm({ draft, onChange, models, tools, readOnly }: 
           )}
         </Flex>
       </Field>
+      )}
 
-      {draft.tools.length > 0 && (
+      {draft.runtime !== 'a2a' && draft.tools.length > 0 && (
         <Flex gap="3" wrap="wrap">
           <Box style={{ flex: '1 1 180px' }}>
             <Field label="Max model turns" htmlFor="agent-max-turns" hint="1–32; empty = 8. Running out fails the run.">
@@ -338,6 +363,116 @@ export default function AgentForm({ draft, onChange, models, tools, readOnly }: 
           placeholder='{"type": "object", "required": ["label"], "properties": {"label": {"type": "string"}}}'
           onChange={(e) => set('outputSchema', e.target.value)}
         />
+      </Field>
+    </Flex>
+  );
+}
+
+/**
+ * The remote A2A agent an a2a agent delegates to (slice 2.5): a granted A2A_AGENT connection and a
+ * skill from its card. The card is read through the agents worker on request; at run time it is
+ * read again and a skill it no longer offers fails the run.
+ */
+function RemoteBinding({
+  draft,
+  set,
+  readOnly,
+  workspaceId,
+  connections,
+}: {
+  draft: Draft;
+  set: <K extends keyof Draft>(key: K, value: Draft[K]) => void;
+  readOnly: boolean;
+  workspaceId: string;
+  connections: WorkspaceConnection[];
+}) {
+  const [card, setCard] = useState<A2aCard | null>(null);
+  const agents = connections.filter((c) => c.kind === 'A2A_AGENT');
+  const load = useMutation({
+    mutationFn: () => studio.a2aCard(workspaceId, draft.remoteConnection),
+    onSuccess: setCard,
+  });
+  const skills = card?.skills ?? [];
+  const known = skills.some((s) => s.id === draft.remoteSkill);
+  return (
+    <Flex direction="column" gap="3">
+      <Flex gap="3" wrap="wrap" align="end">
+        <Box style={{ flex: '1 1 260px' }}>
+          <Field label="Remote agent" hint="A2A_AGENT connections granted to this workspace. Its credential never leaves the connection.">
+            <Select.Root
+              value={draft.remoteConnection || undefined}
+              disabled={readOnly}
+              onValueChange={(v) => {
+                set('remoteConnection', v);
+                setCard(null);
+              }}
+            >
+              <Select.Trigger aria-label="Remote agent connection" placeholder="Choose a connection" style={{ width: '100%' }} />
+              <Select.Content>
+                {agents.map((c) => (
+                  <Select.Item key={c.id} value={c.id} disabled={c.status !== 'ACTIVE'}>
+                    {c.id} — {c.baseUrl}
+                  </Select.Item>
+                ))}
+              </Select.Content>
+            </Select.Root>
+            {agents.length === 0 && (
+              <Text size="1" color="gray" as="p" mt="1">
+                No A2A_AGENT connection is granted to this workspace; an enterprise Admin grants one.
+              </Text>
+            )}
+          </Field>
+        </Box>
+        <Button variant="soft" disabled={!draft.remoteConnection} loading={load.isPending} onClick={() => load.mutate()}>
+          <RefreshCw size={14} /> Load skills
+        </Button>
+      </Flex>
+      {load.isError && (
+        <Callout.Root color="red" size="1">
+          <Callout.Text>{errorMessage(load.error)}</Callout.Text>
+        </Callout.Root>
+      )}
+      {card?.error && (
+        <Callout.Root color="red" size="1">
+          <Callout.Text>The card could not be used: {card.error}</Callout.Text>
+        </Callout.Root>
+      )}
+      {card && !card.error && (
+        <Text size="1" color="gray">
+          {card.name} · A2A {card.protocolVersion} · {card.streaming ? 'streams updates' : 'polled for status'} · {skills.length}{' '}
+          skill{skills.length === 1 ? '' : 's'}
+        </Text>
+      )}
+      <Field
+        label="Skill"
+        htmlFor="agent-remote-skill"
+        hint="The card skill this agent asks for. It is sent as a hint with the message and re-checked against the card on every run."
+      >
+        {skills.length > 0 ? (
+          <Select.Root value={known ? draft.remoteSkill : undefined} disabled={readOnly} onValueChange={(v) => set('remoteSkill', v)}>
+            <Select.Trigger aria-label="Skill" placeholder="Choose a skill" style={{ width: '100%', maxWidth: 520 }} />
+            <Select.Content>
+              {skills.map((s) => (
+                <Select.Item key={s.id} value={s.id}>
+                  {s.name} ({s.id}){s.description ? ` — ${s.description}` : ''}
+                </Select.Item>
+              ))}
+            </Select.Content>
+          </Select.Root>
+        ) : (
+          <TextField.Root
+            id="agent-remote-skill"
+            value={draft.remoteSkill}
+            disabled={readOnly}
+            placeholder="Load skills, or type the skill id"
+            onChange={(e) => set('remoteSkill', e.target.value)}
+          />
+        )}
+        {card && !card.error && draft.remoteSkill !== '' && !known && (
+          <Text size="1" color="amber" as="p" mt="1">
+            {draft.remoteSkill} is not offered by this agent's card; runs would fail.
+          </Text>
+        )}
       </Field>
     </Flex>
   );

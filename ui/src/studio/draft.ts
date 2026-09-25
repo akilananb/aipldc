@@ -2,6 +2,10 @@ import type { AgentSpec, AgentVariable, AgentVersion, ToolRef } from '../types';
 
 /** Editable form state for an agent draft; converted to/from the wire AgentSpec. */
 export interface Draft {
+  /** 'native' calls a model; 'a2a' delegates to a remote A2A agent (slice 2.5). */
+  runtime: string;
+  remoteConnection: string;
+  remoteSkill: string;
   name: string;
   description: string;
   prompt: string;
@@ -20,6 +24,9 @@ export interface Draft {
 
 export function toDraft(name: string, spec: AgentSpec | null): Draft {
   return {
+    runtime: spec?.runtime ?? 'native',
+    remoteConnection: spec?.remote?.connectionId ?? '',
+    remoteSkill: spec?.remote?.skill ?? '',
     name,
     description: spec?.description ?? '',
     prompt: spec?.prompt ?? '',
@@ -70,17 +77,35 @@ export function toSpec(d: Draft): SpecResult {
   const limits: NonNullable<AgentSpec['limits']> = { timeoutSeconds: timeout, maxOutputTokens: maxTokens };
   if (maxTurns != null) limits.maxModelTurns = maxTurns;
   if (maxCalls != null) limits.maxToolCalls = maxCalls;
+  const variables = d.variables.map((v) => ({
+    name: v.name.trim(),
+    description: (v.description ?? '').trim() === '' ? null : v.description,
+    required: v.required,
+  }));
+  const description = d.description.trim() === '' ? null : d.description;
+  if (d.runtime === 'a2a') {
+    // A remote agent chooses its own model and tools; only the time limit applies.
+    return {
+      ok: true,
+      spec: {
+        description,
+        runtime: 'a2a',
+        prompt: d.prompt,
+        variables,
+        model: null,
+        limits: { timeoutSeconds: timeout, maxOutputTokens: null },
+        outputSchema,
+        remote: { connectionId: d.remoteConnection === '' ? null : d.remoteConnection, skill: d.remoteSkill === '' ? null : d.remoteSkill },
+      },
+    };
+  }
   return {
     ok: true,
     spec: {
-      description: d.description.trim() === '' ? null : d.description,
+      description,
       runtime: 'native',
       prompt: d.prompt,
-      variables: d.variables.map((v) => ({
-        name: v.name.trim(),
-        description: (v.description ?? '').trim() === '' ? null : v.description,
-        required: v.required,
-      })),
+      variables,
       model: { model: d.model === '' ? null : d.model, fallbacks: d.fallbacks },
       limits,
       outputSchema,

@@ -340,6 +340,17 @@ export interface AgentSpec {
   outputSchema: Record<string, unknown> | null;
   /** Pinned published tool versions; omitted when the agent uses no tools. */
   tools?: ToolRef[] | null;
+  /** runtime 'a2a' (slice 2.5): the A2A_AGENT connection and the remote skill it delegates to. */
+  remote?: { connectionId: string | null; skill: string | null } | null;
+}
+
+/** A remote A2A agent's card as the platform reads it (slice 2.5); error set when it could not be read. */
+export interface A2aCard {
+  name: string | null;
+  protocolVersion: string | null;
+  streaming: boolean;
+  skills: { id: string; name: string; description: string | null }[];
+  error: string | null;
 }
 
 export interface ToolRef {
@@ -542,7 +553,7 @@ export interface CatalogModel {
   unavailableReason: string | null;
 }
 
-export type RunStatus = 'QUEUED' | 'RUNNING' | 'AWAITING_APPROVAL' | 'NEEDS_OPERATOR' | 'SUCCEEDED' | 'FAILED' | 'CANCELLED';
+export type RunStatus = 'QUEUED' | 'RUNNING' | 'AWAITING_APPROVAL' | 'NEEDS_OPERATOR' | 'SUCCEEDED' | 'FAILED' | 'CANCELLED' | 'AWAITING_INPUT' | 'AWAITING_AUTH';
 
 export interface PlatformRun {
   id: string;
@@ -550,8 +561,9 @@ export interface PlatformRun {
   agentId: string;
   agentVersion: number;
   contentHash: string;
-  model: string;
-  providerModel: string;
+  /** null for a2a runs, which delegate to a remote agent instead of calling a model. */
+  model: string | null;
+  providerModel: string | null;
   connectionId: string;
   fallback: boolean;
   inputs: Record<string, string>;
@@ -568,4 +580,13 @@ export interface PlatformRun {
   createdAt: string;
   startedAt: string | null;
   finishedAt: string | null;
+  /** a2a runs: the remote task as last seen (single-run reads only). */
+  remote?: {
+    protocolVersion: string;
+    taskId: string | null;
+    contextId: string | null;
+    state: string;
+    question: string | null;
+    cancel: string | null;
+  } | null;
 }
