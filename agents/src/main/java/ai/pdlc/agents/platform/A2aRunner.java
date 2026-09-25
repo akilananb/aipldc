@@ -259,7 +259,8 @@ public class A2aRunner {
     public void cancelRemote(String runId) {
         UUID id = UUID.fromString(runId);
         RemoteTask known = runs.remoteTask(id).orElse(null);
-        if (known == null || known.taskId() == null || A2aClient.State.valueOf(known.state()).terminal()) {
+        if (known == null || known.taskId() == null || !("1.0".equals(known.dialect()) || "0.3".equals(known.dialect()))
+                || A2aClient.State.valueOf(known.state()).terminal()) {
             return;
         }
         Invocation run = runs.load(id).orElse(null);

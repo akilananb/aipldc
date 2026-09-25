@@ -24,6 +24,7 @@ import java.util.Map;
  * @param outputSchema optional JSON Schema the typed output must satisfy
  * @param tools        pinned tool versions (native only, slice 2.1)
  * @param remote       runtime {@code a2a}: the {@code A2A_AGENT} connection and the remote skill (slice 2.5)
+ * @param rest         runtime {@code rest}: the {@code REST_AGENT} connection and the declared call mapping (slice 2.6)
  */
 public record AgentSpec(
         String description,
@@ -34,10 +35,12 @@ public record AgentSpec(
         Limits limits,
         Map<String, Object> outputSchema,
         @JsonInclude(JsonInclude.Include.NON_NULL) List<ToolRef> tools,
-        @JsonInclude(JsonInclude.Include.NON_NULL) Remote remote) {
+        @JsonInclude(JsonInclude.Include.NON_NULL) Remote remote,
+        @JsonInclude(JsonInclude.Include.NON_NULL) RestBinding rest) {
 
     public static final String RUNTIME_NATIVE = "native";
     public static final String RUNTIME_A2A = "a2a";
+    public static final String RUNTIME_REST = "rest";
 
     /**
      * Pre-slice-2.1 shape (no tools). Fields added after Phase 1 are omitted from canonical JSON
@@ -45,13 +48,19 @@ public record AgentSpec(
      */
     public AgentSpec(String description, String runtime, String prompt, List<Variable> variables, ModelBinding model,
                      Limits limits, Map<String, Object> outputSchema) {
-        this(description, runtime, prompt, variables, model, limits, outputSchema, null, null);
+        this(description, runtime, prompt, variables, model, limits, outputSchema, null, null, null);
     }
 
     /** Slice 2.1-2.4 shape (no remote binding); keeps those versions' hashes. */
     public AgentSpec(String description, String runtime, String prompt, List<Variable> variables, ModelBinding model,
                      Limits limits, Map<String, Object> outputSchema, List<ToolRef> tools) {
-        this(description, runtime, prompt, variables, model, limits, outputSchema, tools, null);
+        this(description, runtime, prompt, variables, model, limits, outputSchema, tools, null, null);
+    }
+
+    /** Slice 2.5 shape (no REST binding); keeps those versions' hashes. */
+    public AgentSpec(String description, String runtime, String prompt, List<Variable> variables, ModelBinding model,
+                     Limits limits, Map<String, Object> outputSchema, List<ToolRef> tools, Remote remote) {
+        this(description, runtime, prompt, variables, model, limits, outputSchema, tools, remote, null);
     }
 
     /**
@@ -62,9 +71,51 @@ public record AgentSpec(
     public record Remote(String connectionId, String skill) {
     }
 
+    /**
+     * How a {@code rest} agent calls an existing HTTP agent service (slice 2.6). {@code sync}: one
+     * {@code submit} whose 2xx response is the result. {@code async}: {@code submit} returns a job
+     * id at {@code taskIdPointer}, {@code status} is polled every {@code pollSeconds}, and the value
+     * at {@code statePointer} means only what {@code states} says (remote value → WORKING,
+     * COMPLETED, FAILED or CANCELED) - an unlisted value fails the run rather than being guessed.
+     * Pointers are RFC 6901 JSON Pointers; paths are relative to the connection's base URL, and
+     * {@code {taskId}} is replaced by the percent-encoded job id. {@code idempotency: HEADER} means
+     * the service honours {@code Idempotency-Key}, so a submit whose outcome is unknown may be resent.
+     */
+    public record RestBinding(String connectionId, String mode, Endpoint submit, Endpoint status, Endpoint cancel,
+                              String taskIdPointer, String statePointer, Map<String, String> states,
+                              String resultPointer, String errorPointer, Integer pollSeconds, String idempotency) {
+
+        public static final String SYNC = "sync";
+        public static final String ASYNC = "async";
+
+        public int pollSecondsOrDefault() {
+            return pollSeconds == null ? 2 : pollSeconds;
+        }
+
+        @com.fasterxml.jackson.annotation.JsonIgnore
+        public boolean idempotentByHeader() {
+            return "HEADER".equals(idempotency);
+        }
+    }
+
+    /** One HTTP call of a {@link RestBinding}. */
+    public record Endpoint(String method, String path) {
+    }
+
     @com.fasterxml.jackson.annotation.JsonIgnore
     public boolean isA2a() {
         return RUNTIME_A2A.equals(runtime);
+    }
+
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    public boolean isRest() {
+        return RUNTIME_REST.equals(runtime);
+    }
+
+    /** The connection a remote runtime ({@code a2a}, {@code rest}) delegates through; null for native agents. */
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    public String remoteConnectionId() {
+        return isA2a() && remote != null ? remote.connectionId() : isRest() && rest != null ? rest.connectionId() : null;
     }
 
     /** A pinned, published tool version the agent may call (Phase 2 slice 2.1). */

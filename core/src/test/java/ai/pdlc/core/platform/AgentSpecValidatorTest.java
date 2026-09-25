@@ -80,7 +80,7 @@ class AgentSpecValidatorTest {
 
         assertThat(AgentSpecValidator.validate(" ", empty, MODELS)).containsExactly(
                 "name is required",
-                "runtime must be \"native\" or \"a2a\"",
+                "runtime must be \"native\", \"a2a\" or \"rest\"",
                 "prompt is required",
                 "model.model is required",
                 "limits.timeoutSeconds is required");
@@ -156,5 +156,60 @@ class AgentSpecValidatorTest {
     void theRemoteFieldDoesNotChangeTheHashOfExistingVersions() {
         assertThat(ContentHash.canonicalJson(valid())).doesNotContain("remote");
         assertThat(ContentHash.canonicalJson(remote("partner-agent", "summarise"))).contains("\"remote\":{\"connectionId\":\"partner-agent\"");
+    }
+
+    static AgentSpec.RestBinding asyncRest() {
+        return new AgentSpec.RestBinding("report-service", "async", new AgentSpec.Endpoint("POST", "/jobs"),
+                new AgentSpec.Endpoint("GET", "/jobs/{taskId}"), new AgentSpec.Endpoint("POST", "/jobs/{taskId}/cancel"),
+                "/job/id", "/job/state", Map.of("queued", "WORKING", "running", "WORKING", "done", "COMPLETED", "error", "FAILED"),
+                "/job/result", "/job/error", 2, "HEADER");
+    }
+
+    static AgentSpec rest(AgentSpec.RestBinding binding) {
+        return new AgentSpec("Calls the report service", "rest", null, List.of(new AgentSpec.Variable("region", null, true)),
+                null, new AgentSpec.Limits(null, 120), null, null, null, binding);
+    }
+
+    @Test
+    void aRestAgentDeclaresItsWholeMapping() {
+        assertThat(AgentSpecValidator.validate("Reports", rest(asyncRest()), MODELS)).isEmpty();
+        AgentSpec.RestBinding sync = new AgentSpec.RestBinding("report-service", "sync", new AgentSpec.Endpoint("POST", "/summarise"),
+                null, null, null, null, null, "/summary", null, null, null);
+        assertThat(AgentSpecValidator.validate("Reports", rest(sync), MODELS)).isEmpty();
+
+        AgentSpec.RestBinding bad = new AgentSpec.RestBinding("Bad", "later", new AgentSpec.Endpoint("GET", "https://evil.example/x"),
+                new AgentSpec.Endpoint("GET", "/jobs"), new AgentSpec.Endpoint("PATCH", "/jobs/{taskId}"), "job.id", null,
+                Map.of("done", "SUCCEEDED"), null, null, 0, "MAYBE");
+        assertThat(AgentSpecValidator.validate("Reports", rest(bad), MODELS)).contains(
+                "rest.connectionId must name a REST_AGENT connection",
+                "rest.mode must be \"sync\" or \"async\"",
+                "rest.submit.method must be one of [POST, PUT]",
+                "rest.submit.path must be a relative path starting with /",
+                "rest.idempotency must be HEADER or NONE");
+        AgentSpec.RestBinding badAsync = new AgentSpec.RestBinding("report-service", "async", new AgentSpec.Endpoint("POST", "/jobs"),
+                new AgentSpec.Endpoint("GET", "/jobs"), new AgentSpec.Endpoint("PATCH", "/jobs/{taskId}"), "job.id", null,
+                Map.of("done", "SUCCEEDED"), null, null, 0, null);
+        assertThat(AgentSpecValidator.validate("Reports", rest(badAsync), MODELS)).containsExactly(
+                "rest.status.path must contain {taskId}",
+                "rest.cancel.method must be one of [DELETE, POST]",
+                "rest.taskIdPointer must be a JSON Pointer such as /job/id",
+                "rest.statePointer is required",
+                "rest.states[done] must be one of [CANCELED, COMPLETED, FAILED, WORKING]",
+                "rest.states must name at least one COMPLETED and one FAILED value",
+                "rest.pollSeconds must be between 1 and 60");
+    }
+
+    @Test
+    void aSyncRestAgentHasNoJobLifecycleAndNoModel() {
+        AgentSpec.RestBinding sync = new AgentSpec.RestBinding("report-service", "sync", new AgentSpec.Endpoint("POST", "/summarise"),
+                new AgentSpec.Endpoint("GET", "/jobs/{taskId}"), null, null, null, null, null, null, null, null);
+        AgentSpec spec = new AgentSpec("x", "rest", null, List.of(), new AgentSpec.ModelBinding("sonnet", List.of()),
+                new AgentSpec.Limits(null, 60), null, null, null, sync);
+
+        assertThat(AgentSpecValidator.validate("R", spec, MODELS)).containsExactly(
+                "a rest agent has no model binding; the service chooses its own",
+                "a sync rest agent has no status, cancel, taskIdPointer, statePointer, states or pollSeconds");
+        assertThat(ContentHash.canonicalJson(valid())).doesNotContain("rest");
+        assertThat(ContentHash.canonicalJson(remote("partner-agent", "s"))).doesNotContain("\"rest\"");
     }
 }
