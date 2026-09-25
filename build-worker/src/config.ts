@@ -1,5 +1,6 @@
 import os from 'node:os';
 import path from 'node:path';
+import type { OAuthClientConfig } from './serviceToken';
 
 /** A per-repo target override: a local filesystem path (starts with `/`) or a remote git URL. */
 export type RepoOverride = { mode: 'local'; path: string } | { mode: 'remote'; url: string };
@@ -14,8 +15,11 @@ export interface AgentConfig {
    * pool on one host sets it explicitly (e.g. `w1`, `w2`). A duplicate name only degrades the
    * presence UI; per-task fencing is by lease token (client.ts), not agent name. */
   agentName: string;
-  /** BUILD_AGENT_TOKEN - sent as the `X-Agent-Token` header when set. */
+  /** BUILD_AGENT_TOKEN - sent as the `X-Agent-Token` header when set (shared-secret fallback). */
   agentToken?: string;
+  /** PDLC_OAUTH_TOKEN_URL/_CLIENT_ID/_CLIENT_SECRET/_SCOPE - when set, every call carries a
+   * client-credentials bearer token instead (the production service identity). */
+  oauth?: OAuthClientConfig;
   /** Claim filters - `profile` is the "project code" (`WorkItemRef.profile`, the `pdlc.yaml`
    * profile name); `story`/`task` narrow further. */
   filters: {
@@ -61,10 +65,24 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AgentConfig {
   }
   const repoOverrides = parseRepoOverrides(targetRepoOverrides);
 
+  let oauth: OAuthClientConfig | undefined;
+  if (env.PDLC_OAUTH_TOKEN_URL) {
+    if (!env.PDLC_OAUTH_CLIENT_ID || !env.PDLC_OAUTH_CLIENT_SECRET) {
+      throw new Error('PDLC_OAUTH_TOKEN_URL requires PDLC_OAUTH_CLIENT_ID and PDLC_OAUTH_CLIENT_SECRET');
+    }
+    oauth = {
+      tokenUrl: env.PDLC_OAUTH_TOKEN_URL,
+      clientId: env.PDLC_OAUTH_CLIENT_ID,
+      clientSecret: env.PDLC_OAUTH_CLIENT_SECRET,
+      scope: env.PDLC_OAUTH_SCOPE || 'pdlc.build',
+    };
+  }
+
   return {
     apiUrl,
     agentName: env.BUILD_AGENT_NAME ?? os.hostname(),
     agentToken: env.BUILD_AGENT_TOKEN || undefined,
+    oauth,
     filters: {
       profile,
       story: env.BUILD_FILTER_STORY || undefined,

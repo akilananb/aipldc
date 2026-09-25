@@ -28,6 +28,11 @@ import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
+import ai.pdlc.agents.platform.AgentRunActivitiesImpl;
+import ai.pdlc.agents.platform.OpenAiCompatibleModelInvoker;
+import ai.pdlc.agents.platform.ToolExecutor;
+import ai.pdlc.agents.platform.RunStore;
+import ai.pdlc.core.port.SecretsPort;
 
 /**
  * Proves the Spring container - not just the compiler - can construct {@link PromptTemplates} and
@@ -61,6 +66,31 @@ class AgentSpringWiringTest {
         }
 
         @Bean
+        RunStore runStore() {
+            return mock(RunStore.class);
+        }
+
+        @Bean
+        ai.pdlc.agents.platform.ToolStore toolStore() {
+            return mock(ai.pdlc.agents.platform.ToolStore.class);
+        }
+
+        @Bean
+        ai.pdlc.core.platform.EgressPolicy egressPolicy() {
+            return new ai.pdlc.core.platform.EgressPolicy(java.util.Set.of());
+        }
+
+        @Bean
+        ai.pdlc.core.port.NotifyPort notifyPort() {
+            return mock(ai.pdlc.core.port.NotifyPort.class);
+        }
+
+        @Bean
+        SecretsPort secretsPort() {
+            return mock(SecretsPort.class);
+        }
+
+        @Bean
         Profile activeProfile() {
             return new Profile("local",
                     new ProjectMeta("local", "local", null, List.of(), "", null),
@@ -69,6 +99,25 @@ class AgentSpringWiringTest {
                     new NotifyConfig("none", "none"),
                     new AgentsConfig("http://stub", null, Map.of()),
                     Map.of());
+        }
+    }
+
+    /** {@link AgentRunActivitiesImpl} and {@link ToolExecutor} also have two constructors (public + clock-injecting for tests). */
+    @Test
+    void springContainerConstructsThePlatformRunner() {
+        try (AnnotationConfigApplicationContext ctx = new AnnotationConfigApplicationContext()) {
+            ctx.register(TestBeans.class, OpenAiCompatibleModelInvoker.class, ai.pdlc.agents.platform.McpCredentials.class,
+                    ai.pdlc.agents.platform.McpToolCaller.class, ToolExecutor.class, AgentRunActivitiesImpl.class,
+                    ai.pdlc.agents.platform.McpDiscoveryActivitiesImpl.class, ai.pdlc.agents.config.SandboxConfig.class,
+                    ai.pdlc.agents.platform.A2aRunner.class, ai.pdlc.agents.platform.A2aCardActivitiesImpl.class,
+                    ai.pdlc.agents.platform.RestAgentRunner.class);
+            ctx.refresh();
+
+            // Sandbox tools default to off: every call is refused (no isolation runtime).
+            assertThat(ctx.getBean(ai.pdlc.agents.platform.SandboxToolRunner.class).isolation()).isNull();
+            assertThat(ctx.getBean(AgentRunActivitiesImpl.class)).isNotNull();
+            assertThat(ctx.getBean(ai.pdlc.agents.platform.McpDiscoveryActivitiesImpl.class)).isNotNull();
+            assertThat(ctx.getBean(ai.pdlc.agents.platform.A2aCardActivitiesImpl.class)).isNotNull();
         }
     }
 

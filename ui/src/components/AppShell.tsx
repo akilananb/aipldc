@@ -1,13 +1,15 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { Link, useMatch, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { Bot, FileText, FolderKanban, Moon, Radio, Repeat2, Search, ShieldCheck, Sun } from 'lucide-react';
+import { Bot, FileText, FolderKanban, Moon, Radio, Repeat2, Search, ShieldCheck, Sparkles, Sun } from 'lucide-react';
 import { api } from '../api';
 import { getAppearance, setAppearance, useAppearance } from '../theme';
 import { itemNeedsAttention } from '../ui-utils';
 import { useGateRolesByProject, useProjects } from '../useProject';
-import { useIdentity } from '../identity';
+import { setAuth, useAuth, useIdentity } from '../identity';
 import IdentitySwitcher from './IdentitySwitcher';
+import SignIn from './SignIn';
+import UserMenu from './UserMenu';
 import AgentPresenceStatus from './AgentPresenceStatus';
 import CommandPalette from './CommandPalette';
 
@@ -25,13 +27,26 @@ export default function AppShell({ children }: Props) {
   const onItemsRoute = useMatch('/');
   const onAgentsRoute = useMatch('/agents');
   const onProjectsRoute = useMatch('/projects');
+  const onStudioRoute = useMatch('/studio/*');
   const itemMatch = useMatch('/items/:id');
   const [paletteOpen, setPaletteOpen] = useState(false);
+
+  // Who am I, and how does this backend authenticate? Drives dev-header vs session behaviour in
+  // api.ts and whether the app renders at all (OIDC mode without a session shows SignIn).
+  const auth = useAuth();
+  const meQuery = useQuery({ queryKey: ['me'], queryFn: api.me, refetchOnWindowFocus: true, retry: 1 });
+  useEffect(() => {
+    if (meQuery.data) setAuth(meQuery.data);
+  }, [meQuery.data]);
+  const devMode = auth.mode === 'dev-headers';
+  const signedIn = devMode || (auth.authenticated && !!auth.role);
+  const needsSignIn = !devMode && auth.mode !== 'unknown' && !signedIn;
 
   const itemsQuery = useQuery({
     queryKey: ['items'],
     queryFn: api.listItems,
     refetchInterval: 2000,
+    enabled: signedIn,
   });
   const rolesByProject = useGateRolesByProject();
   const topLevel = (itemsQuery.data ?? []).filter((i) => i.kind !== 'task');
@@ -41,7 +56,7 @@ export default function AppShell({ children }: Props) {
   const breadcrumbItem = useQuery({
     queryKey: ['item', itemMatch?.params.id],
     queryFn: () => api.getItem(itemMatch!.params.id!),
-    enabled: !!itemMatch?.params.id,
+    enabled: signedIn && !!itemMatch?.params.id,
   });
 
   const projects = useProjects();
@@ -57,6 +72,14 @@ export default function AppShell({ children }: Props) {
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
+
+  if (needsSignIn) {
+    return <SignIn auth={auth} />;
+  }
+  if (!signedIn) {
+    // Waiting for /api/me - render nothing rather than firing requests that would 401.
+    return null;
+  }
 
   return (
     <div className="app">
@@ -96,6 +119,10 @@ export default function AppShell({ children }: Props) {
             <FolderKanban size={16} />
             <span>Projects</span>
           </Link>
+          <Link to="/studio" className={onStudioRoute ? 'active' : ''}>
+            <Sparkles size={16} />
+            <span>Agent Studio</span>
+          </Link>
         </nav>
 
         <div className="side-foot">
@@ -104,7 +131,7 @@ export default function AppShell({ children }: Props) {
             <span>{itemsQuery.isError ? 'Control plane unreachable' : 'Control plane connected'}</span>
           </div>
           <AgentPresenceStatus />
-          <IdentitySwitcher />
+          {devMode ? <IdentitySwitcher /> : <UserMenu />}
         </div>
       </aside>
 
@@ -129,6 +156,8 @@ export default function AppShell({ children }: Props) {
             <span className="crumb">Agents</span>
           ) : onProjectsRoute ? (
             <span className="crumb">Projects</span>
+          ) : onStudioRoute ? (
+            <span className="crumb">Agent Studio</span>
           ) : (
             <span className="crumb">Items</span>
           )}

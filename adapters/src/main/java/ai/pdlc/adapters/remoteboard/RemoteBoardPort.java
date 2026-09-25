@@ -1,5 +1,6 @@
 package ai.pdlc.adapters.remoteboard;
 
+import ai.pdlc.adapters.serviceauth.ServiceCredentials;
 import ai.pdlc.core.domain.AttachmentRef;
 import ai.pdlc.core.domain.CanonicalEvent;
 import ai.pdlc.core.domain.CanonicalState;
@@ -45,11 +46,19 @@ import java.util.Map;
 public final class RemoteBoardPort implements BoardPort {
 
     private final String baseUrl;
+    private final ServiceCredentials credentials;
     private final HttpClient http;
     private final ObjectMapper mapper = new ObjectMapper();
 
     public RemoteBoardPort(String baseUrl) {
+        this(baseUrl, ServiceCredentials.NONE);
+    }
+
+    /** {@code credentials} authenticate this process to control-plane's {@code /api/board/**}
+     * (service scope {@code pdlc.board.read}). */
+    public RemoteBoardPort(String baseUrl, ServiceCredentials credentials) {
         this.baseUrl = baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
+        this.credentials = credentials;
         this.http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
     }
 
@@ -78,8 +87,15 @@ public final class RemoteBoardPort implements BoardPort {
     }
 
     private JsonNode getJson(String path) {
-        HttpRequest request = HttpRequest.newBuilder(URI.create(baseUrl + path))
-                .timeout(Duration.ofSeconds(15)).GET().build();
+        HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(baseUrl + path))
+                .timeout(Duration.ofSeconds(15)).GET();
+        HttpRequest request;
+        try {
+            credentials.get().forEach(builder::header);
+            request = builder.build();
+        } catch (RuntimeException e) {
+            throw new RemoteBoardPortException("Could not obtain service credentials for " + baseUrl, e);
+        }
         try {
             HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString());
             if (response.statusCode() >= 300) {

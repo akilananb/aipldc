@@ -1,4 +1,5 @@
-import { getIdentity } from './identity';
+import { getIdentity, sendsDevHeaders, type AuthState } from './identity';
+import type { A2aCard, AgentDefinition, AgentSpec, AgentValidation, AgentVersion, Approval, CatalogModel, Effect, McpDiscovery, PlatformRun, SandboxImage, ToolCallRecord, ToolDefinition, ToolSpec, ToolVersion, Workspace, WorkspaceConnection } from './types';
 import type { AgentRun, AgentsStatus, ArtifactVersion, BoardComment, Comment, CommentIntent, DemoStatus, GrillQuestions, ItemDetail, ItemSummary, Project, ProjectRequest, QualityReport, ReleaseDocument, ScenarioReview, SpecDocs } from './types';
 
 export const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8081';
@@ -27,13 +28,31 @@ export function errorMessage(e: unknown): string {
   return e instanceof ApiError ? e.friendly : String(e);
 }
 
-function authHeaders(): Record<string, string> {
-  const id = getIdentity();
-  return { 'X-User': id.user, 'X-Role': id.role };
+const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+
+function readCookie(name: string): string | undefined {
+  const match = document.cookie.split('; ').find((c) => c.startsWith(`${name}=`));
+  return match ? decodeURIComponent(match.slice(name.length + 1)) : undefined;
+}
+
+/** Dev headers in dev-headers mode; the CSRF token (issued by GET /api/me as the XSRF-TOKEN cookie)
+ * on every unsafe request, which the backend requires for cookie-session callers. */
+function authHeaders(method = 'GET'): Record<string, string> {
+  const headers: Record<string, string> = {};
+  if (sendsDevHeaders()) {
+    const id = getIdentity();
+    headers['X-User'] = id.user;
+    headers['X-Role'] = id.role;
+  }
+  const csrf = readCookie('XSRF-TOKEN');
+  if (csrf && !SAFE_METHODS.has(method.toUpperCase())) {
+    headers['X-XSRF-TOKEN'] = csrf;
+  }
+  return headers;
 }
 
 async function requestText(path: string): Promise<string> {
-  const res = await fetch(`${BASE_URL}${path}`, { headers: authHeaders() });
+  const res = await fetch(`${BASE_URL}${path}`, { headers: authHeaders(), credentials: 'include' });
   if (!res.ok) {
     throw new ApiError(res.status, await res.text().catch(() => ''));
   }
@@ -43,8 +62,9 @@ async function requestText(path: string): Promise<string> {
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE_URL}${path}`, {
     ...init,
+    credentials: 'include',
     headers: {
-      ...authHeaders(),
+      ...authHeaders(init?.method),
       ...(init?.body != null ? { 'Content-Type': 'application/json' } : {}),
       ...(init?.headers ?? {}),
     },
@@ -63,7 +83,86 @@ export interface AddCommentBody {
   blocking: boolean;
 }
 
+const ws = (id: string) => `/api/workspaces/${encodeURIComponent(id)}`;
+const agent = (wsId: string, agentId: string) => `${ws(wsId)}/agents/${encodeURIComponent(agentId)}`;
+const tool = (wsId: string, toolId: string) => `${ws(wsId)}/tools/${encodeURIComponent(toolId)}`;
+
+/** Agent Studio: workspace-scoped registry, catalog and runs (docs/phase-1-execution-spec.md slices 1–5). */
+export const studio = {
+  workspaces: () => request<Workspace[]>('/api/workspaces'),
+  createWorkspace: (body: { id: string; name: string; admins: string[] }) =>
+    request<Workspace>('/api/workspaces', { method: 'POST', body: JSON.stringify(body) }),
+  models: () => request<CatalogModel[]>('/api/platform/models'),
+  projects: (wsId: string) => request<{ id: string; name: string }[]>(`${ws(wsId)}/projects`),
+  agents: (wsId: string) => request<AgentDefinition[]>(`${ws(wsId)}/agents`),
+  agent: (wsId: string, agentId: string) => request<AgentDefinition>(agent(wsId, agentId)),
+  createAgent: (wsId: string, body: { id: string; name: string; spec: AgentSpec }) =>
+    request<AgentDefinition>(`${ws(wsId)}/agents`, { method: 'POST', body: JSON.stringify(body) }),
+  saveDraft: (wsId: string, agentId: string, body: { name: string; spec: AgentSpec; revision: number }) =>
+    request<AgentDefinition>(`${agent(wsId, agentId)}/draft`, { method: 'PUT', body: JSON.stringify(body) }),
+  validate: (wsId: string, agentId: string) =>
+    request<AgentValidation>(`${agent(wsId, agentId)}/validate`, { method: 'POST' }),
+  publish: (wsId: string, agentId: string, revision: number) =>
+    request<AgentVersion>(`${agent(wsId, agentId)}/publish`, { method: 'POST', body: JSON.stringify({ revision }) }),
+  rollback: (wsId: string, agentId: string, version: number) =>
+    request<AgentDefinition>(`${agent(wsId, agentId)}/rollback`, { method: 'POST', body: JSON.stringify({ version }) }),
+  retire: (wsId: string, agentId: string) => request<AgentDefinition>(`${agent(wsId, agentId)}/retire`, { method: 'POST' }),
+  versions: (wsId: string, agentId: string) => request<AgentVersion[]>(`${agent(wsId, agentId)}/versions`),
+  runs: (wsId: string, agentId: string) => request<PlatformRun[]>(`${agent(wsId, agentId)}/runs`),
+  run: (wsId: string, runId: string) => request<PlatformRun>(`${ws(wsId)}/runs/${encodeURIComponent(runId)}`),
+  startRun: (wsId: string, agentId: string, inputs: Record<string, string>) =>
+    request<PlatformRun>(`${agent(wsId, agentId)}/runs`, { method: 'POST', body: JSON.stringify({ inputs }) }),
+  cancelRun: (wsId: string, runId: string) =>
+    request<PlatformRun>(`${ws(wsId)}/runs/${encodeURIComponent(runId)}/cancel`, { method: 'POST' }),
+  toolCalls: (wsId: string, runId: string) =>
+    request<ToolCallRecord[]>(`${ws(wsId)}/runs/${encodeURIComponent(runId)}/tool-calls`),
+  // Tools (docs/phase-2-execution-spec.md slice 2.1)
+  connections: (wsId: string) => request<WorkspaceConnection[]>(`${ws(wsId)}/connections`),
+  tools: (wsId: string) => request<ToolDefinition[]>(`${ws(wsId)}/tools`),
+  tool: (wsId: string, toolId: string) => request<ToolDefinition>(tool(wsId, toolId)),
+  createTool: (wsId: string, body: { id: string; name: string; spec: ToolSpec }) =>
+    request<ToolDefinition>(`${ws(wsId)}/tools`, { method: 'POST', body: JSON.stringify(body) }),
+  saveToolDraft: (wsId: string, toolId: string, body: { name: string; spec: ToolSpec; revision: number }) =>
+    request<ToolDefinition>(`${tool(wsId, toolId)}/draft`, { method: 'PUT', body: JSON.stringify(body) }),
+  validateTool: (wsId: string, toolId: string) =>
+    request<AgentValidation>(`${tool(wsId, toolId)}/validate`, { method: 'POST' }),
+  publishTool: (wsId: string, toolId: string, revision: number) =>
+    request<ToolVersion>(`${tool(wsId, toolId)}/publish`, { method: 'POST', body: JSON.stringify({ revision }) }),
+  retireTool: (wsId: string, toolId: string) => request<ToolDefinition>(`${tool(wsId, toolId)}/retire`, { method: 'POST' }),
+  toolVersions: (wsId: string, toolId: string) => request<ToolVersion[]>(`${tool(wsId, toolId)}/versions`),
+  // Remote A2A agents (docs/phase-2-execution-spec.md slice 2.5)
+  a2aCard: (wsId: string, connectionId: string) =>
+    request<A2aCard>(`${ws(wsId)}/connections/${encodeURIComponent(connectionId)}/a2a-card`, { method: 'POST' }),
+  replyToRun: (wsId: string, runId: string, text: string) =>
+    request<PlatformRun>(`${ws(wsId)}/runs/${encodeURIComponent(runId)}/input`, { method: 'POST', body: JSON.stringify({ text }) }),
+  // Enterprise sandbox image catalog (docs/phase-2-execution-spec.md slice 2.4)
+  sandboxImages: () => request<SandboxImage[]>('/api/platform/sandbox-images'),
+  // Remote MCP tools (docs/phase-2-execution-spec.md slice 2.3)
+  mcpDiscover: (wsId: string, connectionId: string) =>
+    request<McpDiscovery>(`${ws(wsId)}/connections/${encodeURIComponent(connectionId)}/mcp-discovery`, { method: 'POST' }),
+  // Write approvals and effects (docs/phase-2-execution-spec.md slice 2.2)
+  approvals: (wsId: string, status?: string) =>
+    request<Approval[]>(`${ws(wsId)}/approvals${status ? `?status=${encodeURIComponent(status)}` : ''}`),
+  decideApproval: (wsId: string, approvalId: string, decision: 'approve' | 'reject', reason: string) =>
+    request<Approval>(`${ws(wsId)}/approvals/${encodeURIComponent(approvalId)}/${decision}`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    }),
+  effects: (wsId: string, runId: string) => request<Effect[]>(`${ws(wsId)}/runs/${encodeURIComponent(runId)}/effects`),
+  resolveEffect: (wsId: string, runId: string, effectId: string, outcome: 'SUCCEEDED' | 'FAILED' | 'RETRY', note: string) =>
+    request<Effect>(`${ws(wsId)}/runs/${encodeURIComponent(runId)}/effects/${encodeURIComponent(effectId)}/resolve`, {
+      method: 'POST',
+      body: JSON.stringify({ outcome, note }),
+    }),
+};
+
 export const api = {
+  me(): Promise<AuthState> {
+    return request<AuthState>('/api/me');
+  },
+  logout(): Promise<void> {
+    return request<void>('/logout', { method: 'POST' });
+  },
   listItems(): Promise<ItemSummary[]> {
     return request<ItemSummary[]>('/api/items');
   },

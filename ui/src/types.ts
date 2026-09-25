@@ -304,3 +304,312 @@ export interface ProjectRequest {
   gates: Record<string, GateRoles>;
   build: ProjectBuild;
 }
+
+// ---- Configurable agent platform (docs/phase-1-execution-spec.md) ----
+
+export type Capability = 'WORKSPACE_ADMIN' | 'AUTHOR' | 'OPERATOR' | 'REVIEWER' | 'CURATOR';
+
+export interface Workspace {
+  id: string;
+  name: string;
+  createdAt: string;
+  createdBy: string;
+  /** The caller's own capabilities in this workspace. */
+  capabilities: Capability[];
+}
+
+export interface AgentVariable {
+  name: string;
+  description: string | null;
+  required: boolean;
+}
+
+export interface AgentSpec {
+  description: string | null;
+  runtime: string | null;
+  prompt: string | null;
+  variables: AgentVariable[] | null;
+  model: { model: string | null; fallbacks: string[] | null } | null;
+  limits: {
+    maxOutputTokens: number | null;
+    timeoutSeconds: number | null;
+    /** Tool loop bounds (Phase 2 slice 2.1); omitted = server defaults (8 turns, 16 calls). */
+    maxModelTurns?: number | null;
+    maxToolCalls?: number | null;
+  } | null;
+  outputSchema: Record<string, unknown> | null;
+  /** Pinned published tool versions; omitted when the agent uses no tools. */
+  tools?: ToolRef[] | null;
+  /** runtime 'a2a' (slice 2.5): the A2A_AGENT connection and the remote skill it delegates to. */
+  remote?: { connectionId: string | null; skill: string | null } | null;
+  /** runtime 'rest' (slice 2.6): the REST_AGENT connection and the declared call mapping. */
+  rest?: RestBinding | null;
+}
+
+export interface RestEndpoint {
+  method: string | null;
+  path: string | null;
+}
+
+export interface RestBinding {
+  connectionId: string | null;
+  mode: 'sync' | 'async' | null;
+  submit: RestEndpoint | null;
+  status: RestEndpoint | null;
+  cancel: RestEndpoint | null;
+  taskIdPointer: string | null;
+  statePointer: string | null;
+  /** remote state value -> WORKING | COMPLETED | FAILED | CANCELED */
+  states: Record<string, string> | null;
+  resultPointer: string | null;
+  errorPointer: string | null;
+  pollSeconds: number | null;
+  idempotency: 'HEADER' | 'NONE' | null;
+}
+
+/** A remote A2A agent's card as the platform reads it (slice 2.5); error set when it could not be read. */
+export interface A2aCard {
+  name: string | null;
+  protocolVersion: string | null;
+  streaming: boolean;
+  skills: { id: string; name: string; description: string | null }[];
+  error: string | null;
+}
+
+export interface ToolRef {
+  tool: string;
+  version: number;
+}
+
+/** docs/phase-2-execution-spec.md slice 2.1: one HTTP operation against an HTTP_API connection. */
+export interface ToolSpec {
+  description: string | null;
+  kind: string | null;
+  connectionId: string | null;
+  method: string | null;
+  path: string | null;
+  inputSchema: Record<string, unknown> | null;
+  effect: 'READ' | 'WRITE' | null;
+  timeoutSeconds: number | null;
+  maxResponseBytes: number | null;
+  /** WRITE tools (slice 2.2): HEADER = the target honors Idempotency-Key. Omitted = NONE. */
+  idempotency?: 'HEADER' | 'NONE' | null;
+  approval?: { escalateAfterMinutes: number | null; expireAfterMinutes: number | null } | null;
+  /** kind 'mcp' (slice 2.3): the remote tool and the fingerprint of its reviewed definition. */
+  mcpTool?: string | null;
+  mcpFingerprint?: string | null;
+  /** kind 'sandbox' (slice 2.4): the catalog entry and the digest-pinned image reviewed with it. */
+  sandboxImage?: string | null;
+  sandboxImageRef?: string | null;
+}
+
+/** An enterprise-approved sandbox image (docs/phase-2-execution-spec.md slice 2.4). */
+export interface SandboxImage {
+  id: string;
+  imageRef: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+  outputSchema: Record<string, unknown> | null;
+  egressHosts: string[];
+  cpuMillis: number;
+  memoryMb: number;
+  timeoutSeconds: number;
+  status: 'ACTIVE' | 'RETIRED';
+  updatedAt: string;
+  updatedBy: string;
+}
+
+export type McpReviewState = 'NEW' | 'APPROVED' | 'CHANGED' | 'UNSUPPORTED_SCHEMA' | 'REMOVED';
+
+export interface McpDiscoveredTool {
+  name: string;
+  description: string | null;
+  inputSchema: Record<string, unknown> | null;
+  annotations: Record<string, unknown> | null;
+  fingerprint: string | null;
+  state: McpReviewState;
+  problems: string[];
+  toolId: string | null;
+  approvedVersion: number | null;
+  suggestedEffect: 'READ' | 'WRITE' | null;
+}
+
+export interface McpDiscovery {
+  connectionId: string;
+  error: string | null;
+  tools: McpDiscoveredTool[];
+}
+
+/** docs/phase-2-execution-spec.md slice 2.2: a WRITE call waiting for (or past) a human decision. */
+export interface Approval {
+  id: string;
+  workspaceId: string;
+  runId: string;
+  agentId: string;
+  agentVersion: number;
+  runCreatedBy: string;
+  turn: number;
+  callId: string;
+  toolId: string;
+  toolVersion: number;
+  method: string | null;
+  path: string | null;
+  connectionId: string | null;
+  argsJson: string;
+  argsHash: string;
+  status: 'PENDING' | 'APPROVED' | 'REJECTED' | 'EXPIRED' | 'CANCELLED';
+  requestedAt: string;
+  escalatedAt: string | null;
+  decidedBy: string | null;
+  decidedAt: string | null;
+  reason: string | null;
+}
+
+export interface Effect {
+  id: string;
+  runId: string;
+  approvalId: string;
+  toolId: string;
+  toolVersion: number;
+  idempotencyKey: string;
+  state: 'INTENDED' | 'SENT' | 'SUCCEEDED' | 'FAILED' | 'UNKNOWN';
+  sendCount: number;
+  httpStatus: number | null;
+  resolution: string | null;
+  resolvedBy: string | null;
+  resolvedAt: string | null;
+  note: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ToolDefinition {
+  workspaceId: string;
+  id: string;
+  status: 'ACTIVE' | 'RETIRED';
+  draftName: string;
+  draftSpec: ToolSpec | null;
+  draftRevision: number;
+  currentVersion: number | null;
+  latestVersion: number | null;
+  updatedAt: string;
+  updatedBy: string;
+}
+
+export interface ToolVersion {
+  workspaceId: string;
+  toolId: string;
+  version: number;
+  name: string;
+  spec: ToolSpec;
+  contentHash: string;
+  publishedAt: string;
+  publishedBy: string;
+}
+
+/** A connection granted to the workspace (no secret reference is exposed). */
+export interface WorkspaceConnection {
+  id: string;
+  kind: 'HTTP_API' | 'MCP_SERVER' | string;
+  authType: string;
+  baseUrl: string;
+  status: string;
+  expiresAt: string | null;
+}
+
+export interface ToolCallRecord {
+  id: number;
+  attempt: number;
+  turn: number;
+  toolId: string;
+  toolVersion: number | null;
+  argsJson: string | null;
+  argsHash: string | null;
+  decision: 'ALLOWED' | 'DENIED' | 'PENDING_APPROVAL';
+  reason: string | null;
+  httpStatus: number | null;
+  durationMs: number | null;
+  responseBytes: number | null;
+  truncated: boolean;
+  error: string | null;
+  createdAt: string;
+}
+
+export interface AgentDefinition {
+  workspaceId: string;
+  id: string;
+  status: 'ACTIVE' | 'RETIRED';
+  draftName: string;
+  draftSpec: AgentSpec | null;
+  draftRevision: number;
+  currentVersion: number | null;
+  latestVersion: number | null;
+  updatedAt: string;
+  updatedBy: string;
+}
+
+export interface AgentVersion {
+  workspaceId: string;
+  agentId: string;
+  version: number;
+  name: string;
+  spec: AgentSpec;
+  contentHash: string;
+  publishedAt: string;
+  publishedBy: string;
+}
+
+export interface AgentValidation {
+  valid: boolean;
+  errors: string[];
+  contentHash: string | null;
+  draftRevision: number;
+}
+
+export interface CatalogModel {
+  id: string;
+  connectionId: string;
+  providerModel: string;
+  displayName: string;
+  enabled: boolean;
+  available: boolean;
+  unavailableReason: string | null;
+}
+
+export type RunStatus = 'QUEUED' | 'RUNNING' | 'AWAITING_APPROVAL' | 'NEEDS_OPERATOR' | 'SUCCEEDED' | 'FAILED' | 'CANCELLED' | 'AWAITING_INPUT' | 'AWAITING_AUTH';
+
+export interface PlatformRun {
+  id: string;
+  workspaceId: string;
+  agentId: string;
+  agentVersion: number;
+  contentHash: string;
+  /** null for a2a runs, which delegate to a remote agent instead of calling a model. */
+  model: string | null;
+  providerModel: string | null;
+  connectionId: string;
+  fallback: boolean;
+  inputs: Record<string, string>;
+  status: RunStatus;
+  outputText: string | null;
+  output: unknown;
+  error: string | null;
+  /** null = the provider did not report usage (unknown, not zero). */
+  promptTokens: number | null;
+  completionTokens: number | null;
+  attempts: number;
+  idempotencyKey: string | null;
+  createdBy: string;
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  /** a2a runs: the remote task as last seen (single-run reads only). */
+  remote?: {
+    protocolVersion: string;
+    taskId: string | null;
+    contextId: string | null;
+    state: string;
+    question: string | null;
+    cancel: string | null;
+  } | null;
+}

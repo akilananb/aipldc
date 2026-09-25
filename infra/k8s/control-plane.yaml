@@ -29,8 +29,15 @@ spec:
             - {name: PDLC_ACTIVE_PROFILE, value: local}
             - {name: TEMPORAL_TARGET, value: "temporal:7233"}
             - {name: TEMPORAL_NAMESPACE, value: default}
-            # Shared secret the standalone build agent sends as X-Agent-Token; empty (default) = open,
-            # matching the pilot's X-User header-trust model.
+            # Local stack only: honour the X-User/X-Role dev header shim (off by default in
+            # application.yml). Production enables OIDC instead - docs/phase-1-execution-spec.md slice 2.
+            - name: PDLC_IDENTITY_DEV_HEADERS
+              value: "true"
+            # Local stack: who administers the imported `pdlc` workspace in the Agent Studio.
+            - name: PDLC_WORKSPACE_ADMINS
+              value: "admin@acme,lead@acme"
+            # Shared secret the standalone build agent sends as X-Agent-Token; empty (default) = open
+            # while dev headers are on.
             - name: BUILD_AGENT_TOKEN
               valueFrom: {secretKeyRef: {name: pdlc-env, key: BUILD_AGENT_TOKEN}}
             # DemoInitializer (control-plane/.../demo) seeds the curated restaurant-demo catalog plus

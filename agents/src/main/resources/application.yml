@@ -12,6 +12,31 @@ spring:
 pdlc:
   config-path: ${PDLC_CONFIG_PATH:infra/pdlc.yaml}
   active-profile: ${PDLC_ACTIVE_PROFILE:local}
+  # How this process authenticates to control-plane's /api/board/** (docs/phase-1-execution-spec.md
+  # slice 2): a client-credentials JWT when token-url is set, else a static X-Service-Token, else
+  # nothing (control-plane in dev-headers mode with no service token).
+  service-auth:
+    token-url: ${PDLC_SERVICE_OAUTH_TOKEN_URL:}
+    client-id: ${PDLC_SERVICE_OAUTH_CLIENT_ID:}
+    client-secret: ${PDLC_SERVICE_OAUTH_CLIENT_SECRET:}
+    scope: ${PDLC_SERVICE_OAUTH_SCOPE:pdlc.board.read}
+    static-token: ${PDLC_SERVICE_TOKEN:}
+
+  # Phase 2 slice 2.1: internal hosts HTTP_API tools may reach (comma-separated); must match
+  # control-plane's setting. Everything else must resolve only to public addresses.
+  egress:
+    allowed-private-hosts: ${PDLC_EGRESS_ALLOWED_PRIVATE_HOSTS:}
+
+  # Phase 2 slice 2.4: sandbox tools (see ai.pdlc.agents.config.SandboxConfig). provider none =
+  # every sandbox tool call is refused; docker = local dev under runtime runsc (gVisor);
+  # kubernetes = a Job per call under runtimeClassName <runtime> (infra/k8s/sandbox.yaml).
+  sandbox:
+    provider: ${PDLC_SANDBOX_PROVIDER:none}
+    runtime: ${PDLC_SANDBOX_RUNTIME:}
+    proxy:
+      bind-host: ${PDLC_SANDBOX_PROXY_BIND_HOST:0.0.0.0}
+      port: ${PDLC_SANDBOX_PROXY_PORT:3128}
+      advertised-host: ${PDLC_SANDBOX_PROXY_ADVERTISED_HOST:}
 
 temporal:
   target: ${TEMPORAL_TARGET:127.0.0.1:7233}

@@ -1,5 +1,10 @@
 server:
   port: 8081
+  servlet:
+    session:
+      cookie:
+        http-only: true
+        same-site: lax
 
 spring:
   application:
@@ -19,6 +24,26 @@ pdlc:
     token: ${BUILD_AGENT_TOKEN:}
   demo:
     enabled: ${PDLC_DEMO_ENABLED:false}
+  # Phase 1 slice 2 (docs/phase-1-execution-spec.md). Enterprise login is enabled by the standard
+  # Spring keys, e.g. env SPRING_SECURITY_OAUTH2_CLIENT_PROVIDER_PDLC_ISSUER_URI,
+  # SPRING_SECURITY_OAUTH2_CLIENT_REGISTRATION_PDLC_CLIENT_ID/_CLIENT_SECRET/_SCOPE (openid,profile,email),
+  # and service JWTs by SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI. role-mapping (IdP
+  # group -> PO|SquadLead|FSDeveloper|QA|Admin) is easiest supplied via SPRING_APPLICATION_JSON.
+  identity:
+    dev-headers: ${PDLC_IDENTITY_DEV_HEADERS:false}
+    user-claim: ${PDLC_IDENTITY_USER_CLAIM:email}
+    role-claim: ${PDLC_IDENTITY_ROLE_CLAIM:groups}
+    post-login-redirect: ${PDLC_IDENTITY_POST_LOGIN_REDIRECT:http://localhost:5173/}
+    allowed-origins: ${PDLC_IDENTITY_ALLOWED_ORIGINS:http://localhost:*}
+    service-token: ${PDLC_SERVICE_TOKEN:}
+    webhook-token: ${PDLC_WEBHOOK_TOKEN:}
+  platform:
+    # Users granted WORKSPACE_ADMIN in the imported `pdlc` workspace on every startup (additive).
+    pdlc-workspace-admins: ${PDLC_WORKSPACE_ADMINS:}
+  # Phase 2 slice 2.1: internal hosts HTTP_API tool connections may target (comma-separated).
+  # Everything else must resolve only to public addresses.
+  egress:
+    allowed-private-hosts: ${PDLC_EGRESS_ALLOWED_PRIVATE_HOSTS:}
 
 temporal:
   target: ${TEMPORAL_TARGET:127.0.0.1:7233}

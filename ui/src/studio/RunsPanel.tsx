@@ -1,0 +1,520 @@
+import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Box, Button, Callout, Flex, Table, Text, TextArea } from '@radix-ui/themes';
+import { Play, Square } from 'lucide-react';
+import { toast } from 'sonner';
+import { errorMessage, studio } from '../api';
+import type { AgentVersion, Effect, PlatformRun, ToolCallRecord } from '../types';
+import EmptyState from '../components/EmptyState';
+import ErrorCallout from '../components/ErrorCallout';
+import RelativeTime from '../components/RelativeTime';
+import CopyHash from '../components/CopyHash';
+import { statusVariant } from './workspace';
+
+const TERMINAL = new Set(['SUCCEEDED', 'FAILED', 'CANCELLED']);
+
+interface Props {
+  workspaceId: string;
+  agentId: string;
+  current: AgentVersion | undefined;
+  canRun: boolean;
+  retired: boolean;
+}
+
+/**
+ * Test invocation: starts a real durable run of the version new runs currently use, then follows it
+ * (2s polling while it is not terminal). Shows exactly what the run pinned - version, content hash,
+ * model and connection - and the recorded output and token usage ("unknown" when the provider did
+ * not report it).
+ */
+export default function RunsPanel({ workspaceId, agentId, current, canRun, retired }: Props) {
+  const queryClient = useQueryClient();
+  const [inputs, setInputs] = useState<Record<string, string>>({});
+  const [selectedRun, setSelectedRun] = useState<string | null>(null);
+
+  useEffect(() => setInputs({}), [current?.version]);
+
+  const runsQuery = useQuery({
+    queryKey: ['studio', workspaceId, 'agent', agentId, 'runs'],
+    queryFn: () => studio.runs(workspaceId, agentId),
+    refetchInterval: 3000,
+  });
+  const selected = selectedRun ?? runsQuery.data?.[0]?.id ?? null;
+  const runQuery = useQuery({
+    queryKey: ['studio', workspaceId, 'run', selected],
+    queryFn: () => studio.run(workspaceId, selected!),
+    enabled: selected != null,
+    refetchInterval: (q) => (q.state.data && TERMINAL.has(q.state.data.status) ? false : 2000),
+  });
+
+  const start = useMutation({
+    mutationFn: () => studio.startRun(workspaceId, agentId, inputs),
+    onSuccess: (run) => {
+      setSelectedRun(run.id);
+      void queryClient.invalidateQueries({ queryKey: ['studio', workspaceId, 'agent', agentId, 'runs'] });
+      toast.success(`Run started on v${run.agentVersion}`);
+    },
+    onError: (e) => toast.error(errorMessage(e)),
+  });
+  const cancel = useMutation({
+    mutationFn: (runId: string) => studio.cancelRun(workspaceId, runId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['studio', workspaceId, 'run', selected] });
+      toast.success('Cancellation requested');
+    },
+    onError: (e) => toast.error(errorMessage(e)),
+  });
+
+  if (!current) {
+    return <EmptyState icon={<Play size={28} />} title="Nothing to run yet" hint="Publish a version first; runs always use a published version." />;
+  }
+
+  return (
+    <Flex direction="column" gap="4">
+      <Box>
+        <Text size="2" weight="medium" as="div" mb="2">
+          Test run of v{current.version}
+        </Text>
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            start.mutate();
+          }}
+        >
+          <Flex direction="column" gap="2">
+            {(current.spec.variables ?? []).map((v) => (
+              <label key={v.name}>
+                <Text size="1" color="gray">
+                  {v.name}
+                  {v.required ? ' (required)' : ''}
+                  {v.description ? ` — ${v.description}` : ''}
+                </Text>
+                <TextArea
+                  rows={2}
+                  value={inputs[v.name] ?? ''}
+                  onChange={(e) => setInputs({ ...inputs, [v.name]: e.target.value })}
+                />
+              </label>
+            ))}
+            {(current.spec.variables ?? []).length === 0 && (
+              <Text size="1" color="gray">
+                This version declares no inputs.
+              </Text>
+            )}
+            <Flex gap="2" align="center" wrap="wrap">
+              <Button type="submit" disabled={!canRun || retired} loading={start.isPending}>
+                <Play size={14} /> Start run
+              </Button>
+              {!canRun && (
+                <Text size="1" color="gray">
+                  Running needs the OPERATOR capability.
+                </Text>
+              )}
+              {retired && (
+                <Text size="1" color="gray">
+                  Retired agents cannot run.
+                </Text>
+              )}
+            </Flex>
+          </Flex>
+        </form>
+      </Box>
+
+      {runQuery.data && (
+        <RunDetail
+          run={runQuery.data}
+          canCancel={canRun}
+          onCancel={() => cancel.mutate(runQuery.data.id)}
+          cancelling={cancel.isPending}
+          usesTools={(current.spec.tools ?? []).length > 0}
+        />
+      )}
+
+      <Box>
+        <Text size="2" weight="medium" as="div" mb="2">
+          Recent runs
+        </Text>
+        {runsQuery.isError ? (
+          <ErrorCallout title="Failed to load runs" error={runsQuery.error} />
+        ) : (runsQuery.data ?? []).length === 0 ? (
+          <Text size="2" color="gray">
+            No runs yet.
+          </Text>
+        ) : (
+          <Box style={{ overflowX: 'auto' }}>
+            <Table.Root variant="surface" size="1">
+              <Table.Header>
+                <Table.Row>
+                  <Table.ColumnHeaderCell>Status</Table.ColumnHeaderCell>
+                  <Table.ColumnHeaderCell>Version</Table.ColumnHeaderCell>
+                  <Table.ColumnHeaderCell>Model</Table.ColumnHeaderCell>
+                  <Table.ColumnHeaderCell>Started</Table.ColumnHeaderCell>
+                  <Table.ColumnHeaderCell />
+                </Table.Row>
+              </Table.Header>
+              <Table.Body>
+                {(runsQuery.data ?? []).map((r) => (
+                  <Table.Row key={r.id} style={r.id === selected ? { background: 'var(--s2)' } : undefined}>
+                    <Table.Cell>
+                      <span className={`pill ${statusVariant(r.status)}`}>{r.status}</span>
+                    </Table.Cell>
+                    <Table.Cell>v{r.agentVersion}</Table.Cell>
+                    <Table.Cell>
+                      {r.model ?? `remote · ${r.connectionId}`}
+                      {r.fallback ? ' (fallback)' : ''}
+                    </Table.Cell>
+                    <Table.Cell>
+                      <RelativeTime iso={r.createdAt} /> <Text size="1" color="gray">by {r.createdBy}</Text>
+                    </Table.Cell>
+                    <Table.Cell>
+                      <Button size="1" variant="ghost" onClick={() => setSelectedRun(r.id)} aria-pressed={r.id === selected}>
+                        View
+                      </Button>
+                    </Table.Cell>
+                  </Table.Row>
+                ))}
+              </Table.Body>
+            </Table.Root>
+          </Box>
+        )}
+      </Box>
+    </Flex>
+  );
+}
+
+function tokens(n: number | null): string {
+  return n == null ? 'unknown' : String(n);
+}
+
+function RunDetail({
+  run,
+  canCancel,
+  onCancel,
+  cancelling,
+  usesTools,
+}: {
+  run: PlatformRun;
+  canCancel: boolean;
+  onCancel: () => void;
+  cancelling: boolean;
+  usesTools: boolean;
+}) {
+  const active = !TERMINAL.has(run.status);
+  const callsQuery = useQuery({
+    queryKey: ['studio', run.workspaceId, 'run', run.id, 'tool-calls'],
+    queryFn: () => studio.toolCalls(run.workspaceId, run.id),
+    refetchInterval: active ? 2000 : false,
+  });
+  const calls = callsQuery.data ?? [];
+  const effectsQuery = useQuery({
+    queryKey: ['studio', run.workspaceId, 'run', run.id, 'effects'],
+    queryFn: () => studio.effects(run.workspaceId, run.id),
+    enabled: usesTools,
+    refetchInterval: active ? 2000 : false,
+  });
+  const effects = effectsQuery.data ?? [];
+  return (
+    <Box style={{ border: '1px solid var(--line)', borderRadius: 8, padding: 14 }} aria-live="polite">
+      <Flex justify="between" align="center" gap="2" wrap="wrap" mb="2">
+        <Flex gap="2" align="center" wrap="wrap">
+          <span className={`pill ${statusVariant(run.status)}`}>
+            {active && <i className="dot pulse" />}
+            {run.status}
+          </span>
+          <Text size="2">
+            pinned <strong>v{run.agentVersion}</strong>
+          </Text>
+          <CopyHash hash={run.contentHash.replace(/^sha256:/, '')} />
+        </Flex>
+        {active && canCancel && (
+          <Button size="1" color="red" variant="soft" loading={cancelling} onClick={onCancel}>
+            <Square size={12} /> Cancel
+          </Button>
+        )}
+      </Flex>
+      {run.model == null && run.remote?.protocolVersion?.startsWith('rest') ? (
+        <Text size="1" color="gray" as="div" mb="2">
+          REST service via {run.connectionId} ({run.remote.protocolVersion === 'rest-async' ? 'async job' : 'sync call'})
+          {run.remote.taskId ? ` · job ${run.remote.taskId}` : ''} · state {run.remote.state.toLowerCase()}
+          {run.remote.question ? ` (service said “${run.remote.question}”)` : ''} · attempts {run.attempts}
+          {run.remote.cancel ? ` · cancel ${run.remote.cancel.toLowerCase().replace('_', ' ')}` : ''}
+        </Text>
+      ) : run.model == null && run.remote == null ? (
+        <Text size="1" color="gray" as="div" mb="2">
+          Remote agent via {run.connectionId} · not answered yet · attempts {run.attempts}
+        </Text>
+      ) : run.model == null && run.remote ? (
+        <Text size="1" color="gray" as="div" mb="2">
+          Remote A2A agent via {run.connectionId} (A2A {run.remote.protocolVersion}) · task {run.remote.taskId ?? 'not created yet'} ·
+          remote state {run.remote.state?.toLowerCase().replace('_', '-') ?? 'unknown'} · attempts {run.attempts}
+          {run.remote.cancel ? ` · cancel ${run.remote.cancel.toLowerCase().replace('_', ' ')}` : ''}
+        </Text>
+      ) : (
+        <Text size="1" color="gray" as="div" mb="2">
+          Model {run.model} → {run.providerModel} via {run.connectionId}
+          {run.fallback ? ' (declared fallback)' : ''} · attempts {run.attempts} · tokens in {tokens(run.promptTokens)} / out{' '}
+          {tokens(run.completionTokens)}
+        </Text>
+      )}
+      {run.error && (
+        <Callout.Root color="red" size="1" mb="2">
+          <Callout.Text>{run.error}</Callout.Text>
+        </Callout.Root>
+      )}
+      {run.output != null ? (
+        <Box style={{ whiteSpace: 'pre-wrap', fontFamily: 'var(--code-font-family, monospace)', fontSize: 13, background: 'var(--s2)', padding: 10, borderRadius: 6 }}>
+          {JSON.stringify(run.output, null, 2)}
+        </Box>
+      ) : run.outputText ? (
+        <Box style={{ whiteSpace: 'pre-wrap', fontFamily: 'var(--code-font-family, monospace)', fontSize: 13, background: 'var(--s2)', padding: 10, borderRadius: 6 }}>
+          {run.outputText}
+        </Box>
+      ) : run.status === 'AWAITING_APPROVAL' ? (
+        <Callout.Root color="amber" size="1">
+          <Callout.Text>
+            Paused: a write needs approval before it runs.{' '}
+            <Link to="/studio?view=approvals">Open the approval inbox</Link>. Undecided requests escalate, then expire
+            as a denial — never approved by time.
+          </Callout.Text>
+        </Callout.Root>
+      ) : run.status === 'AWAITING_INPUT' ? (
+        <RemoteQuestion run={run} canReply={canCancel} />
+      ) : run.status === 'AWAITING_AUTH' ? (
+        <Callout.Root color="amber" size="1">
+          <Callout.Text>
+            Paused: the remote agent needs authorization the platform cannot give
+            {run.remote?.question ? ` — “${run.remote.question}”` : ''}. Only cancelling ends this run.
+          </Callout.Text>
+        </Callout.Root>
+      ) : run.status === 'NEEDS_OPERATOR' ? (
+        <Callout.Root color="red" size="1">
+          <Callout.Text>
+            Paused: a write may or may not have reached its target and cannot be resent safely. An operator must check the
+            target and resolve the effect below.
+          </Callout.Text>
+        </Callout.Root>
+      ) : (
+        active && (
+          <Text size="2" color="gray">
+            {run.model == null ? 'Waiting for the remote agent…' : 'Waiting for the model…'}
+          </Text>
+        )
+      )}
+      {effects.length > 0 && <EffectsTable run={run} effects={effects} canResolve={canCancel} />}
+      {(usesTools || calls.length > 0) && <ToolTrace calls={calls} error={callsQuery.error} />}
+    </Box>
+  );
+}
+
+/** The remote agent's question and, for operators, one reply that resumes the same remote task. */
+function RemoteQuestion({ run, canReply }: { run: PlatformRun; canReply: boolean }) {
+  const queryClient = useQueryClient();
+  const [text, setText] = useState('');
+  const reply = useMutation({
+    mutationFn: () => studio.replyToRun(run.workspaceId, run.id, text),
+    onSuccess: () => {
+      setText('');
+      void queryClient.invalidateQueries({ queryKey: ['studio', run.workspaceId, 'run', run.id] });
+      toast.success('Reply sent; the run resumes');
+    },
+    onError: (e) => toast.error(errorMessage(e)),
+  });
+  return (
+    <Callout.Root color="amber" size="1" style={{ gridTemplateColumns: '1fr', justifyContent: 'stretch' }}>
+      <Box style={{ gridColumn: '1 / -1', width: '100%' }}>
+        <Text as="div" mb="1">
+          Paused: the remote agent needs input{run.remote?.question ? ':' : '.'}
+        </Text>
+        {run.remote?.question && (
+          <Text as="div" weight="medium" mb="2">
+            “{run.remote.question}”
+          </Text>
+        )}
+        {canReply ? (
+          <Flex direction="column" gap="2">
+            <TextArea
+              aria-label="Reply to the remote agent"
+              placeholder="Your answer is sent to the same remote task"
+              value={text}
+              rows={2}
+              style={{ width: '100%' }}
+              onChange={(e) => setText(e.target.value)}
+            />
+            <Flex justify="end">
+              <Button size="1" disabled={text.trim() === ''} loading={reply.isPending} onClick={() => reply.mutate()}>
+                Send reply
+              </Button>
+            </Flex>
+          </Flex>
+        ) : (
+          <Text size="1">Replying needs the OPERATOR capability.</Text>
+        )}
+      </Box>
+    </Callout.Root>
+  );
+}
+
+/** Approved writes of this run: their idempotency key, state, and - when UNKNOWN - operator resolution. */
+function EffectsTable({ run, effects, canResolve }: { run: PlatformRun; effects: Effect[]; canResolve: boolean }) {
+  const queryClient = useQueryClient();
+  const [note, setNote] = useState('');
+  const resolve = useMutation({
+    mutationFn: ({ id, outcome }: { id: string; outcome: 'SUCCEEDED' | 'FAILED' | 'RETRY' }) =>
+      studio.resolveEffect(run.workspaceId, run.id, id, outcome, note),
+    onSuccess: (e) => {
+      void queryClient.invalidateQueries({ queryKey: ['studio', run.workspaceId, 'run', run.id] });
+      toast.success(`Effect resolved: ${e.resolution}`);
+    },
+    onError: (e) => toast.error(errorMessage(e)),
+  });
+  return (
+    <Box mt="3">
+      <Text size="2" weight="medium" as="div" mb="1">
+        Writes
+      </Text>
+      <Box style={{ overflowX: 'auto' }}>
+        <Table.Root variant="surface" size="1">
+          <Table.Header>
+            <Table.Row>
+              <Table.ColumnHeaderCell>Tool</Table.ColumnHeaderCell>
+              <Table.ColumnHeaderCell>State</Table.ColumnHeaderCell>
+              <Table.ColumnHeaderCell>Sent</Table.ColumnHeaderCell>
+              <Table.ColumnHeaderCell>Idempotency key</Table.ColumnHeaderCell>
+            </Table.Row>
+          </Table.Header>
+          <Table.Body>
+            {effects.map((e) => (
+              <Table.Row key={e.id}>
+                <Table.Cell>
+                  {e.toolId} v{e.toolVersion}
+                </Table.Cell>
+                <Table.Cell>
+                  <span className={`pill ${e.state === 'SUCCEEDED' ? 'pass' : e.state === 'FAILED' ? 'fail' : 'review'}`}>{e.state}</span>
+                  {e.httpStatus != null && <Text size="1"> HTTP {e.httpStatus}</Text>}
+                  {e.resolution && (
+                    <Text size="1" color="gray" as="div">
+                      resolved {e.resolution} by {e.resolvedBy}
+                      {e.note ? ` — ${e.note}` : ''}
+                    </Text>
+                  )}
+                </Table.Cell>
+                <Table.Cell>{e.sendCount}×</Table.Cell>
+                <Table.Cell>
+                  <code style={{ fontSize: 12, wordBreak: 'break-all' }}>{e.idempotencyKey}</code>
+                </Table.Cell>
+              </Table.Row>
+            ))}
+          </Table.Body>
+        </Table.Root>
+      </Box>
+      {effects.some((e) => e.state === 'UNKNOWN') && (
+        <Flex direction="column" gap="2" mt="2">
+          <TextArea
+            aria-label="Resolution note"
+            rows={2}
+            placeholder="What you found at the target"
+            value={note}
+            disabled={!canResolve}
+            onChange={(e) => setNote(e.target.value)}
+          />
+          {effects
+            .filter((e) => e.state === 'UNKNOWN')
+            .map((e) => (
+              <Flex key={e.id} gap="2" wrap="wrap" align="center">
+                <Text size="1">{e.toolId}:</Text>
+                <Button size="1" disabled={!canResolve} onClick={() => resolve.mutate({ id: e.id, outcome: 'SUCCEEDED' })}>
+                  It happened
+                </Button>
+                <Button size="1" color="red" variant="soft" disabled={!canResolve} onClick={() => resolve.mutate({ id: e.id, outcome: 'FAILED' })}>
+                  It did not happen
+                </Button>
+                <Button size="1" variant="soft" disabled={!canResolve} onClick={() => resolve.mutate({ id: e.id, outcome: 'RETRY' })}>
+                  Send again
+                </Button>
+              </Flex>
+            ))}
+          {!canResolve && (
+            <Text size="1" color="gray">
+              Resolving needs the OPERATOR capability.
+            </Text>
+          )}
+        </Flex>
+      )}
+    </Box>
+  );
+}
+
+/** Every tool call the model requested in this run, with the policy decision and outcome. */
+function ToolTrace({ calls, error }: { calls: ToolCallRecord[]; error: unknown }) {
+  return (
+    <Box mt="3">
+      <Text size="2" weight="medium" as="div" mb="1">
+        Tool calls
+      </Text>
+      {error ? (
+        <ErrorCallout title="Failed to load tool calls" error={error} />
+      ) : calls.length === 0 ? (
+        <Text size="1" color="gray">
+          No tool calls recorded.
+        </Text>
+      ) : (
+        <Box style={{ overflowX: 'auto' }}>
+          <Table.Root variant="surface" size="1">
+            <Table.Header>
+              <Table.Row>
+                <Table.ColumnHeaderCell>Turn</Table.ColumnHeaderCell>
+                <Table.ColumnHeaderCell>Tool</Table.ColumnHeaderCell>
+                <Table.ColumnHeaderCell>Decision</Table.ColumnHeaderCell>
+                <Table.ColumnHeaderCell>Result</Table.ColumnHeaderCell>
+                <Table.ColumnHeaderCell>Arguments</Table.ColumnHeaderCell>
+              </Table.Row>
+            </Table.Header>
+            <Table.Body>
+              {calls.map((c) => (
+                <Table.Row key={c.id}>
+                  <Table.Cell>
+                    {c.turn}
+                    {c.attempt > 1 ? <Text size="1" color="gray"> (attempt {c.attempt})</Text> : null}
+                  </Table.Cell>
+                  <Table.Cell>
+                    {c.toolId}
+                    {c.toolVersion != null ? ` v${c.toolVersion}` : ''}
+                  </Table.Cell>
+                  <Table.Cell>
+                    <span className={`pill ${c.decision === 'ALLOWED' ? 'pass' : c.decision === 'DENIED' ? 'fail' : 'review'}`}>
+                      {c.decision}
+                    </span>
+                    {c.reason && (
+                      <Text size="1" color="gray" as="div" style={{ maxWidth: 320 }}>
+                        {c.reason}
+                      </Text>
+                    )}
+                  </Table.Cell>
+                  <Table.Cell>
+                    {c.decision !== 'ALLOWED' ? (
+                      <Text size="1" color="gray">
+                        not executed
+                      </Text>
+                    ) : (
+                      <Text size="1">
+                        {c.httpStatus != null ? `HTTP ${c.httpStatus}` : c.error ? 'failed' : 'completed'}
+                        {c.durationMs != null ? ` · ${c.durationMs} ms` : ''}
+                        {c.responseBytes != null ? ` · ${c.responseBytes} B` : ''}
+                        {c.truncated ? ' · truncated' : ''}
+                        {c.error ? ` · ${c.error}` : ''}
+                      </Text>
+                    )}
+                  </Table.Cell>
+                  <Table.Cell>
+                    <code style={{ fontSize: 12, wordBreak: 'break-all' }}>{c.argsJson ?? '—'}</code>
+                  </Table.Cell>
+                </Table.Row>
+              ))}
+            </Table.Body>
+          </Table.Root>
+        </Box>
+      )}
+    </Box>
+  );
+}

@@ -33,7 +33,8 @@ governed integrations. Extensibility covers configuration and sandboxed executio
 
 ### 1. Establish the platform boundary and ownership
 
-Use four logical areas. Do not create a microservice for every feature:
+Use four logical areas. Do not create a microservice for every feature; see
+[Scalability and service boundaries](#scalability-and-service-boundaries) below:
 
 - **Authoring/control plane:** identity, workspaces, asset registries, publication, connection grants, run entry points, approval inbox and audit. Extend `control-plane/` using the existing record/entity/repository/controller conventions.
 - **Durable runtime:** a new generic workflow interpreter in `core/` on Temporal. It coordinates deterministic graph transitions, human waits, timers and activity results. It never makes model calls, HTTP requests, script runs or database reads itself.
@@ -41,6 +42,55 @@ Use four logical areas. Do not create a microservice for every feature:
 - **Knowledge/context services:** durable source metadata, ACLs, retrieval and memory APIs, owned by the control plane. Ingestion and extraction run asynchronously in restricted workers. Every agent runtime uses the same authorized context service rather than keeping a private, inconsistent copy.
 
 Keep Java/Spring, Temporal, React and Postgres. Keep Embabel as the native model integration rather than adding a second native agent framework. Add pgvector and Postgres full-text search for hybrid retrieval, plus object storage for original documents and large artifacts.
+
+#### Scalability and service boundaries
+
+**Decision: the control plane is a modular monolith; execution is independently scaled workers.**
+We don't split the platform into a microservice per feature. The load that grows with usage is
+model calls, tool and sandbox execution, document ingestion and retrieval. All of that already runs
+outside the control plane, in workers that scale on their own. The control plane does
+authorization, definitions and projections. Splitting it now would add network hops, distributed
+transactions and more deployments, without removing any bottleneck.
+
+**Module boundaries inside the control plane.** Each module is a package that owns its tables and
+exposes a service interface. No module reads or writes another module's tables. Cross-module work
+goes through that module's service, or through Temporal for anything long-running. These rules keep
+extraction cheap later.
+
+| Module | Owns | Examples |
+|---|---|---|
+| Identity & workspaces | sessions, service identities, `workspaces`, `workspace_members` | `WorkspaceService.require` is the one access check every module calls |
+| Registry | `agent_definitions`, `agent_definition_versions`, and later skills, tools, workflows and policies | `AgentRegistryService.resolveForRun` |
+| Runs | run projections, artifacts, approvals inbox | Starts Temporal workflows; never reads registry tables directly |
+| Connections | connection metadata, secret references, model catalog | Credentials are resolved only inside execution adapters |
+| Knowledge & memory | collections, sources, chunks, embeddings, memory records | Ingestion workers write through this module's API |
+| PDLC package | today's `work_items`, `comments`, `prs`, `review_events`, … | Uses the platform modules; they never depend on it |
+
+New platform tables use a module prefix where the name would otherwise be ambiguous, for example
+`platform_runs` and `knowledge_sources`.
+
+**How each component scales:**
+
+| Component | Scaling approach |
+|---|---|
+| control-plane | Stateless replicas behind a load balancer. Once there is more than one replica, browser sessions are stored in Postgres (Spring Session JDBC), so there are no sticky sessions. |
+| agents (native reasoning) | Worker replicas on the `REASONING` queue. Model concurrency is limited per provider connection, not per pod. |
+| Sandbox / tool / ingestion workers | Separate pools on their own Temporal queues, sized for their workload (CPU for parsing, network for connectors). |
+| build-worker | Pull-based claim/lease, so more hosts means more parallel builds. |
+| Temporal | Managed or clustered Temporal. Large payloads go by reference, keeping workflow history small. |
+| Postgres | Vertical scaling first, then read replicas for retrieval and projections. pgvector indexes are sized per collection. |
+| Object storage | Holds originals and large artifacts, so the database stays metadata-sized. |
+
+**When a module becomes its own service.** Extract a module only when there is evidence for it:
+
+- It needs a different scaling profile or hardware (for example GPU embedding, or a large search index).
+- It needs a different release cadence or on-call ownership.
+- It needs a stricter isolation or compliance boundary.
+
+Knowledge ingestion and retrieval is the most likely first candidate. An extracted module keeps its
+tables and service interface. Other modules then call it over HTTP or gRPC, authenticating with the
+same service identities that Phase 1 slice 2 introduces for workers. It does not share a database
+with the modules that call it.
 
 - The application database stores metadata, grants, definitions, run projections and memory records.
 - Temporal stores execution history.

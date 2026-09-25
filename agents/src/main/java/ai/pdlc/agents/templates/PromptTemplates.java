@@ -22,7 +22,10 @@ import java.util.Map;
  * prompts & release-doc templates"). Resolution per {@link #render}: a team's {@code prompts_dir}
  * override (one {@code <name>.mustache} file at a time) takes precedence over the bundled classpath
  * default; neither present is a startup-shaped config error, not a template-authoring bug, so it
- * throws the existing {@link PdlcConfigException}.
+ * throws the existing {@link PdlcConfigException}. The bundled defaults live in {@code core}
+ * ({@code core/src/main/resources/prompts/}) so control-plane can import the same files as published
+ * platform agents ({@code PdlcImportSeeder}); this class never reads the platform registry, so a
+ * Studio edit of an imported agent does not change what the PDLC pipeline renders.
  *
  * <p>No caching: a handful of renders per story, and teams editing override files expect the change
  * to take effect without restarting the agents process.

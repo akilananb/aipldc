@@ -85,13 +85,23 @@ and shows the draft → a PO/SquadLead approves via `POST .../approve-agent-resu
 | `control-plane/src/main/java/ai/pdlc/controlplane/persistence/` | Spring Data JDBC entities/repositories |
 | `control-plane/src/main/java/ai/pdlc/controlplane/temporal/` | `BoardSideEffectsImpl`, `BuildActivitiesImpl`, `WorkerConfig`, `WorkflowStubs` |
 | `control-plane/src/main/java/ai/pdlc/controlplane/review/` | `ReviewTrailService`, `CommentReanchorer`, `AgentMentions` |
-| `control-plane/src/main/resources/db/migration/` | Flyway `V1__schema.sql` … `V6__agent_mention_columns.sql` |
+| `control-plane/src/main/java/ai/pdlc/controlplane/platform/` + `core/.../platform/` | Configurable agent platform (docs/phase-1-execution-spec.md): workspaces, capabilities, versioned `AgentSpec` registry, `ContentHash` |
+| `control-plane/src/main/java/ai/pdlc/controlplane/connections/` | Connections (secret *references* only) and the DB-backed `ModelCatalog`, seeded once from `pdlc.yaml` by `ModelCatalogSeeder` |
+| `control-plane/.../platform/{ToolRegistryService,VersionedDefinitions,DefinitionStore}` + `agents/.../platform/{ToolExecutor,ToolStore}` + `core/.../platform/{ToolSpec*,ToolArgs,EgressPolicy}` | Governed API tools (docs/phase-2-execution-spec.md slice 2.1): versioned tool registry sharing the agent lifecycle, `HTTP_API` connections granted per workspace (`connection_grants`), the bounded tool loop and its `platform_tool_calls` trace |
+| `adapters/.../mcp/` + `control-plane/.../connections/McpDiscoveryService` + `agents/.../platform/{McpToolCaller,McpCredentials,McpDiscoveryActivitiesImpl}` + `ui/src/studio/McpDiscoveryPanel.tsx` | Remote MCP tools (docs/phase-2-execution-spec.md slice 2.3): governed Streamable-HTTP client, OAuth client credentials, discovery/review, fingerprint-checked execution |
+| `control-plane/.../runs/{ApprovalService,JdbcApprovalStore}` + `ui/src/studio/ApprovalsSection.tsx` | Write approvals inbox and effect resolution (docs/phase-2-execution-spec.md slice 2.2) |
+| `core/.../port/SandboxPort` + `adapters/.../sandbox/` + `control-plane/.../sandbox/` + `agents/.../platform/SandboxToolRunner` + `agents/.../config/SandboxConfig` + `infra/k8s/sandbox.yaml` | Sandbox tools (docs/phase-2-execution-spec.md slice 2.4): enterprise image catalog (`sandbox_images`), `KubernetesJobSandbox` (Job per call under a gVisor RuntimeClass) and `DockerSandbox` (local dev under `runsc`), and the per-call credentialed `SandboxEgressProxy` |
+| `adapters/.../a2a/` + `agents/.../platform/{A2aRunner,A2aCardActivitiesImpl}` + `control-plane/.../connections/A2aCardService` + `core/.../workflow/A2aCard*` | A2A outbound delegation (docs/phase-2-execution-spec.md slice 2.5): `runtime: a2a` agents on `A2A_AGENT` connections, A2A 1.0/0.3 JSON-RPC client, remote task tracking, operator replies |
+| `agents/.../platform/RestAgentRunner` + `core/.../platform/AgentSpec.RestBinding` | Generic REST agents (docs/phase-2-execution-spec.md slice 2.6a): `runtime: rest` agents on `REST_AGENT` connections, a declared sync or async submit/status/cancel mapping |
+| `control-plane/.../runs/` + `agents/.../platform/` + `core/.../workflow/AgentRunWorkflow*` | Durable single-agent runs: `RunService` pins version+model on a `platform_runs` row and starts `AgentRunWorkflow`; the agents-side `AgentRunActivitiesImpl` renders, calls the model at runtime (`OpenAiCompatibleModelInvoker`) and records the outcome |
+| `control-plane/src/main/resources/db/migration/` | Flyway `V1__schema.sql` … `V23__a2a_runs.sql` |
 | `agents/src/main/java/ai/pdlc/agents/{grill,po,plan,review,release,monitor,mention}/` | Per-domain LLM agent components |
 | `agents/src/main/java/ai/pdlc/agents/activities/` | `AgentActivitiesImpl`, `AgentContext` (best-effort reads), `RunRecorder` |
 | `agents/src/main/java/ai/pdlc/agents/templates/` | `PromptTemplates` (Mustache renderer) |
-| `agents/src/main/resources/prompts/*.mustache` | LLM prompt templates, one file per agent-call |
+| `core/src/main/resources/prompts/*.mustache` | LLM prompt templates, one file per agent-call (in `core` so control-plane's `PdlcImportSeeder` can import them as platform agents; agents still loads them from the classpath) |
 | `build-worker/src/` | Standalone Node ACP build agent (`worker.ts`, `poller.ts`, `acp.ts`, `buildTask.ts`, `repo.ts`, `verifier.ts`) |
 | `ui/src/routes/` | `ReviewPage.tsx`, `TaskDetailPage.tsx`, item list |
+| `ui/src/studio/` | Agent Studio (docs/phase-1-execution-spec.md slice 5): workspace-scoped agent list, editor, versions/diff/rollback, test runs; API client is `studio` in `ui/src/api.ts` |
 | `ui/src/review/` | `CommentPanel.tsx`, `PreviewTab`/`SourceTab`/`DiffTab`/`ReviewMdTab`, `GateBadge.tsx` |
 | `infra/` | `Tiltfile`-referenced `k8s/*.yaml`, `pdlc.yaml` (runtime config), `stub-llm/` (WireMock) |
 | `docs/` | Architecture ground truth: `agent-playbook.md`, `orchestration-decision.md`, `tech-stack-architecture.md`, `storyboard.md` |
@@ -106,7 +116,7 @@ mvn test                                                    # full reactor test 
 mvn -pl control-plane -am test                              # one module + its deps
 mvn -pl control-plane test -Dtest=AgentMentionsTest         # one test class
 mvn -pl control-plane test -Dtest=AgentMentionsTest#parsesEachSupportedAgentCaseInsensitively  # one method
-mvn -q -o test -pl core,control-plane,agents -Dtest='!BoardSideEffectsImplTest,!PersistenceIntegrationTest,!BuildTaskLeaseTest'  # skip Docker-dependent tests (see Testing & QA)
+mvn -q -o test -pl core,control-plane,agents -Dtest='!BoardSideEffectsImplTest,!PersistenceIntegrationTest,!BuildTaskLeaseTest,!PlatformRegistryIntegrationTest,!JdbcProjectDirectoryTest,!DemoReadOnlyTest,!DemoInitializerIntegrationTest,!LocalBoardAdapterIntegrationTest'  # skip Docker-dependent tests (see Testing & QA)
 ```
 
 **UI (`ui/`, Node/Vite):**
@@ -188,7 +198,7 @@ scripts/e2e-demo-phase4.sh   # + release pack -> gate 3 -> deploy -> monitor
 - **Registering a new Temporal workflow type:** one line in
   `agents/src/main/java/ai/pdlc/agents/config/WorkerConfig.java`:
   `worker.registerWorkflowImplementationTypes(FeatureWorkflowImpl.class,
-  AgentMentionWorkflowImpl.class)`.
+  AgentMentionWorkflowImpl.class, AgentRunWorkflowImpl.class)`.
 - **Naming:** `*Controller` (REST), `*Entity`+`*Repository` (Spring Data JDBC pair), `*Dto`
   (wire records under `web/dto/`), `*Impl` (interface implementation), `*Config` (Spring
   `@Configuration`), `*Agent` (LLM caller under `agents/`), `Fake*` (in-process Temporal test
@@ -196,8 +206,45 @@ scripts/e2e-demo-phase4.sh   # + release pack -> gate 3 -> deploy -> monitor
 - **UI mutations:** `@tanstack/react-query` `useMutation` per action, `onSuccess` invalidates
   `['artifact', id]` and/or `['item', id]`; artifact/item queries poll every 2s
   (`refetchInterval: 2000`) so async workflow state transitions (e.g. `running`→`pending`)
-  surface without extra wiring. Identity is `useIdentity()`/`setIdentity()` from `ui/src/identity.ts`
-  (dev-only `X-User`/`X-Role` header shim, no real auth).
+  surface without extra wiring. Identity is `useIdentity()` from `ui/src/identity.ts`, fed either by the dev
+  `X-User`/`X-Role` switcher (only when `/api/me` reports `dev-headers`) or by the OIDC session via
+  `useAuth()`; `api.ts` sends `credentials: 'include'` and the `X-XSRF-TOKEN` CSRF header.
+- **Authentication (control-plane `identity/`).** `SecurityConfig` owns all authentication:
+  enterprise OIDC login, service client-credentials JWTs (scopes `pdlc.build`/`pdlc.board.read`/
+  `pdlc.webhook`), shared tokens, and the dev header shim (`PDLC_IDENTITY_DEV_HEADERS=true`, off by
+  default, on in the local k8s manifest). Controllers only call `IdentityResolver.resolve(...)`;
+  never read `X-User`/tokens directly. See docs/phase-1-execution-spec.md slice 2.
+- **Tools run only through `ToolExecutor`** (agents, docs/phase-2-execution-spec.md slice 2.1). It re-checks the
+  pin, content hash, args, effect (WRITE is denied until approvals in slice 2.2), connection and grant *at call time*,
+  applies `EgressPolicy` (http(s) only; every resolved address public unless in
+  `pdlc.egress.allowed-private-hosts`), never follows redirects, and records every decision. Never add another way
+  to make a tool's HTTP call, and never let Spring AI execute tool callbacks.
+- **Writes need an approval and an effect intent** (slice 2.2). A WRITE runs only under an `APPROVED`
+  `platform_approvals` row matching its tool version and args hash, decided by a workspace `REVIEWER` who did not
+  start the run; an `INTENDED` `platform_effects` row keyed `run:turn:callId` is recorded before sending. Never resend
+  an effect whose outcome is known; resend an `UNKNOWN` one only for `idempotency: HEADER` tools, otherwise pause for
+  an operator. Runs pause and resume through `AgentRunWorkflow` signals, with the conversation in
+  `platform_run_messages` - never put prompt/tool content in workflow history.
+- **MCP tools** (slice 2.3) are `kind: mcp` tool versions pinning the remote tool, its schema and an `McpFingerprint`;
+  `ToolExecutor` refuses a call when the server's current definition differs. Talk to MCP servers only through
+  `adapters/.../mcp/McpHttpClient` (egress-guarded, no redirects) and `McpOAuth` - never the MCP SDK transport - and
+  keep credential use in agents (discovery runs as `McpDiscoveryWorkflow` on `REASONING`).
+- **Sandbox tools** (slice 2.4) are `kind: sandbox` tool versions pinning an enterprise catalog image by digest;
+  `ToolExecutor` refuses a call when the entry is retired, re-pinned or its schema changed, or when no isolation
+  runtime is configured (`pdlc.sandbox.provider=none` is the default). Run images only through `SandboxPort`
+  (non-root, read-only root, dropped capabilities, no host mounts or runtime socket, fresh workspace per call), give
+  them network only through `SandboxEgressProxy` with a per-call credential that is revoked when the call ends or the
+  run is cancelled, and never pass input or credentials on a command line or in a Job spec.
+- **A2A delegation** (slice 2.5): talk to remote agents only through `adapters/.../a2a/A2aClient`. Never trust the Agent
+  Card for more than skills, version and a same-origin endpoint; re-read it per invocation. Record every message's
+  intent (`platform_remote_sends`) before sending and the remote task id as soon as it is known; a retry reconciles via
+  `GetTask`, and an outcome that cannot be reconciled fails the run instead of resending. Report remote states honestly
+  (input-required/auth-required pause the run; a refused cancel is recorded as refused).
+- **REST agents** (slice 2.6a) run only through `RestAgentRunner`. The service's job state is only what the agent's
+  declared `states` map says: an unmapped value fails the run and is never guessed. Resend an unanswered submit only for
+  `idempotency: HEADER` bindings (same `Idempotency-Key`); a retry with a saved job id polls it and never resubmits.
+  Record-component accessors on specs must not look like bean getters of another component (`isRest()` once hid `rest`
+  from Jackson); mark helpers `@JsonIgnore` and name them so they cannot collide.
 - **No linter/formatter configured anywhere** (no ESLint, Prettier, Checkstyle, Spotless,
   `.editorconfig`). Match surrounding code style by hand; TypeScript's only enforced gate is
   `tsc --noEmit` (strict mode) inside `npm run build`.
@@ -280,7 +327,7 @@ scripts/e2e-demo-phase4.sh   # + release pack -> gate 3 -> deploy -> monitor
      `control-plane/src/test/java/ai/pdlc/controlplane/review/AgentMentionsTest.java`.
 - **Docker-unavailable environments:** exclude the Testcontainers-backed classes:
   ```bash
-  mvn -q -o test -pl core,control-plane,agents -Dtest='!BoardSideEffectsImplTest,!PersistenceIntegrationTest,!BuildTaskLeaseTest'
+  mvn -q -o test -pl core,control-plane,agents -Dtest='!BoardSideEffectsImplTest,!PersistenceIntegrationTest,!BuildTaskLeaseTest,!PlatformRegistryIntegrationTest,!JdbcProjectDirectoryTest,!DemoReadOnlyTest,!DemoInitializerIntegrationTest,!LocalBoardAdapterIntegrationTest'
   ```
   (this is an informal, comment-documented convention — see
   `agents/src/test/java/ai/pdlc/agents/AgentSpringWiringTest.java:34-38` — not a pom-level
@@ -289,7 +336,9 @@ scripts/e2e-demo-phase4.sh   # + release pack -> gate 3 -> deploy -> monitor
 - **Real-network adapter tests** (`adapters/.../ado/AdoBoardAdapterContractTest.java`,
   `.../github/GitHubRepoAdapterWireTest.java`) are gated by
   `@EnabledIfEnvironmentVariable(named = "ADO_ORG"/"ADO_PROJECT"/"ADO_PAT", ...)` — they silently
-  skip (not fail) unless those env vars are set.
+  skip (not fail) unless those env vars are set. Likewise `adapters/.../sandbox/KubernetesJobSandboxClusterTest`
+  needs `PDLC_K8S_API`/`PDLC_K8S_TOKEN`/`PDLC_K8S_CA` (set by `scripts/sandbox-colima.sh`), and `DockerSandboxTest`
+  skips itself unless a Docker engine with the `runsc` runtime and `busybox:1.36` is available.
 - **Config-drift test:** `InfraPdlcYamlTest` loads the real `infra/pdlc.yaml`; when adding a new
   `agents.roles` entry, extend its `containsKeys(...)` assertion to keep it meaningful.
 - **`agents/src/test/java/ai/pdlc/agents/AgentSpringWiringTest.java`** proves Spring can
