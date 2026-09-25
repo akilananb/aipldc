@@ -196,6 +196,14 @@ public class GrpcAgentRunner {
             } finally {
                 inFlight.remove(id);
             }
+            if (collector.overflow == null && collector.status.getCode() == Status.Code.CANCELLED) {
+                // Cancelled here by cancelRemote: the run stopped, so this is its cancellation, not an unknown outcome.
+                String status = runs.load(id).map(Invocation::status).orElse("UNKNOWN");
+                if (!"RUNNING".equals(status)) {
+                    runs.setRemoteCancel(id, "SIGNALLED");
+                    throw reject("the run is " + status + "; the gRPC call was cancelled");
+                }
+            }
             return finish(run, spec, dialect, collector, messageId, target);
         } finally {
             channel.shutdownNow();
@@ -227,7 +235,7 @@ public class GrpcAgentRunner {
         if (tls != null) {
             runs.setSendState(id, messageId, "INTENDED");
             runs.saveRemoteTask(id, dialect, null, null, "FAILED", code);
-            return failRunAndReject(id, "TLS with " + target.host() + ":" + target.port() + " failed: " + tls.getMessage());
+            return failRunAndReject(id, "TLS with " + target.host() + ":" + target.port() + " failed: " + innermostMessage(tls));
         }
         if (status.getCode() == Status.Code.DEADLINE_EXCEEDED) {
             runs.saveRemoteTask(id, dialect, null, null, "FAILED", code);
@@ -512,6 +520,17 @@ public class GrpcAgentRunner {
             }
         }
         return null;
+    }
+
+    /** The most specific reason in a TLS failure (the outer exception is often a generic engine error). */
+    private static String innermostMessage(Throwable t) {
+        String message = t.getMessage();
+        for (Throwable c = t.getCause(); c != null; c = c.getCause()) {
+            if (c.getMessage() != null && !c.getMessage().isBlank()) {
+                message = c.getMessage();
+            }
+        }
+        return message;
     }
 
     private AgentRunOutcome failRun(UUID id, String error) {

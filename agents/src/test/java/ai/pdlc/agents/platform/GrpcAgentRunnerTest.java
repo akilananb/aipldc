@@ -268,7 +268,9 @@ class GrpcAgentRunnerTest {
         assertThat(service.cancelled.await(5, TimeUnit.SECONDS)).isTrue();
         assertThat(service.events).containsExactly("cancelled by the client");
         assertThat(runs.remote.cancel()).isEqualTo("SIGNALLED");
-        assertThat(thrown.get()).isInstanceOfSatisfying(ApplicationFailure.class, f -> assertThat(f.isNonRetryable()).isTrue());
+        assertThat(thrown.get()).isInstanceOfSatisfying(ApplicationFailure.class, f -> assertThat(f.isNonRetryable()).isTrue())
+                .hasMessageContaining("the run is CANCELLED; the gRPC call was cancelled");
+        assertThat(runs.status).isEqualTo("CANCELLED"); // a cancellation, never recorded as a failure
     }
 
     @Test
@@ -301,7 +303,7 @@ class GrpcAgentRunnerTest {
 
         assertThatThrownBy(() -> invoke(spec, "Q3", service.target(), new RunStore.TlsRefs("kv://wrong-ca", "kv://grpc-client-cert",
                 "kv://grpc-client-key"), null)).isInstanceOfSatisfying(ApplicationFailure.class, f -> assertThat(f.isNonRetryable()).isTrue());
-        assertThat(runs.error).startsWith("TLS with localhost:" + service.server.getPort() + " failed");
+        assertThat(runs.error).startsWith("TLS with localhost:" + service.server.getPort() + " failed").containsIgnoringCase("certif");
         assertThat(service.calls).isEmpty();
 
         runs.sends.clear();

@@ -469,6 +469,105 @@ The slice ships as two PRs: 2.6a (REST, below) and then 2.6b (gRPC).
     - the sync form with no async fields;
     - no horizontal scroll at 390 px wide.
 
+**As built (2.6b, gRPC):**
+
+- **Registry.**
+  - `AgentSpec` gains `grpc` (NON_NULL, so existing versions keep their hashes). `runtime: "grpc"` requires it and forbids a model binding, tools and the other bindings.
+  - The binding holds:
+
+    | Field | Meaning |
+    |---|---|
+    | `connectionId` | a `GRPC_AGENT` connection |
+    | `descriptorSet` | a base64 `FileDescriptorSet` as `protoc --include_imports --descriptor_set_out` writes it, at most 512 KB, stored in and hashed with the version |
+    | `service`, `method` | the one method the agent calls |
+    | `promptField` | optional string request field that receives the rendered prompt |
+    | `idempotent` | whether a call whose outcome is unknown may be resent |
+    | `maxMessages` | server streams only: 1–1000, default 100 |
+
+  - `GrpcDescriptors` (core) parses and links the set; well-known types resolve from the built-ins.
+  - The validator refuses:
+    - a set that is missing or corrupt;
+    - an unknown service or method;
+    - a client-streaming or bidi method ("only unary and server-streaming methods are callable");
+    - a variable that is not a top-level request field;
+    - a non-string or duplicate `promptField`;
+    - a prompt without a field to carry it.
+  - Reflection is never used: the methods that exist are the ones the version registered.
+- **Connections.**
+  - `GRPC_AGENT` targets are `grpcs://host:port`. `grpc://` (plaintext) is accepted only with auth `NONE` and no TLS settings, so a credential never travels in cleartext.
+  - V24 adds `tls_ca_ref` (a pinned CA that replaces the JVM trust store) and `tls_client_cert_ref`/`tls_client_key_ref` (mTLS; both or neither), all `kv://` references. PEM content is refused.
+  - Auth is a bearer (`API_KEY`) or none. There is no OAuth, because gRPC has no discovery to find an authorization server.
+  - The target is egress-checked as `https://host:port`. Workspace members see the connection without any reference.
+- **Descriptor listing.** `POST /api/workspaces/{ws}/grpc/describe {descriptorSet}` (AUTHOR) parses what the author uploaded and calls no service. It returns each method with its kind, callability, request fields and response type.
+- **Runner** (`agents/.../platform/GrpcAgentRunner`).
+  - The connection is re-checked at call time.
+  - The channel:
+    - connects to exactly the address the `EgressPolicy` checked, with the authority set to `host:port` for SNI and hostname verification;
+    - uses no proxy and no retries, and caps inbound messages at 1 MB;
+    - does TLS with the pinned CA and client certificate, resolved from `kv://` only in the agents process (a PKCS#8 PEM key);
+    - is built per call.
+  - The request is `JsonFormat` over the declared inputs (unknown fields rejected). The reply is protobuf JSON with the proto field names; a server stream becomes a JSON array. `outputSchema` still applies.
+  - The deadline is the agent's remaining time. Metadata carries `authorization`, `idempotency-key: <run>:0` and `x-pdlc-run`.
+  - The call is recorded INTENDED → SENT → ACKED.
+  - Failures:
+
+    | Failure | Run |
+    |---|---|
+    | the connection is refused | retryable, not sent |
+    | the TLS handshake fails | `FAILED` with the innermost reason, not sent |
+    | `DEADLINE_EXCEEDED` | `FAILED` |
+    | `UNAVAILABLE`/`UNKNOWN`/`INTERNAL`/`CANCELLED` after the call started | an unknown outcome: resent with the same key only when `idempotent`, otherwise `FAILED` "outcome unknown … not resent" |
+    | any other code | `FAILED` "the service answered CODE: description", with the bearer redacted |
+
+  - More than `maxMessages` messages, or more than 1 MB, cancels the call and fails the run.
+  - The remote task row holds dialect `grpc-unary` or `grpc-server-stream`, the mapped state and the status code.
+- **Cancellation.**
+  - The invoking activity waits in 1 s slices and cancels its own call (RST_STREAM) once the run is no longer RUNNING. This works whichever agents replica holds the call.
+  - `markCancelled` also cancels a call held by the same process at once.
+  - The remote cancel is recorded as `SIGNALLED` (V24 adds the value). gRPC returns no acknowledgement, so none is claimed.
+- **Studio.**
+  - "Runs as" gains gRPC. The switch uses the small size on phones.
+  - The gRPC form has:
+    - the connection;
+    - the descriptor set, uploaded as `.pb` or pasted as base64;
+    - "Load methods", which also runs automatically for a registered set, and a method picker in which client-streaming methods are shown but disabled;
+    - the request fields each variable must match, with a warning for any that don't;
+    - a prompt-field picker offering only string fields, max messages for streams, and the idempotent checkbox.
+  - A run shows "gRPC service via X (unary | server stream) · state … (status CODE) · cancel signalled".
+
+**Exit evidence (2.6b)** (live: Postgres 16, a Temporal dev server, control-plane, agents, and a Java gRPC service `acme.reports.v1.ReportAgent` on :4060 (mTLS required) and :4061 (TLS only). The service has openssl-made CA, server and client certificates and requires a bearer. It wrote its own descriptor set, and that set is what was registered):
+
+1. **Setup.**
+   - Refused connections:
+     - a plaintext `grpc://` connection with a bearer;
+     - `grpcs://169.254.169.254` (metadata);
+     - PEM pasted where a reference belongs.
+   - Created: `report-grpc` (bearer, pinned CA, client certificate), `report-grpc-nocert` (CA only) and `report-grpc-wrongca` (:4061 with an unrelated CA).
+   - The workspace view shows none of the references.
+   - Describe listed Summarise (unary), Report (server-stream) and Upload (client-stream, not callable).
+   - Five agents published. `grpc-upload` was refused: "…/Upload is client-stream; only unary and server-streaming methods are callable".
+2. **Exit: unary over mTLS completes.**
+   - The service logged the bearer-checked call with key `<run>:0`, the declared inputs and the rendered prompt ("Summarise the Q3 report for EMEA") in `prompt`.
+   - The run is `SUCCEEDED` with `{"summary":"Summary of Q3 for EMEA: revenue up 12%","words":8}`, remote state `COMPLETED`, status `OK`.
+3. **Exit: a server stream completes.** 3 messages were collected into a JSON array; the dialect is `grpc-server-stream`.
+4. **Remote failure.** `FAILED`: "the service answered INVALID_ARGUMENT: unknown region 'Mars'", with status `INVALID_ARGUMENT`.
+5. **TLS enforced.**
+   - Without a client certificate: "TLS with localhost:4060 failed: …TLSV1_ALERT_CERTIFICATE_REQUIRED".
+   - With the wrong pinned CA: "TLS with localhost:4061 failed: unable to find valid certification path to requested target".
+   - The service logged neither call.
+6. **Cancel.** A run was cancelled while the service worked. The service logged "call … cancelled by the client", the run is `CANCELLED`, and the remote cancel is `SIGNALLED`.
+   - This run found a bug, which is fixed and covered by a test: a call cancelled by this same process had been reported as "outcome unknown" instead of as the run's cancellation.
+7. **Crash reconcile.** The agents worker was killed (`kill -9`) during a 25 s call.
+   - Non-idempotent: attempt 2 failed with "outcome unknown: … not resent". The service logged **one** call.
+   - Idempotent: attempt 2 resent with the same `idempotency-key`, the service replayed its stored answer without processing it again, and the run `SUCCEEDED`.
+8. **No secret leaked.** The bearer and the client key appear 0 times in the control-plane, agents and Temporal logs, a full database dump (which holds only the `kv://` references) and 10 run histories.
+9. **Studio** (Playwright):
+   - the published agent's editor with its methods loaded from the registered descriptors;
+   - the method picker with the client-streaming method disabled;
+   - the `.pb` upload loading its methods;
+   - a Studio test run that completed ("gRPC service via report-grpc (unary) · state completed (status OK)");
+   - no horizontal scroll at 390 px wide.
+
 ## Slice 2.7 — ACP in the sandbox
 
 - **Build-worker hardening:** a pinned `acpx` version instead of `@latest`; no inherited host environment; no `--approve-all` (ACP permission requests are mediated by policy).

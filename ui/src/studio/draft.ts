@@ -20,6 +20,13 @@ export interface Draft {
   errorPointer: string;
   pollSeconds: string;
   idempotency: string;
+  /** runtime 'grpc' (slice 2.6b); the connection is remoteConnection. */
+  descriptorSet: string;
+  grpcService: string;
+  grpcMethod: string;
+  promptField: string;
+  grpcIdempotent: boolean;
+  maxMessages: string;
   name: string;
   description: string;
   prompt: string;
@@ -39,7 +46,7 @@ export interface Draft {
 export function toDraft(name: string, spec: AgentSpec | null): Draft {
   return {
     runtime: spec?.runtime ?? 'native',
-    remoteConnection: spec?.remote?.connectionId ?? spec?.rest?.connectionId ?? '',
+    remoteConnection: spec?.remote?.connectionId ?? spec?.rest?.connectionId ?? spec?.grpc?.connectionId ?? '',
     remoteSkill: spec?.remote?.skill ?? '',
     restMode: spec?.rest?.mode ?? 'sync',
     submitMethod: spec?.rest?.submit?.method ?? 'POST',
@@ -54,6 +61,12 @@ export function toDraft(name: string, spec: AgentSpec | null): Draft {
     errorPointer: spec?.rest?.errorPointer ?? '',
     pollSeconds: spec?.rest?.pollSeconds != null ? String(spec.rest.pollSeconds) : '',
     idempotency: spec?.rest?.idempotency ?? 'NONE',
+    descriptorSet: spec?.grpc?.descriptorSet ?? '',
+    grpcService: spec?.grpc?.service ?? '',
+    grpcMethod: spec?.grpc?.method ?? '',
+    promptField: spec?.grpc?.promptField ?? '',
+    grpcIdempotent: spec?.grpc?.idempotent === true,
+    maxMessages: spec?.grpc?.maxMessages != null ? String(spec.grpc.maxMessages) : '',
     name,
     description: spec?.description ?? '',
     prompt: spec?.prompt ?? '',
@@ -140,6 +153,32 @@ export function toSpec(d: Draft): SpecResult {
           errorPointer: blank(d.errorPointer),
           pollSeconds: async ? poll : null,
           idempotency: d.idempotency === 'HEADER' ? 'HEADER' : 'NONE',
+        },
+      },
+    };
+  }
+  if (d.runtime === 'grpc') {
+    const blank = (t: string) => (t.trim() === '' ? null : t.trim());
+    const max = toInt(d.maxMessages);
+    if (Number.isNaN(max)) return { ok: false, error: 'Max messages must be a whole number' };
+    return {
+      ok: true,
+      spec: {
+        description,
+        runtime: 'grpc',
+        prompt: d.prompt.trim() === '' ? null : d.prompt,
+        variables,
+        model: null,
+        limits: { timeoutSeconds: timeout, maxOutputTokens: null },
+        outputSchema,
+        grpc: {
+          connectionId: blank(d.remoteConnection),
+          descriptorSet: blank(d.descriptorSet),
+          service: blank(d.grpcService),
+          method: blank(d.grpcMethod),
+          promptField: blank(d.promptField),
+          idempotent: d.grpcIdempotent,
+          maxMessages: max,
         },
       },
     };
