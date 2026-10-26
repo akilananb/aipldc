@@ -17,7 +17,11 @@ import ai.pdlc.controlplane.persistence.WorkItemRepository;
 import ai.pdlc.controlplane.web.dto.GrillQuestionDto;
 import ai.pdlc.controlplane.web.dto.GrillQuestionsDto;
 import ai.pdlc.controlplane.web.dto.ReviewStateDto;
+import ai.pdlc.core.config.BoardConfig;
 import ai.pdlc.core.config.Profile;
+import ai.pdlc.core.config.ProjectDocument;
+import ai.pdlc.core.config.ProjectMeta;
+import ai.pdlc.core.config.RepoConfig;
 import ai.pdlc.core.domain.Anchor;
 import ai.pdlc.core.domain.CanonicalState;
 import ai.pdlc.core.port.RepoPort;
@@ -51,9 +55,12 @@ import java.util.UUID;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * Seeds the curated restaurant-demo catalog (44 work items: 8 read-only snapshot groups + the
- * separate live {@code demo-live} feature) into a fresh {@code local-jdbc}/{@code local-git}
- * profile on control-plane startup - plan step 4. Gated by {@code pdlc.demo.enabled} (default
+ * Seeds the curated demo catalogs on control-plane startup - plan step 4: the restaurant bundle
+ * (44 work items: 8 read-only snapshot groups + the separate live {@code demo-live} feature) into
+ * the default {@code local-jdbc}/{@code local-git} project, then the additive corporate-lending
+ * bundle ({@code demo/loan-demo.json}, 43 snapshot items, no live feature) into its own
+ * {@code corporate-lending} project, created on first seed as a copy of the default project's
+ * board/repo/gate config. Each bundle has its own lock, {@code demo_seeds} row and manifest hash. Gated by {@code pdlc.demo.enabled} (default
  * {@code false}, see {@code application.yml}), so ado-pilot and every automated test that doesn't
  * opt in never seeds anything. {@link ApplicationRunner} beans run after Spring Boot's own
  * embedded Flyway {@code FlywayMigrationInitializer}, which is itself ordered before other
@@ -62,7 +69,7 @@ import java.util.concurrent.atomic.AtomicLong;
  *
  * <p>Two-phase, both idempotent and crash-recoverable:
  * <ol>
- *   <li>Materialize owned git branches ({@code demo/restaurant-v1/<key>/v<version>}), each guarded
+ *   <li>Materialize owned git branches ({@code demo/<seedVersion>/<key>/v<version>}), each guarded
  *   by an embedded {@code .pdlc-demo-seed.json} ownership marker so a retry after a crash between
  *   phases never clobbers a foreign branch and never re-writes an already-seeded one.</li>
  *   <li>One Spring-managed transaction inserts every relational row (work items, artifacts,
@@ -84,7 +91,11 @@ public class DemoInitializer implements ApplicationRunner {
 
     private static final Logger log = LoggerFactory.getLogger(DemoInitializer.class);
     private static final String SEED_MARKER_FILE = ".pdlc-demo-seed.json";
-    private static final String MANIFEST_RESOURCE = "demo/restaurant-demo.json";
+    /** Seeded in order, each independently (own lock, own {@code demo_seeds} row, own branch
+     * namespace): the restaurant bundle into the default project first, then the corporate-lending
+     * bundle into its own project. */
+    static final List<String> MANIFEST_RESOURCES = List.of("demo/restaurant-demo.json", "demo/loan-demo.json");
+    private static final String DEFAULT_AREA_PATH = "orders";
 
     private final javax.sql.DataSource dataSource;
     private final PlatformTransactionManager txManager;
@@ -128,7 +139,7 @@ public class DemoInitializer implements ApplicationRunner {
 
     @Override
     public void run(ApplicationArguments args) throws Exception {
-        resolvePorts();
+        resolvePorts(defaultProjectId);
         if (!"local-jdbc".equals(activeProfile.board().provider())) {
             throw new IllegalStateException("pdlc.demo.enabled=true requires board.provider: local-jdbc for profile '"
                     + activeProfile.name() + "' (found '" + activeProfile.board().provider() + "')");
@@ -138,16 +149,58 @@ public class DemoInitializer implements ApplicationRunner {
                     + activeProfile.name() + "' (found '" + activeProfile.repo().provider() + "')");
         }
 
-        String manifestRaw = readManifestResource();
-        seed(manifestRaw, mapper.readValue(manifestRaw, DemoManifest.class));
+        for (String resource : MANIFEST_RESOURCES) {
+            String manifestRaw = readManifestResource(resource);
+            seed(manifestRaw, mapper.readValue(manifestRaw, DemoManifest.class));
+        }
     }
 
-    /** Resolves {@link #repo}/{@link #activeProfile} from the default project's current DB config
-     * — idempotent, called by {@link #run} and again defensively at the top of {@link #seed} so a
-     * direct test call (bypassing {@code run}) still has both populated. */
-    private void resolvePorts() {
-        this.activeProfile = projects.project(defaultProjectId);
-        this.repo = ports.primaryRepo(defaultProjectId);
+    /** Resolves {@link #repo}/{@link #activeProfile} from the given project's current DB config
+     * — idempotent, called by {@link #run} and again at the top of {@link #seed} (per manifest, since
+     * each bundle may target a different project) so a direct test call still has both populated. */
+    private void resolvePorts(String projectId) {
+        this.activeProfile = projects.project(projectId);
+        this.repo = ports.primaryRepo(projectId);
+    }
+
+    /** The project a manifest seeds into: the default project when it has no {@code project}
+     * section, otherwise that project - created once (never overwritten) as a copy of the default
+     * project's board/repo/gate config, so it shares the same local-jdbc board and local-git repo. */
+    private String targetProject(DemoManifest manifest) {
+        DemoProjectFixture fixture = manifest.project();
+        if (fixture == null || fixture.id() == null || fixture.id().equals(defaultProjectId)) {
+            return defaultProjectId;
+        }
+        if (projects.find(fixture.id()).isEmpty()) {
+            ProjectDocument base = projects.find(defaultProjectId).orElseThrow(() -> new IllegalStateException(
+                    "Demo seed '" + manifest.version() + "' needs default project '" + defaultProjectId + "' to copy from"));
+            ProjectMeta meta = new ProjectMeta(fixture.id(), fixture.name(), "", List.of(),
+                    base.project() == null ? "" : base.project().brief(), base.project() == null ? null : base.project().build());
+            BoardConfig board = base.board() == null ? null : new BoardConfig(base.board().provider(), base.board().org(),
+                    fixture.boardProject() == null ? base.board().project() : fixture.boardProject(),
+                    base.board().types(), base.board().states(), base.board().auth());
+            List<RepoConfig> repos = base.repos().stream()
+                    .filter(RepoConfig::primary)
+                    .map(r -> new RepoConfig(fixture.repoId() == null ? r.id() : fixture.repoId(), r.provider(), r.url(),
+                            r.defaultBranch(), r.specDir(),
+                            fixture.areaPath() == null ? r.areas() : List.of(fixture.areaPath()), true))
+                    .toList();
+            projects.save(fixture.id(), new ProjectDocument(meta, board, repos, base.gates()), "pdlc-demo-init");
+            ports.invalidate(fixture.id());
+            // Mirror PdlcImportSeeder's one-time workspace linking, which may already have run.
+            jdbc.update("""
+                    INSERT INTO workspace_projects (workspace_id, project_id, linked_by)
+                    SELECT 'pdlc', ?, 'pdlc-demo-init' WHERE EXISTS (SELECT 1 FROM workspaces WHERE id = 'pdlc')
+                    ON CONFLICT DO NOTHING
+                    """, fixture.id());
+            log.info("Created demo project '{}' ({}) from default project '{}'", fixture.id(), fixture.name(), defaultProjectId);
+        }
+        return fixture.id();
+    }
+
+    private static String areaPath(DemoManifest manifest) {
+        return manifest.project() == null || manifest.project().areaPath() == null
+                ? DEFAULT_AREA_PATH : manifest.project().areaPath();
     }
 
 
@@ -161,7 +214,11 @@ public class DemoInitializer implements ApplicationRunner {
      * delegates to this method.
      */
     void seed(String manifestRaw, DemoManifest manifest) throws Exception {
-        resolvePorts();
+        resolvePorts(targetProject(manifest));
+        if (!"local-jdbc".equals(activeProfile.board().provider()) || !"local-git".equals(activeProfile.repo().provider())) {
+            throw new IllegalStateException("Demo seed '" + manifest.version() + "' requires a local-jdbc board and local-git repo"
+                    + " on project '" + activeProfile.name() + "'");
+        }
         String manifestHash = Anchor.hash(manifestRaw);
 
         long lockKey = stableLockKey(activeProfile.name());
@@ -189,8 +246,8 @@ public class DemoInitializer implements ApplicationRunner {
 
     // ---- manifest / seed-marker bookkeeping ----------------------------------------------
 
-    private String readManifestResource() throws IOException {
-        try (InputStream in = new ClassPathResource(MANIFEST_RESOURCE).getInputStream()) {
+    private String readManifestResource(String resource) throws IOException {
+        try (InputStream in = new ClassPathResource(resource).getInputStream()) {
             return new String(in.readAllBytes(), StandardCharsets.UTF_8);
         }
     }
@@ -223,8 +280,10 @@ public class DemoInitializer implements ApplicationRunner {
 
     // ---- phase 1: git ref materialization --------------------------------------------------
 
-    private String branchName(String groupKey, int version) {
-        return "demo/restaurant-v1/" + groupKey + "/v" + version;
+    /** {@code demo/<seedVersion>/<groupKey>/v<version>} - e.g. {@code demo/restaurant-v1/06b/v1}
+     * (unchanged for the restaurant bundle) or {@code demo/loan-v1/L06b/v1}. */
+    static String branchName(String seedVersion, String groupKey, int version) {
+        return "demo/" + seedVersion + "/" + groupKey + "/v" + version;
     }
 
     /** Idempotent: returns the existing commit sha unchanged when this exact (group, version,
@@ -232,7 +291,7 @@ public class DemoInitializer implements ApplicationRunner {
      * pristine-baseline branch otherwise; aborts loudly on any other conflicting/foreign ref. */
     private String ensureVersionBranch(DemoManifest manifest, String manifestHash, String groupKey, int version,
                                         String specChangePath, Map<String, String> files) {
-        String branch = branchName(groupKey, version);
+        String branch = branchName(manifest.version(), groupKey, version);
         String currentSha = tryResolveRef(branch);
         if (currentSha == null) {
             repo.createBranch(manifest.baselineSha(), branch);
@@ -269,11 +328,11 @@ public class DemoInitializer implements ApplicationRunner {
      * version branch, purely for provenance/browsability - the frozen artifact/demo_snapshots refs
      * recorded elsewhere always point at the pre-evidence commit, so this never changes what
      * ArtifactsController/specDocs read back for that version. */
-    private void appendBuildEvidence(String groupKey, int version, DemoBuildEvidence evidence) {
+    private void appendBuildEvidence(String seedVersion, String groupKey, int version, DemoBuildEvidence evidence) {
         if (evidence == null) {
             return;
         }
-        String branch = branchName(groupKey, version);
+        String branch = branchName(seedVersion, groupKey, version);
         repo.writeFiles(branch, evidence.files(), "demo seed " + groupKey + " build evidence: " + evidence.note(),
                 "pdlc-demo-init");
     }
@@ -330,7 +389,7 @@ public class DemoInitializer implements ApplicationRunner {
                 if (item.buildEvidence() != null) {
                     int latest = item.versions().stream().mapToInt(DemoVersionFixture::version).max()
                             .orElseThrow(() -> new IllegalStateException("buildEvidence present with no versions on " + item.boardId()));
-                    appendBuildEvidence(group.key(), latest, item.buildEvidence());
+                    appendBuildEvidence(manifest.version(), group.key(), latest, item.buildEvidence());
                 }
             }
         }
@@ -342,16 +401,27 @@ public class DemoInitializer implements ApplicationRunner {
 
     private void importAll(DemoManifest manifest, String manifestHash, Map<String, String> versionCommitSha) {
         AtomicLong clock = new AtomicLong(0); // deterministic, strictly-increasing row timestamps
-        Instant base = Instant.parse("2026-09-14T09:00:00Z");
+        // One hour before the bundle's first review event (2026-09-14T09:00:00Z for the restaurant
+        // bundle, as before), so each bundle's row timestamps sit on its own curated day.
+        Instant base = manifest.snapshots().stream()
+                .flatMap(g -> g.items().stream())
+                .flatMap(i -> i.events().stream())
+                .map(DemoEventFixture::timestamp)
+                .min(Instant::compareTo)
+                .map(t -> t.minusSeconds(3600))
+                .orElse(Instant.parse("2026-09-14T09:00:00Z"));
 
         // The separate, real live feature: local board row + work_items row only - no
         // demo_snapshots row, no artifacts/comments/gate, never touched again by this seed.
-        seedLiveFeature(manifest.live());
+        // Optional: only the restaurant bundle carries one.
+        if (manifest.live() != null) {
+            seedLiveFeature(manifest.live());
+        }
 
         for (DemoSnapshotGroup group : manifest.snapshots()) {
             for (DemoWorkItemFixture item : group.items()) {
                 UUID itemId = deterministicId(manifest.version(), "item", item.boardId());
-                insertLocalBoardItem(item);
+                insertLocalBoardItem(item, areaPath(manifest));
                 aggregateTemplate.insert(new WorkItemEntity(itemId, activeProfile.name(), activeProfile.board().provider(),
                         item.boardId(), item.kind(), item.parentBoardId(), item.state().wireValue(), item.specChangePath(),
                         tick(base, clock), tick(base, clock)));
@@ -463,14 +533,14 @@ public class DemoInitializer implements ApplicationRunner {
         }
     }
 
-    private void insertLocalBoardItem(DemoWorkItemFixture item) {
+    private void insertLocalBoardItem(DemoWorkItemFixture item, String areaPath) {
         jdbc.update("""
                 INSERT INTO local_board_items (profile, board_id, kind, title, description, canonical_state,
                     parent_id, area_path, idempotency_key, rev, comment_seq)
                 VALUES (?,?,?,?,?,?,?,?,NULL,0,?)
                 """,
                 activeProfile.name(), item.boardId(), item.kind(), item.title(), item.description(),
-                item.state().wireValue(), item.parentBoardId(), "orders", item.boardComments().size());
+                item.state().wireValue(), item.parentBoardId(), areaPath, item.boardComments().size());
     }
 
     private void insertLocalBoardComment(String boardId, DemoCommentFixture c) {
@@ -492,7 +562,7 @@ public class DemoInitializer implements ApplicationRunner {
         }
         int latestVersion = item.versions().isEmpty() ? 0
                 : item.versions().stream().mapToInt(DemoVersionFixture::version).max().getAsInt();
-        String branch = latestVersion == 0 ? null : branchName(group.key(), latestVersion);
+        String branch = latestVersion == 0 ? null : branchName(manifest.version(), group.key(), latestVersion);
         if (branch == null) {
             return null;
         }

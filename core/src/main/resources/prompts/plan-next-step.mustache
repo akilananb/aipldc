@@ -74,8 +74,10 @@ Field rules:
 - reason: always required, nonblank, explains the decision.
 - CONSULT repo: required, the single repo the consultant inspects this round; touches/testPath
   catalog entries are per repo. questions: 1-8 nonblank repository questions asking for concrete
-  file/symbol-level evidence, not general design opinions. paths: repo-relative files/tests you
-  want the consultant to check for existence (may be empty).
+  file/symbol-level evidence, not general design opinions. paths: repo-relative file paths you
+  want the consultant to check for existence (may be empty) - files only, never a directory such
+  as "src" or "test": a directory path rejects the whole consultation. Ask about directory layout
+  in questions instead.
 - FINALIZE tasks: exactly one task per scenario listed above, no unknown scenario.
   id: T1, T2, ... in dependency order.
   title: at most 70 characters, an imperative slug naming the behavior; no "Implement"/"Task"

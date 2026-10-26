@@ -1,5 +1,7 @@
 package ai.pdlc.controlplane.demo;
 
+import com.fasterxml.jackson.annotation.JsonCreator;
+
 import java.util.List;
 
 /**
@@ -18,10 +20,26 @@ import java.util.List;
  * {@code resolvedInVersion}/agent fields) are serialized as an explicit JSON {@code null}. Records
  * rely on Jackson's default property-name matching (camelCase component names equal JSON keys), the
  * same convention the {@code web/dto} records use.
+ *
+ * <p><b>Multiple bundles:</b> {@code demo/restaurant-demo.json} (version {@code restaurant-v1}) and
+ * {@code demo/loan-demo.json} (version {@code loan-v1}) are seeded independently, each with its own
+ * {@code demo_seeds} row and git branch namespace {@code demo/<version>/...}. {@code project} is
+ * optional ({@code null} = the default project) and {@code live} is optional ({@code null} = no
+ * separate live feature; only the restaurant bundle carries one).
  */
 public record DemoManifest(
         String version,
         String baselineSha,
+        DemoProjectFixture project,
         DemoLiveSeed live,
         List<DemoSnapshotGroup> snapshots) {
+
+    @JsonCreator
+    public DemoManifest {
+    }
+
+    /** Default-project bundle (no {@code project} section), e.g. the restaurant bundle. */
+    public DemoManifest(String version, String baselineSha, DemoLiveSeed live, List<DemoSnapshotGroup> snapshots) {
+        this(version, baselineSha, null, live, snapshots);
+    }
 }

@@ -241,10 +241,10 @@ log "    OK: canonicalState == approved"
 
 # 8. review.md contains the full trail.
 log "8/9 GET review.md"
-REVIEW_MD=$(api "$BASE/api/items/$STORY_ID/review-md")
-echo "$REVIEW_MD"
-if ! echo "$REVIEW_MD" | grep -q "→ gate 1 passed on v2"; then
+REVIEW_MD=$(poll "review.md shows gate 1 passed on v2" 20 bash -c \
+  "curl -sf '$BASE/api/items/$STORY_ID/review-md' | grep -q '→ gate 1 passed on v2' && curl -sf '$BASE/api/items/$STORY_ID/review-md'") || {
   log "FAIL: review.md does not contain '→ gate 1 passed on v2'"; exit 1
-fi
+}
+echo "$REVIEW_MD"
 
 log "SUCCESS: gate 1 passed on v2; board state approved; review.md trail verified."

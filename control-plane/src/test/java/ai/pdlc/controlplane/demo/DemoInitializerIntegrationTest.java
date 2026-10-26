@@ -91,7 +91,7 @@ class DemoInitializerIntegrationTest {
     private static final String FEATURE_BOARD_ID = "demo-06b-feature";
     private static final String LIVE_BOARD_ID = "demo-live";
     private static final String SPEC_PATH = "openspec/changes/preserve-test";
-    private static final String BRANCH = "demo/restaurant-v1/06b/v1";
+    private static final String BRANCH = "demo/" + SEED_VERSION + "/06b/v1";
     private static final String PROPOSAL_CONTENT = "### proposal v1\nPreserve the customer's customizations.\n";
     private static final String CHANGE_NOTES_CONTENT = "## Change notes\nCarry item, bun, omit, spice and deliverBy verbatim.\n";
 
@@ -516,5 +516,82 @@ class DemoInitializerIntegrationTest {
         // resolves the same proposal content, whether or not it equals snap.gitRef().
         ArtifactEntity artifact = artifacts.findByWorkItemIdAndVersion(storyRow.id(), 1).orElseThrow();
         assertThat(git.repo().readFile(artifact.gitRef(), SPEC_PATH + "/proposal.md")).isEqualTo(PROPOSAL_CONTENT);
+    }
+
+    /** The real {@code demo/loan-demo.json} bundle (baseline swapped for this test repo's) seeds
+     * into its own, freshly created {@code corporate-lending} project alongside an already-seeded
+     * default-project bundle, on its own {@code demo/loan-v1/...} branches, without touching the
+     * default project's rows. */
+    @Test
+    void loanBundleSeedsIntoItsOwnProjectAlongsideTheDefaultBundle() throws Exception {
+        GitRepo git = newGitRepo();
+        DemoManifest restaurantLike = goodManifest(git.baselineSha());
+        String restaurantRaw = mapper.writeValueAsString(restaurantLike);
+
+        DemoManifest bundled;
+        try (var in = getClass().getResourceAsStream("/demo/loan-demo.json")) {
+            bundled = mapper.readValue(in, DemoManifest.class);
+        }
+        DemoManifest loan = new DemoManifest(bundled.version(), git.baselineSha(), bundled.project(), bundled.live(),
+                bundled.snapshots());
+        String loanRaw = mapper.writeValueAsString(loan);
+
+        String loanProject = "corporate-lending";
+        Profile base = new Profile(PROFILE,
+                new ProjectMeta(PROFILE, PROFILE, null, List.of(), "", null),
+                new BoardConfig("local-jdbc", "org", "project", Map.of(), Map.of(), null),
+                List.of(new RepoConfig("main", "local-git", "test-repo-path", "main", "openspec", List.of("orders"), true)),
+                new NotifyConfig("none", null), new AgentsConfig(null, null, Map.of()), Map.of());
+        ProjectDirectory projects = mock(ProjectDirectory.class);
+        when(projects.project(PROFILE)).thenReturn(base);
+        when(projects.find(PROFILE)).thenReturn(java.util.Optional.of(
+                new ai.pdlc.core.config.ProjectDocument(base.project(), base.board(), base.repos(), base.gates())));
+        when(projects.find(loanProject)).thenReturn(java.util.Optional.empty());
+        when(projects.project(loanProject)).thenReturn(new Profile(loanProject,
+                new ProjectMeta(loanProject, "Corporate Lending", null, List.of(), "", null), base.board(),
+                List.of(new RepoConfig("lending-service", "local-git", "test-repo-path", "main", "openspec", List.of("lending"), true)),
+                base.notifyConfig(), base.agents(), base.gates()));
+        PortRegistry ports = mock(PortRegistry.class);
+        when(ports.primaryRepo(PROFILE)).thenReturn(git.repo());
+        when(ports.primaryRepo(loanProject)).thenReturn(git.repo());
+        DemoInitializer init = new DemoInitializer(dataSource, txManager, jdbc, aggregateTemplate,
+                workItems, artifacts, comments, approvals, qualityReports, releaseDocuments, reviewEvents,
+                ports, projects, PROFILE);
+
+        init.seed(restaurantRaw, restaurantLike);
+        init.seed(loanRaw, loan);
+        init.seed(loanRaw, loan); // idempotent re-run
+
+        org.mockito.ArgumentCaptor<ai.pdlc.core.config.ProjectDocument> doc =
+                org.mockito.ArgumentCaptor.forClass(ai.pdlc.core.config.ProjectDocument.class);
+        org.mockito.Mockito.verify(projects, org.mockito.Mockito.atLeastOnce())
+                .save(org.mockito.ArgumentMatchers.eq(loanProject), doc.capture(), org.mockito.ArgumentMatchers.eq("pdlc-demo-init"));
+        assertThat(doc.getValue().project().name()).isEqualTo("Corporate Lending");
+        assertThat(doc.getValue().repos()).singleElement().satisfies(r -> {
+            assertThat(r.id()).isEqualTo("lending-service");
+            assertThat(r.areas()).containsExactly("lending");
+        });
+
+        assertThat(demoSeedsCount()).isEqualTo(2);
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM work_items WHERE profile = ?", Integer.class, loanProject))
+                .isEqualTo(43);
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM work_items WHERE profile = ?", Integer.class, PROFILE))
+                .isEqualTo(3);
+        assertThat(jdbc.queryForObject("SELECT count(DISTINCT area_path) FROM local_board_items WHERE profile = ? AND area_path = 'lending'",
+                Integer.class, loanProject)).isEqualTo(1);
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM demo_snapshots WHERE seed_version = 'loan-v1'", Integer.class))
+                .isEqualTo(43);
+
+        assertThat(git.repo().resolveRef(BRANCH)).isNotBlank();
+        assertThat(git.repo().readFile("demo/loan-v1/L06b/v1",
+                "openspec/changes/pre-validate-corporate-loan-applications/proposal.md")).contains("credit risk officer");
+
+        WorkItemEntity story = workItems.findByProfileAndBoardId(loanProject, "loan-11-story").orElseThrow();
+        DemoSnapshotEntity snap = demoSnapshots.findById(story.id()).orElseThrow();
+        assertThat(git.repo().readFile(snap.gitRef(),
+                "openspec/changes/archive/2026-10-05-pre-validate-corporate-loan-applications/review.md"))
+                .contains("Curated demo snapshot");
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM release_documents WHERE release_id = 'R-demo-L11'", Integer.class))
+                .isEqualTo(4);
     }
 }

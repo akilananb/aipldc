@@ -31,6 +31,7 @@ type StageGroup = {
   order: number;
   sourceRef: string;
   replay: boolean;
+  profile: string;
   primary: ItemSummary;
   secondary: ItemSummary[];
 };
@@ -109,13 +110,22 @@ export default function ItemListPage() {
   // The total stage count for "Step N of M" must come from the FULL unfiltered catalog, never
   // from the currently-filtered stageGroups.length - otherwise a state/search filter that hides
   // a stage would also shrink the denominator (e.g. "Step 7 of 3").
-  const totalStageCount = useMemo(() => {
-    const keys = new Set<string>();
+  // Counted per project: each seeded demo bundle (restaurant, corporate lending) is its own 8-stage
+  // walkthrough, so "Step N of M" uses that bundle's M; the heading uses the filtered project's
+  // count (or the whole catalog's when no project is selected).
+  const stageCountByProject = useMemo(() => {
+    const keys = new Map<string, Set<string>>();
     for (const item of itemsQuery.data ?? []) {
-      if (item.snapshot) keys.add(item.snapshot.key);
+      if (!item.snapshot) continue;
+      const set = keys.get(item.profile) ?? new Set<string>();
+      set.add(item.snapshot.key);
+      keys.set(item.profile, set);
     }
-    return keys.size;
+    return new Map(Array.from(keys.entries()).map(([profile, set]) => [profile, set.size]));
   }, [itemsQuery.data]);
+  const totalStageCount = projectFilter
+    ? (stageCountByProject.get(projectFilter) ?? 0)
+    : Array.from(stageCountByProject.values()).reduce((a, b) => a + b, 0);
 
   function nestStoriesUnderFeatures(items: ItemSummary[]): Row[] {
     const features = items.filter((i) => i.kind === 'feature');
@@ -170,9 +180,10 @@ export default function ItemListPage() {
         const snap = items[0].snapshot!;
         const primary = items.find((i) => i.kind === 'story') ?? items.find((i) => i.kind === 'feature') ?? items[0];
         const secondary = items.filter((i) => i.id !== primary.id);
-        return { key, label: snap.label, order: snap.order, sourceRef: snap.sourceRef, replay: snap.replay, primary, secondary };
+        return { key, label: snap.label, order: snap.order, sourceRef: snap.sourceRef, replay: snap.replay, profile: primary.profile, primary, secondary };
       })
-      .sort((a, b) => a.order - b.order);
+      // Keep each project's walkthrough contiguous (stages 1..8 per project), then by stage order.
+      .sort((a, b) => a.profile.localeCompare(b.profile) || a.order - b.order);
   }, [filteredItems, kindFilter]);
 
   const liveRows = useMemo<Row[]>(() => {
@@ -419,7 +430,7 @@ export default function ItemListPage() {
         <Table.Cell colSpan={7}>
           <Flex align="center" gap="2">
             <Badge size="2" variant="solid">
-              Step {group.order} of {totalStageCount}
+              Step {group.order} of {stageCountByProject.get(group.profile) ?? totalStageCount}
             </Badge>
             <Text weight="bold">{group.label}</Text>
             {group.replay && (

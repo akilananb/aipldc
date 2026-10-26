@@ -1,0 +1,55 @@
+[
+  { "name": "f-list", "path": "/?project=corporate-lending",
+    "marks": [
+      { "id": "row1", "text": "Automate corporate loan application validation" },
+      { "id": "step1", "text": "Intake and clarification" },
+      { "id": "heading", "text": "Guided walkthrough" }
+    ] },
+  { "name": "f-clarify", "boardId": "loan-06a-feature", "tab": "clarify", "scrollToText": "Grill agent · Round 0",
+    "marks": [
+      { "id": "summary", "text": "open questions across" },
+      { "id": "q1", "text": "Which checks must run" },
+      { "id": "q2", "text": "Which financial ratio thresholds" },
+      { "id": "q3", "text": "What happens when an application breaches" },
+      { "id": "coverage", "text": "Category coverage" }
+    ] },
+  { "name": "f-quality", "boardId": "loan-06b-story", "tab": "quality", "scrollToText": "Gate 1 · Product approval",
+    "marks": [
+      { "id": "score", "text": "Below quality threshold" },
+      { "id": "finding", "text": "outside acceptable levels" },
+      { "id": "blocked", "text": "approval is blocked" }
+    ] },
+  { "name": "f-g1", "boardId": "loan-09-story", "tab": "reviewmd", "scrollToText": "v2 · PO agent",
+    "marks": [
+      { "id": "v2", "text": "v2 · PO agent" },
+      { "id": "q81", "text": "passed · score 81" },
+      { "id": "apo", "text": "approve · PO" },
+      { "id": "asl", "text": "approve · SquadLead" },
+      { "id": "g1", "text": "gate 1 passed" }
+    ] },
+  { "name": "f-tasks0", "boardId": "loan-08a-story", "tab": "tasks", "scrollToText": "Execution graph",
+    "marks": [ { "id": "verified", "text": "Tasks verified" }, { "id": "t1", "text": "Document completeness check" } ] },
+  { "name": "f-tasks5", "boardId": "loan-08b-story", "tab": "tasks", "scrollToText": "Execution graph",
+    "marks": [ { "id": "verified", "text": "Tasks verified" }, { "id": "t1", "text": "Document completeness check" } ] },
+  { "name": "f-pr", "boardId": "loan-09-story", "tab": "reviewmd", "scrollToText": "PR opened",
+    "marks": [
+      { "id": "pr", "text": "PR opened" },
+      { "id": "tests", "text": "T1 Incomplete application" },
+      { "id": "major", "text": "Leverage threshold is hard-coded" }
+    ] },
+  { "name": "f-g2", "boardId": "loan-09-story", "tab": "activity", "scrollToText": "Gate 2 · PR review",
+    "marks": [ { "id": "gate", "text": "Gate 2 · PR review" }, { "id": "dev", "text": "dev@lending" } ] },
+  { "name": "f-release", "boardId": "loan-10-story", "tab": "release", "scrollToText": "Release pack & signatures",
+    "marks": [
+      { "id": "notes", "text": "Change notes" },
+      { "id": "rollout", "text": "Rollout & rollback plan" },
+      { "id": "monitor", "text": "Monitor rules" },
+      { "id": "evidence", "text": "Verifier results" }
+    ] },
+  { "name": "f-bug", "boardId": "loan-11-bug",
+    "marks": [
+      { "id": "title", "text": "Monitor trip: exception-rate" },
+      { "id": "detail", "text": "observed mean 18%" },
+      { "id": "parent", "text": "Parent story" }
+    ] }
+]

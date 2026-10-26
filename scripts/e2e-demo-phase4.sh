@@ -143,7 +143,10 @@ log "    OK: gate 1 passed"
 # 5-7. Plan -> build loop -> review -> PR -> awaiting-G2 (real omp sessions, can take minutes).
 log "5/12 Poll for planned (plan agent ran, tasks.md written)"
 poll "story planned" 120 bash -c \
-  "curl -sf '$BASE/api/items/$STORY_ID' | jq -e 'select(.canonicalState==\"planned\" or .canonicalState==\"in-progress\" or .canonicalState==\"awaiting-G2\")'"
+  "curl -sf '$BASE/api/items/$STORY_ID' | jq -e 'select(.canonicalState==\"planned\")'"
+log "    OK: planned - approving the plan as Squad Lead (PLAN gate)"
+api -X POST "$BASE/api/items/$STORY_ID/plan/approve" -H "X-User: $LEAD_USER" -H 'X-Role: SquadLead' \
+  -H 'Content-Type: application/json' -d '{"note":"task breakdown ok"}' >/dev/null
 log "6/12 Poll for in-progress (build loop started)"
 poll "story in-progress" 120 bash -c \
   "curl -sf '$BASE/api/items/$STORY_ID' | jq -e 'select(.canonicalState==\"in-progress\" or .canonicalState==\"awaiting-G2\")'"

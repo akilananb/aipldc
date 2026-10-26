@@ -148,8 +148,10 @@ log "    OK: gate 1 passed"
 # .pdlc/plan.json); control-plane validates it and publishes tasks.md; board state -> planned.
 log "5/12 Poll for planned (plan step ran on the build-worker, tasks.md written)"
 poll "story planned" 900 bash -c \
-  "curl -sf '$BASE/api/items/$STORY_ID' | jq -e 'select(.canonicalState==\"planned\" or .canonicalState==\"in-progress\" or .canonicalState==\"awaiting-G2\")'" >/dev/null
-log "    OK: planned"
+  "curl -sf '$BASE/api/items/$STORY_ID' | jq -e 'select(.canonicalState==\"planned\")'" >/dev/null
+log "    OK: planned - approving the plan as Squad Lead (PLAN gate)"
+api -X POST "$BASE/api/items/$STORY_ID/plan/approve" -H "X-User: $LEAD_USER" -H 'X-Role: SquadLead' \
+  -H 'Content-Type: application/json' -d '{"note":"task breakdown ok"}' >/dev/null
 
 # 6. Build loop runs (real omp over ACP, real git worktrees, real npm test) - the slow step.
 log "6/12 Poll for in-progress (build loop started)"
